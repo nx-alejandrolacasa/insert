@@ -24,19 +24,33 @@ struct MenuBarLabel: View {
         // the menu bar, next to the icon. When everything is clear the summary is
         // empty, so we fall back to just the icon to keep the footprint minimal.
         if summary.isEmpty {
-            Image(systemName: "checklist")
+            Image(systemName: Self.glyph)
                 // Without this VoiceOver announces the status item as an unnamed
                 // menu; the glyph alone carries the "no pending tasks" state.
-                .accessibilityLabel("Insert — no pending tasks")
+                .accessibilityLabel("\(Self.appName) — no pending tasks")
         } else {
             HStack(spacing: 4) {
-                Image(systemName: "checklist")
+                Image(systemName: Self.glyph)
                     .accessibilityHidden(true)
                 Text(summary)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Insert — \(summary)")
+            .accessibilityLabel("\(Self.appName) — \(summary)")
         }
+    }
+
+    /// A hammer for the dev build, so two menu-bar items are telling apart
+    /// without clicking either.
+    ///
+    /// Deliberately not a `checklist` variant: the near-identical ones are too
+    /// easy to miss at menu-bar size, and `checklist.checked` would read as "all
+    /// done" — the opposite of what this item exists to report.
+    private static var glyph: String {
+        BuildVariant.isDev ? "hammer.fill" : "checklist"
+    }
+
+    private static var appName: String {
+        "Insert\(BuildVariant.titleSuffix)"
     }
 }
 
@@ -81,7 +95,9 @@ struct MenuBarContent: View {
         Divider()
 
         Section {
-            Button("Open Insert") { openMainWindow() }
+            // Named for the variant, so a dev menu doesn't offer to open what
+            // looks like the real app.
+            Button("Open Insert\(BuildVariant.titleSuffix)") { openMainWindow() }
             Button("New Task") {
                 // Bring the window forward first, then ask it to start a new task.
                 openMainWindow()
@@ -91,7 +107,7 @@ struct MenuBarContent: View {
             // directly rather than through `SettingsLink`.
             Button("Settings…") { SettingsWindowController.shared.show() }
             Divider()
-            Button("Quit Insert") { NSApplication.shared.terminate(nil) }
+            Button("Quit Insert\(BuildVariant.titleSuffix)") { NSApplication.shared.terminate(nil) }
         }
     }
 

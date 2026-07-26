@@ -5,20 +5,41 @@
 # SwiftPM only produces a bare executable; a real app needs an Info.plist, an
 # icon, and a code signature, so we wrap it here.
 #
+# Two variants, so the copy you use every day and a work-in-progress build can
+# run side by side without fighting over settings, permissions or notes — the
+# same split prtscn uses:
+#   dev     → "Insert Dev.app", bundle id com.alejandrolacasa.insert.dev
+#   release → "Insert.app",     bundle id com.alejandrolacasa.insert
+# macOS keys the Documents-folder grant (TCC) and UserDefaults to the bundle id,
+# so each variant asks for access once and keeps its own settings. Because the
+# dev variant gets its own defaults it never inherits the real build's saved
+# folder, and the app defaults it to ~/Documents/Insert Dev — so testing a delete
+# or the completed-task sweep can't reach your real notes. It also wears a
+# different menu-bar glyph (see MenuBarLabel) so two running copies are telling
+# apart at a glance.
+#
 # Usage:
-#   ./build.sh            build the app bundle (build/Insert.app)
-#   ./build.sh run        build + (re)launch it
-#   ./build.sh release    build the bundle with the RELEASE signing identity —
+#   ./build.sh            build the DEV app bundle (build/Insert Dev.app)
+#   ./build.sh run        build the dev app + (re)launch it
+#   ./build.sh release    build the RELEASE bundle (build/Insert.app) —
 #                         what CI does before packaging the DMG (see dmg.sh)
-#   ./build.sh install    build + install into /Applications and relaunch
+#   ./build.sh install    build the RELEASE app + install into /Applications
 #   ./build.sh icon       regenerate the app icon (Resources/AppIcon.icon + .icns)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="Insert"
-BUNDLE_ID="com.alejandrolacasa.insert"
+if [[ "${1:-}" == "install" || "${1:-}" == "release" ]]; then
+  APP_NAME="Insert"
+  BUNDLE_ID="com.alejandrolacasa.insert"
+else
+  APP_NAME="Insert Dev"
+  BUNDLE_ID="com.alejandrolacasa.insert.dev"
+fi
+
 CONFIG="release"
+# SwiftPM's product name is fixed; the bundle's executable is renamed per variant
+# below so `pkill -x` and Activity Monitor show which one is running.
 BIN=".build/${CONFIG}/Insert"
 APP="build/${APP_NAME}.app"
 

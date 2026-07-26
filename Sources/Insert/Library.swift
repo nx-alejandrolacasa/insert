@@ -102,8 +102,11 @@ final class Library {
         if let saved = UserDefaults.standard.string(forKey: "rootFolderPath"), !saved.isEmpty {
             return URL(fileURLWithPath: saved, isDirectory: true)
         }
+        // "Insert Dev" for the dev build. Its UserDefaults are its own, so it
+        // never inherits the real build's saved path and always lands here —
+        // which keeps test deletions and the retention sweep off real notes.
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("Insert", isDirectory: true)
+        return docs.appendingPathComponent(BuildVariant.defaultFolderName, isDirectory: true)
     }
 
     /// Point the library at a new folder (persists the choice, reloads).

@@ -7,15 +7,27 @@ Obsidian-style Markdown on disk. A menu-bar extra shows pending tasks at a glanc
 ## Build & run
 
 - **No Xcode project** — this is a Swift Package (Command Line Tools + SwiftPM).
-- `./build.sh` — compile + assemble `build/Insert.app`.
-- `./build.sh run` — build + (re)launch it.
-- `./build.sh install` — build + install into `/Applications` and relaunch.
-- `./build.sh release` — build signed with the *release* identity; what CI runs.
+- `./build.sh` — compile + assemble the **dev** variant, `build/Insert Dev.app`.
+- `./build.sh run` — build the dev app + (re)launch it.
+- `./build.sh install` — build the **release** variant + install into
+  `/Applications` and relaunch.
+- `./build.sh release` — build the release variant signed with the *release*
+  identity; what CI runs before `dmg.sh`.
 - `./build.sh icon` — regenerate `Resources/AppIcon.icon` (layered) and
   `Resources/AppIcon.icns` (flat fallback) from `tools/IconGenerator.swift`.
 - `./dmg.sh [version]` — package the built app as `build/Insert[-version].dmg`.
 - `swift build --disable-sandbox` to just compile (`--disable-sandbox` is required
   inside agent/CI shells; harmless otherwise).
+
+Two variants, so the copy you use daily and a work-in-progress build coexist —
+the same split prtscn uses. `install`/`release` produce `Insert.app`
+(`com.alejandrolacasa.insert`); anything else produces `Insert Dev.app`
+(`…insert.dev`). macOS keys UserDefaults and the Documents grant to the bundle id,
+so each keeps its own settings and asks for access once. Because the dev build has
+its own defaults it never inherits the real saved folder and defaults to
+`~/Documents/Insert Dev` (`BuildVariant`), which keeps test deletions and the
+retention sweep away from real notes. It also wears a hammer in the menu bar
+instead of the checklist.
 
 Releasing: push a `vX.Y.Z` tag and `.github/workflows/release.yml` builds on a
 `macos-26` runner, packages the DMG and publishes a GitHub Release. Two stable
@@ -79,6 +91,7 @@ Sources/Insert/
   DirectoryWatcher.swift      debounced FS watcher (external edits)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
   Formatting.swift            the locale the UI presents in (English)
+  BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)

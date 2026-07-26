@@ -33,11 +33,17 @@ Grab the latest build from the
 Requires macOS 26 with the Xcode Command Line Tools.
 
 ```sh
-./build.sh run        # build and launch build/Insert.app
-./build.sh install    # install into /Applications
-./build.sh release    # build with the release signing identity (what CI runs)
+./build.sh run        # build and launch the dev app (build/Insert Dev.app)
+./build.sh install    # build the release app and install it into /Applications
+./build.sh release    # build the release app only (what CI runs)
 ./dmg.sh 1.2.0        # package build/Insert.app as build/Insert-1.2.0.dmg
 ```
+
+`./build.sh` builds a separate **dev** app — `Insert Dev.app`, bundle id
+`com.alejandrolacasa.insert.dev` — so it runs alongside your installed copy
+without sharing its settings, its Documents permission, or its notes. The dev
+build keeps its Markdown in `~/Documents/Insert Dev` and shows a hammer in the
+menu bar instead of the checklist. `install` and `release` build the real thing.
 
 See [CLAUDE.md](CLAUDE.md) for the full layout, data format, and conventions.
 
