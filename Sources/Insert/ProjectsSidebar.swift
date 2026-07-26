@@ -183,6 +183,8 @@ struct ProjectsSidebar: View {
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        // The pill is a colour-only cue, so state it outright for VoiceOver.
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
         // The pill *is* the selection indicator. Without this, clicking or
         // right-clicking a row also gave it the system focus ring, which traces
         // the row's full width at its own inset and radius — a blue rectangle
@@ -215,13 +217,18 @@ struct ProjectsSidebar: View {
             NotificationCenter.default.post(name: .toggleSidebar, object: nil)
         } label: {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 15, weight: .medium))
+                // `.title3` *is* 15pt on macOS, so this looks identical while
+                // tracking the system text size instead of ignoring it.
+                .font(.title3.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: Metrics.headerButtonSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("Hide projects (⌘§)")
+        // `.help` becomes an accessibility *hint*, not a label — without this the
+        // button is announced with no name at all.
+        .accessibilityLabel("Hide projects")
     }
 
     /// Add. Matches `hideButton` beside it — two glyphs of one weight, the way
@@ -231,13 +238,16 @@ struct ProjectsSidebar: View {
             showingAdd = true
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 15, weight: .medium))
+                // `.title3` *is* 15pt on macOS, so this looks identical while
+                // tracking the system text size instead of ignoring it.
+                .font(.title3.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: Metrics.headerButtonSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("New project")
+        .accessibilityLabel("New project")
         .popover(isPresented: $showingAdd, arrowEdge: .bottom) {
             ProjectEditorPopover(
                 title: "New Project",
@@ -261,8 +271,10 @@ struct ProjectsSidebar: View {
                         // White on the highlight, its own colour off it.
                         .foregroundStyle(isSelected(nil)
                             ? AnyShapeStyle(.white)
-                            : AnyShapeStyle(Tint.blue.deep))
+                            : AnyShapeStyle(Tint.blue.ink))
                         .frame(width: 22)
+                        // Decorative: the row's title says the same thing.
+                        .accessibilityHidden(true)
                 },
                 title: "Everything",
                 subtitle: everythingSubtitle
@@ -281,8 +293,9 @@ struct ProjectsSidebar: View {
                         .font(.body)
                         .foregroundStyle(isSelected(project.id)
                             ? AnyShapeStyle(.white)
-                            : AnyShapeStyle(project.tint.deep))
+                            : AnyShapeStyle(project.tint.ink))
                         .frame(width: 22)
+                        .accessibilityHidden(true)
                 },
                 title: project.name,
                 subtitle: countsLabel(notes: counts.notes, tasks: counts.tasks)
@@ -297,13 +310,18 @@ struct ProjectsSidebar: View {
             .separator,
             .command(title: "Delete…", action: { deletionCandidate = project }),
         ])
+        // `rightClickMenu` is an AppKit overlay that only answers a right- or
+        // control-click, so editing and deleting were reachable by pointer alone.
+        // These expose the same two commands to VoiceOver's actions rotor.
+        .accessibilityAction(named: "Edit") { editing = project }
+        .accessibilityAction(named: "Delete") { deletionCandidate = project }
     }
 
     /// Shared row scaffold: a leading glyph, the name, and a dimmed subtitle.
     private func rowLabel(
         @ViewBuilder leading: () -> some View,
         title: String,
-        subtitle: String
+        subtitle: LocalizedStringKey
     ) -> some View {
         HStack(spacing: 10) {
             leading()
@@ -329,6 +347,8 @@ struct ProjectsSidebar: View {
             Image(systemName: appState.isSearching ? "magnifyingglass" : "square.stack.3d.up.slash")
                 .font(.largeTitle)
                 .foregroundStyle(.tertiary)
+                // Decorative — the two lines below carry the message.
+                .accessibilityHidden(true)
             Text(appState.isSearching ? "No matching projects" : "No projects yet")
                 .font(.callout.weight(.medium))
             Text(appState.isSearching
@@ -353,14 +373,17 @@ struct ProjectsSidebar: View {
         return ordered.filter { $0.name.lowercased().contains(query) }
     }
 
-    private var everythingSubtitle: String {
+    private var everythingSubtitle: LocalizedStringKey {
         countsLabel(notes: library.notes.count, tasks: library.tasks.count)
     }
 
-    private func countsLabel(notes: Int, tasks: Int) -> String {
-        let noteWord = notes == 1 ? "note" : "notes"
-        let taskWord = tasks == 1 ? "task" : "tasks"
-        return "\(notes) \(noteWord) · \(tasks) \(taskWord)"
+    /// "3 notes · 1 task", pluralized by Foundation's inflection engine rather
+    /// than by hand: `word == 1 ? "note" : "notes"` only ever works in English,
+    /// and languages with more than two plural forms can't be expressed that way
+    /// at all. `^[…](inflect: true)` agrees the noun with the number it follows
+    /// and is what a translator will localize.
+    private func countsLabel(notes: Int, tasks: Int) -> LocalizedStringKey {
+        "^[\(notes) note](inflect: true) · ^[\(tasks) task](inflect: true)"
     }
 
     // MARK: - Bindings
@@ -562,7 +585,7 @@ private struct ProjectEditorPopover: View {
             HStack(spacing: 8) {
                 Image(systemName: symbol)
                     .font(.body)
-                    .foregroundStyle(tint.deep)
+                    .foregroundStyle(tint.ink)
                     .frame(width: 30, height: 26)
                     .background(Capsule().fill(tint.chip))
 

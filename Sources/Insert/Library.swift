@@ -399,7 +399,11 @@ final class Library {
 
     func deleteNote(id: UUID) {
         guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
-        remove(notes[idx].fileURL)
+        // Trash rather than unlink: deleting a note is a one-click, unconfirmed
+        // action, and Settings promises "moved to the Trash, so you can always
+        // get them back" — that has to hold for this path too, not just for the
+        // completed-task sweep.
+        trash(notes[idx].fileURL)
         notes.remove(at: idx)
     }
 
@@ -450,7 +454,8 @@ final class Library {
 
     func deleteTask(id: UUID) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
-        remove(tasks[idx].fileURL)
+        // Recoverable, for the same reason `deleteNote` is.
+        trash(tasks[idx].fileURL)
         tasks.remove(at: idx)
     }
 

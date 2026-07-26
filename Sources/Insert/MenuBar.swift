@@ -25,11 +25,17 @@ struct MenuBarLabel: View {
         // empty, so we fall back to just the icon to keep the footprint minimal.
         if summary.isEmpty {
             Image(systemName: "checklist")
+                // Without this VoiceOver announces the status item as an unnamed
+                // menu; the glyph alone carries the "no pending tasks" state.
+                .accessibilityLabel("Insert — no pending tasks")
         } else {
             HStack(spacing: 4) {
                 Image(systemName: "checklist")
+                    .accessibilityHidden(true)
                 Text(summary)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Insert — \(summary)")
         }
     }
 }
@@ -64,7 +70,7 @@ struct MenuBarContent: View {
 
         if sections.totalPending == 0 {
             // Nothing pending at all — a friendly confirmation instead of blanks.
-            Text("All clear ✳︎")
+            Text("All clear")
         } else {
             taskSection(title: "Overdue", tasks: sections.overdue)
             taskSection(title: "Today", tasks: sections.today)
@@ -140,8 +146,10 @@ struct MenuBarContent: View {
     /// The header sentence: prefer `DateSections`' compact phrasing, falling back
     /// to an explicit all-clear message when there is genuinely nothing pending.
     private func summaryLine(_ sections: DateSections) -> String {
+        // Plain words: the decorative glyph this used to carry was read aloud by
+        // VoiceOver as "sextile".
         let title = sections.menuBarTitle
-        return title.isEmpty ? "All clear ✳︎" : title
+        return title.isEmpty ? "All clear" : title
     }
 
     /// Builds a task row title: "Title — Due (Project)". The due suffix is added

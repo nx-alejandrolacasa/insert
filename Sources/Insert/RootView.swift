@@ -7,6 +7,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppState.self) private var appState
     @Environment(Library.self) private var library
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var keyMonitor: Any?
 
@@ -74,6 +75,7 @@ struct RootView: View {
                         // toolbar rounds a lone icon into a circle.
                         .buttonBorderShape(.circle)
                         .help("Show projects (⌘§)")
+                        .accessibilityLabel("Show projects")
                         // Keeps the button at its natural size whatever the frame
                         // below proposes, so the measurement is of the button and
                         // not of the animation measuring itself.
@@ -107,10 +109,13 @@ struct RootView: View {
                 // instead gets flattened away entirely.
                 ToolbarItem(placement: .navigation) {
                     Image(systemName: titleSymbol)
-                        .foregroundStyle(titleTint.deep)
+                        .foregroundStyle(titleTint.ink)
                         // Toolbar items are spaced for buttons; this one is really
                         // part of the title, so pull the gap in.
                         .padding(.trailing, -8)
+                        // Decorative: `navigationTitle` right beside it already
+                        // names the selected project.
+                        .accessibilityHidden(true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 // Pin the search field to the trailing edge. Left to itself the
@@ -177,8 +182,21 @@ struct RootView: View {
 
     /// How long the column takes to slide. The "show" button's fade rides the
     /// same curve and length, so the two read as one movement.
-    private static let slide = Animation.easeInOut(duration: 0.25)
+    private static let slideCurve = Animation.easeInOut(duration: 0.25)
     private static let slideDuration = Duration.milliseconds(250)
+
+    /// The slide, dropped entirely when Reduce Motion is on: the column and the
+    /// button then change state in one step instead of travelling. `nil` is a
+    /// valid argument to `withAnimation`, so every call site below is unchanged.
+    private var slide: Animation? {
+        reduceMotion ? nil : Self.slideCurve
+    }
+
+    /// How long to wait before taking the faded-out button out of the toolbar.
+    /// With no fade to wait for, that's immediately.
+    private var slideDuration: Duration {
+        reduceMotion ? .zero : Self.slideDuration
+    }
 
     /// The gap the toolbar leaves between two items — the same one the title
     /// icon pulls back with a negative inset.
@@ -189,7 +207,7 @@ struct RootView: View {
     /// route in (⌘§, the menu, either button) lands here, so the animation is
     /// defined once.
     private func toggleSidebar() {
-        withAnimation(Self.slide) {
+        withAnimation(slide) {
             appState.sidebarVisible.toggle()
         }
     }
@@ -209,13 +227,13 @@ struct RootView: View {
 
         guard sidebarVisible else {
             showButtonPresent = true
-            withAnimation(Self.slide) { showButtonOpacity = 1 }
+            withAnimation(slide) { showButtonOpacity = 1 }
             return
         }
 
-        withAnimation(Self.slide) { showButtonOpacity = 0 }
+        withAnimation(slide) { showButtonOpacity = 0 }
         showButtonRemoval = Task { @MainActor in
-            try? await Task.sleep(for: Self.slideDuration)
+            try? await Task.sleep(for: slideDuration)
             guard !Task.isCancelled else { return }
             showButtonPresent = false
         }

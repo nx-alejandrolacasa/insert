@@ -115,7 +115,7 @@ struct SettingsPaneHeader: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 14, weight: .medium))
+                .font(.title3.weight(.medium))
                 .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 .frame(width: 31, height: 32)
                 .contentShape(Rectangle())
@@ -123,6 +123,7 @@ struct SettingsPaneHeader: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -136,18 +137,25 @@ private struct SettingsPaneLabel: View {
             Text(pane.title)
         } icon: {
             Image(systemName: pane.icon)
-                .font(.system(size: 12, weight: .medium))
+                .font(.callout.weight(.medium))
                 .foregroundStyle(.white)
                 .frame(width: 23, height: 23)
                 .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 6))
+                // The Label's text names the pane; the tile is decoration.
+                .accessibilityHidden(true)
         }
     }
 }
 
 // MARK: - General
 
-/// The app-wide preferences: how Insert looks, and whether it lives in the menu
-/// bar. Anything specific to notes or tasks lives in their own pane.
+/// The app-wide preferences. Anything specific to notes or tasks lives in their
+/// own pane.
+///
+/// Deliberately has no appearance control: Insert follows the system's Light /
+/// Dark choice and offers no override, per HIG — a per-app appearance setting
+/// makes people adjust two places to get one result, and reads as a bug when the
+/// app ignores the choice they already made.
 private struct GeneralSettingsTab: View {
     // The Settings window is hosted by AppKit (see SettingsWindowController),
     // so there is no injected environment here — read the shared store directly.
@@ -155,15 +163,6 @@ private struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
-            Section {
-                Picker("Appearance", selection: $settings.appearance) {
-                    ForEach(Appearance.allCases) { appearance in
-                        Text(appearance.label).tag(appearance)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-
             Section {
                 Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
             } footer: {
@@ -310,6 +309,7 @@ private struct NoteTypeRow: View {
                 Image(systemName: "lock.fill")
                     .foregroundStyle(.tertiary)
                     .help("The built-in “Note” type is always available.")
+                    .accessibilityLabel("Locked")
             } else {
                 Button(role: .destructive) {
                     settings.removeNoteType(id: type.id)
@@ -318,6 +318,9 @@ private struct NoteTypeRow: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Delete this type")
+                // Every row's button would otherwise be an identical unnamed
+                // control; name it after the row it belongs to.
+                .accessibilityLabel("Delete the \(type.name) type")
             }
         }
         // `Form` labels any bare control in a row; an empty label keeps the
@@ -405,14 +408,15 @@ private struct SymbolWell: View {
             showingPicker = true
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 14))
-                .foregroundStyle(tint.deep)
+                .font(.title3)
+                .foregroundStyle(tint.ink)
                 .frame(width: Self.size, height: Self.size)
                 .background(Circle().fill(tint.chip))
                 .overlay(Circle().strokeBorder(tint.accent.opacity(0.45), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .help("Set this type's symbol")
+        .accessibilityLabel("Set this type's symbol")
         .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
             SymbolPicker(selection: symbol, tint: tint) { picked in
                 onPick(picked)
@@ -434,8 +438,9 @@ private struct StorageSettingsTab: View {
     /// move-or-just-switch choice is on screen.
     @State private var pendingFolder: URL?
     /// What the last relocation did. Reported inline rather than in an alert:
-    /// it's information, not a problem to dismiss.
-    @State private var status: String?
+    /// it's information, not a problem to dismiss. A `Text` rather than a
+    /// `String` so the file count can carry inflection markup (see `move`).
+    @State private var status: Text?
 
     var body: some View {
         Form {
@@ -460,7 +465,7 @@ private struct StorageSettingsTab: View {
                 }
 
                 if let status {
-                    Text(status)
+                    status
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -516,20 +521,21 @@ private struct StorageSettingsTab: View {
     private func switchOnly(to url: URL) {
         pendingFolder = nil
         library.setRoot(url)
-        status = "Now reading from this folder. Nothing was moved."
+        status = Text("Now reading from this folder. Nothing was moved.")
     }
 
     private func move(to url: URL) {
         pendingFolder = nil
         do {
             let result = try library.moveRoot(to: url)
-            var message = "Moved \(result.moved) file\(result.moved == 1 ? "" : "s") here."
-            if result.skipped > 0 {
-                message += " \(result.skipped) stayed behind — the new folder already had a file with the same name."
-            }
-            status = message
+            // `file\(n == 1 ? "" : "s")` is English-only and unlocalizable;
+            // `^[…](inflect: true)` has Foundation agree the noun with the count.
+            let moved = Text("Moved ^[\(result.moved) file](inflect: true) here.")
+            status = result.skipped > 0
+                ? Text("\(moved) \(result.skipped) stayed behind — the new folder already had a file with the same name.")
+                : moved
         } catch {
-            status = "Couldn’t move the files: \(error.localizedDescription)"
+            status = Text("Couldn’t move the files: \(error.localizedDescription)")
         }
     }
 }

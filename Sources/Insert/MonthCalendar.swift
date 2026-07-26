@@ -12,15 +12,19 @@ import SwiftUI
 /// and the headers come from the calendar's own symbols.
 struct MonthCalendar: View {
     @Binding var selection: Date
-    /// Colour for the selected day's fill and today's marker.
-    var accent: Color = Tint.blue.deep
+    /// The tint the grid wears. A `Tint` rather than a single `Color` because the
+    /// two things that need colouring want opposite ends of it: the selected day
+    /// is a *fill* carrying white type (`deep`), while today's marker and the
+    /// "Today" button are *foreground* on the popover surface (`ink`). One colour
+    /// couldn't be legible as both.
+    var tint: Tint = .blue
 
     /// The month on screen, which the user can page away from the selection.
     @State private var visibleMonth: Date
 
-    init(selection: Binding<Date>, accent: Color = Tint.blue.deep) {
+    init(selection: Binding<Date>, tint: Tint = .blue) {
         _selection = selection
-        self.accent = accent
+        self.tint = tint
         _visibleMonth = State(
             initialValue: MonthGrid.startOfMonth(for: selection.wrappedValue, calendar: .current)
         )
@@ -59,7 +63,7 @@ struct MonthCalendar: View {
                     .font(.caption)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(accent)
+            .foregroundStyle(tint.ink)
             .padding(.horizontal, 4)
             .help("Jump to this month")
             stepButton(systemImage: "chevron.right", help: "Next month") { step(1, calendar) }
@@ -70,12 +74,15 @@ struct MonthCalendar: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
-                .frame(width: 20, height: 20)
+                // 20pt was under a comfortable click target for a control people
+                // page through repeatedly; the chevron itself is unchanged.
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private func step(_ months: Int, _ calendar: Calendar) {
@@ -117,7 +124,9 @@ struct MonthCalendar: View {
             selection = calendar.startOfDay(for: day)
         } label: {
             Text(day, format: .dateTime.day())
-                .font(.system(size: 12, weight: isSelected || isToday ? .semibold : .regular))
+                // `.callout` is 12pt on macOS — same size, but it now follows the
+                // system text size rather than pinning itself.
+                .font(.callout.weight(isSelected || isToday ? .semibold : .regular))
                 .foregroundStyle(dayColor(isSelected: isSelected, isToday: isToday, inMonth: inMonth))
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.rowHeight)
@@ -126,19 +135,25 @@ struct MonthCalendar: View {
                 .background {
                     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
                     if isSelected {
-                        shape.fill(accent)
+                        shape.fill(tint.deep)
                     } else if isToday {
-                        shape.strokeBorder(accent.opacity(0.55), lineWidth: 1)
+                        shape.strokeBorder(tint.ink.opacity(0.75), lineWidth: 1.5)
                     }
                 }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // The cell renders only the day number, so VoiceOver would say "26" with
+        // no month or year, and "selected" / "today" are fill-and-outline cues
+        // with no text behind them.
+        .accessibilityLabel(day.formatted(date: .complete, time: .omitted))
+        .accessibilityValue(isToday ? "Today" : "")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     private func dayColor(isSelected: Bool, isToday: Bool, inMonth: Bool) -> Color {
         if isSelected { return .white }
-        if isToday { return accent }
+        if isToday { return tint.ink }
         return inMonth ? .primary : .secondary.opacity(0.55)
     }
 }

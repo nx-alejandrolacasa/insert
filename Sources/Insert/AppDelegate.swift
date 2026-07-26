@@ -1,7 +1,10 @@
 import AppKit
 
-/// Classic AppKit application delegate. Applies the saved appearance on launch
-/// and keeps the app a regular (Dock-visible) app.
+/// Classic AppKit application delegate. Keeps the app a regular (Dock-visible)
+/// app and starts the completed-task housekeeping.
+///
+/// Nothing here touches `NSApp.appearance`: Insert follows the system appearance
+/// and no longer offers a per-app override (see `GeneralSettingsTab`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Keeps the completed-task cleanup honest in a window that stays open for
     /// days: without it, housekeeping would only ever happen at launch.
@@ -9,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        SettingsStore.shared.applyAppearance()
         purgeCompletedTasks()
 
         housekeepingTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in

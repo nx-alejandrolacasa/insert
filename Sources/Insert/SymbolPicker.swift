@@ -347,8 +347,8 @@ struct SymbolPicker: View {
             onPick(option.name)
         } label: {
             Image(systemName: option.name)
-                .font(.system(size: 15))
-                .foregroundStyle(chosen ? AnyShapeStyle(tint.deep) : AnyShapeStyle(.primary))
+                .font(.title3)
+                .foregroundStyle(chosen ? AnyShapeStyle(tint.ink) : AnyShapeStyle(.primary))
                 .frame(width: 32, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -358,5 +358,8 @@ struct SymbolPicker: View {
         }
         .buttonStyle(.plain)
         .help(option.name)
+        .accessibilityLabel(option.name)
+        // The tinted fill is the only cue for the current symbol.
+        .accessibilityAddTraits(chosen ? [.isSelected] : [])
     }
 }

@@ -136,7 +136,7 @@ struct ProjectHashField: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: project.symbol)
-                            .foregroundStyle(project.tint.deep)
+                            .foregroundStyle(project.tint.ink)
                         Text(project.name)
                             .lineLimit(1)
                         Spacer(minLength: 0)
@@ -197,7 +197,7 @@ struct ProjectChip: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: project.symbol)
-                .foregroundStyle(project.tint.deep)
+                .foregroundStyle(project.tint.ink)
             Text(project.name)
         }
             .font(.caption)
@@ -209,6 +209,18 @@ struct ProjectChip: View {
             .contentShape(Capsule())
             .onTapGesture(count: 2, perform: onRemove)
             .help("Double-click to remove \(project.name)")
+            // Double-click was the *only* way to remove an assignment: no
+            // keyboard path, nothing for VoiceOver, Switch Control or Voice
+            // Control, and nothing discoverable without the tooltip. The gesture
+            // stays (it's deliberately hard to trigger by accident); these add
+            // the alternatives — a context menu for the pointer, a named action
+            // for assistive technology.
+            .contextMenu {
+                Button("Remove \(project.name)", systemImage: "xmark", action: onRemove)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(project.name), assigned")
+            .accessibilityAction(named: "Remove", onRemove)
     }
 }
 
@@ -240,10 +252,15 @@ struct AddProjectMenu: View {
                 .foregroundStyle(.secondary)
                 .padding(4)
                 .background(Circle().fill(Stone.surface))
+                // The glyph plus 4pt of padding is a small target for a control
+                // that sits among chips; widen the hit area, not the circle.
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Add to a project")
+        .accessibilityLabel("Add to a project")
     }
 }

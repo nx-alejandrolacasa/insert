@@ -1,4 +1,3 @@
-import AppKit
 import Observation
 import SwiftUI
 
@@ -9,14 +8,6 @@ import SwiftUI
 @Observable
 final class SettingsStore {
     static let shared = SettingsStore()
-
-    /// Auto / Light / Dark — applied to the whole app immediately.
-    var appearance: Appearance {
-        didSet {
-            defaults.set(appearance.rawValue, forKey: Keys.appearance)
-            applyAppearance()
-        }
-    }
 
     /// The editable list of note types. "Note" (id `note`) is always present
     /// and locked; helpers below enforce that invariant.
@@ -47,7 +38,12 @@ final class SettingsStore {
     private let defaults = UserDefaults.standard
 
     private enum Keys {
-        static let appearance = "appearance"
+        // Note: there is no `appearance` key. Insert used to offer an Auto /
+        // Light / Dark override; HIG advises against a per-app appearance
+        // setting, because it leaves people adjusting two places to get one
+        // result and looks broken when the app ignores their system choice. The
+        // app now always follows the system. An `appearance` value saved by an
+        // older build is simply left in `UserDefaults` and never read.
         static let noteTypes = "noteTypes"
         static let noteSort = "noteSort"
         static let weekStyle = "weekStyle"
@@ -57,7 +53,6 @@ final class SettingsStore {
     }
 
     private init() {
-        appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
         noteTypes = Self.loadNoteTypes(from: defaults)
         noteSort = NoteSort(rawValue: defaults.string(forKey: Keys.noteSort) ?? "") ?? .updatedDesc
         weekStyle = WeekStyle(rawValue: defaults.string(forKey: Keys.weekStyle) ?? "") ?? .full
@@ -135,9 +130,4 @@ final class SettingsStore {
         return types
     }
 
-    // MARK: - Appearance
-
-    func applyAppearance() {
-        NSApp.appearance = appearance.nsAppearance
-    }
 }

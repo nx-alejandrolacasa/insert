@@ -18,6 +18,7 @@ import SwiftUI
 struct TasksPanel: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether the quick-capture composer is on screen. Opened by "New Task"
     /// (⌘⇧N, the menu, the header button), closed by Esc.
@@ -84,12 +85,17 @@ struct TasksPanel: View {
         // listener can't catch it while it's off screen, so opening it lives
         // here; the composer focuses its field when it appears.
         .onReceive(NotificationCenter.default.publisher(for: .newTask)) { _ in
-            withAnimation(.easeInOut(duration: 0.18)) { composerVisible = true }
+            withAnimation(reveal) { composerVisible = true }
         }
     }
 
     private func hideComposer() {
-        withAnimation(.easeInOut(duration: 0.18)) { composerVisible = false }
+        withAnimation(reveal) { composerVisible = false }
+    }
+
+    /// The composer's show/hide curve, dropped when Reduce Motion is on.
+    private var reveal: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.18)
     }
 
     // MARK: - Header
@@ -145,11 +151,25 @@ struct TasksPanel: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "checklist")
-                .font(.system(size: 40, weight: .light))
+                // Regular rather than Light, matching the notes column.
+                .font(.system(size: 40))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(emptyMessage)
                 .font(.headline)
                 .foregroundStyle(.secondary)
+            // A blank panel should say what to do next. Only on the unfiltered
+            // list: "all clear" and "nothing completed yet" are answers, not
+            // dead ends, so they don't need prompting.
+            if !appState.isSearching && appState.taskFilter == .all {
+                Button {
+                    NotificationCenter.default.post(name: .newTask, object: nil)
+                } label: {
+                    Label("New Task", systemImage: "plus").fontWeight(.semibold)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
@@ -244,7 +264,9 @@ private struct TaskComposer: View {
         HStack(spacing: 8) {
             Image(systemName: "plus.circle.fill")
                 .foregroundStyle(.secondary)
-                .font(.system(size: 16))
+                .font(.title3)
+                // Decorative: the field's own placeholder says what this is for.
+                .accessibilityHidden(true)
 
             ProjectHashField(
                 placeholder: "Add a task…  (type # to tag a project)",
@@ -268,9 +290,14 @@ private struct TaskComposer: View {
             }
             .buttonStyle(.plain)
             .help(showBody ? "Hide notes" : "Add notes")
+            .accessibilityLabel(showBody ? "Hide notes" : "Add notes")
 
+            // Plain glass, not prominent: "New Task" in the header above already
+            // carries the column's one coloured background, and this button is
+            // reached *through* it. Return submits too, and being disabled until
+            // there's a title gives it enough emphasis on its own.
             Button("Add", action: submit)
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -304,6 +331,7 @@ private struct TaskComposer: View {
             Image(systemName: "calendar")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             ForEach(DuePreset.allCases) { preset in
                 DuePill(label: preset.label, selected: isSelected(preset)) {
@@ -532,12 +560,20 @@ private struct TaskCardView: View {
     private var checkbox: some View {
         Button(action: toggleDone) {
             Image(systemName: draft.done ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 18))
+                .font(.title2)
+                // Padded out to a comfortable target; the glyph keeps its size.
+                .frame(width: 28, height: 28)
                 .foregroundStyle(draft.done ? Color.accentColor : Color.secondary)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(draft.done ? "Mark as not done" : "Mark as done")
+        // Done-ness was conveyed by glyph and colour only. Announce it as a
+        // checkbox with a state so VoiceOver reads the task's status, and the
+        // strikethrough isn't the sole non-visual cue.
+        .accessibilityLabel("Done")
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(draft.done ? "On" : "Off")
     }
 
     /// Flip the done state via the library. Any in-flight text edit is flushed
@@ -592,9 +628,25 @@ private struct TaskCardView: View {
         }
         .buttonStyle(.plain)
         .help("Set due date")
+        // Overdue vs today is carried by colour alone (red / blue), which some
+        // people can't tell apart — so it goes in the spoken label as words.
+        .accessibilityLabel(dueLabel)
         .popover(isPresented: $showDuePopover, arrowEdge: .bottom) {
             duePopover
         }
+    }
+
+    /// Spoken form of the due badge, spelling out the state the colour encodes.
+    private var dueLabel: String {
+        guard let due = draft.due else { return "Set due date" }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let day = cal.startOfDay(for: due)
+        let date = DueFormat.relative(due)
+        if draft.done { return "Due \(date)" }
+        if day < today { return "Overdue, due \(date)" }
+        if day == today { return "Due today" }
+        return "Due \(date)"
     }
 
     /// Red once overdue, blue for today, secondary otherwise / undated.
@@ -659,11 +711,12 @@ private struct TaskCardView: View {
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .frame(width: 22, height: 20)
+                            .frame(width: 28, height: 28)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help(expanded ? "Collapse notes" : "Expand notes")
+                    .accessibilityLabel(expanded ? "Collapse notes" : "Expand notes")
                 }
             }
         }
@@ -681,6 +734,12 @@ private struct TaskCardView: View {
             // Tapping the preview opens the editor, so a one-line body — which
             // gets no chevron — is still editable.
             .onTapGesture {
+                expanded = true
+                bodyFocused = true
+            }
+            // Same reason as the note card: a tap gesture on its own is
+            // pointer-only. The ⋯ menu's "Show Notes" covers the keyboard.
+            .accessibilityAction(named: "Edit notes") {
                 expanded = true
                 bodyFocused = true
             }
@@ -744,13 +803,14 @@ private struct TaskCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .frame(width: 22, height: 20)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Task actions")
+        .accessibilityLabel("Task actions")
     }
 
     // MARK: Persistence
@@ -828,31 +888,51 @@ private enum DuePreset: String, CaseIterable, Identifiable {
     }
 }
 
-/// A capsule due-date pill. Prominent glass when selected, plain glass
-/// otherwise — matching the macOS 26 control language.
+/// A capsule due-date pill.
+///
+/// Speaks `FilterPill`'s language — filled when selected, a quiet wash when not —
+/// rather than the Liquid Glass it used to wear. Two reasons. These sit in the
+/// *content* layer, where HIG asks for standard materials and reserves glass for
+/// controls and navigation. And the selected one used `.glassProminent`, which
+/// paints the accent colour behind the label: with the column's "New Task" button
+/// already doing that and the composer's "Add" beside it, picking a due date put
+/// three coloured backgrounds on screen at once, against "refrain from adding
+/// color to the background of multiple controls".
+///
+/// Not literally a `FilterPill`, because that takes a `Tint` per option — its
+/// options *are* colour-coded categories. A date preset has no inherent colour,
+/// so the resting state is the neutral `Stone` and only selection is tinted. The
+/// padding matches `FilterPill` so the due row lines up with the filter row above.
 private struct DuePill: View {
     let label: String
     var systemImage: String? = nil
     let selected: Bool
     let action: () -> Void
 
-    var body: some View {
-        if selected {
-            button.buttonStyle(.glassProminent)
-        } else {
-            button.buttonStyle(.glass)
-        }
-    }
+    /// Blue for a set date, echoing the due badge's own "today" colour.
+    private static let tint = Tint.blue
 
-    private var button: some View {
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 if let systemImage { Image(systemName: systemImage) }
                 Text(label)
             }
             .font(.caption.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(selected ? AnyShapeStyle(Self.tint.deep) : AnyShapeStyle(Stone.chip))
+            )
+            .overlay {
+                if !selected {
+                    Capsule().strokeBorder(Stone.line, lineWidth: 0.5)
+                }
+            }
+            .contentShape(Capsule())
         }
-        .controlSize(.small)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }

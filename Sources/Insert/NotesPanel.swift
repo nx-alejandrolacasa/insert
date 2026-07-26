@@ -18,6 +18,7 @@ struct NotesPanel: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
     @Environment(SettingsStore.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The most recently created note, so we can scroll to and focus it. Cards
     /// read this to decide whether to grab focus on appear.
@@ -142,8 +143,11 @@ struct NotesPanel: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "note.text")
-                .font(.system(size: 40, weight: .light))
+                // Regular, not Light: HIG calls out Ultralight/Thin/Light as hard
+                // to see, and at `.secondary` this glyph was already faint.
+                .font(.system(size: 40))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(emptyMessage)
                 .font(.headline)
                 .foregroundStyle(.secondary)
@@ -182,7 +186,8 @@ struct NotesPanel: View {
         // Let the list rebuild before scrolling so the target row exists.
         Task {
             try? await Task.sleep(for: .milliseconds(60))
-            withAnimation(.easeInOut(duration: 0.25)) {
+            // Reduce Motion means jump straight there rather than scroll.
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
                 proxy.scrollTo(note.id, anchor: .top)
             }
         }
@@ -297,6 +302,12 @@ private struct NoteCardView: View {
             island
                 .contentShape(RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous))
                 .onTapGesture { enterEdit() }
+                // A bare tap gesture is invisible to VoiceOver, Switch Control
+                // and Voice Control, so opening a note was pointer-only. The card
+                // becomes a container carrying the same command as an action; the
+                // ⋯ menu's "Edit" covers the keyboard.
+                .accessibilityElement(children: .contain)
+                .accessibilityAction(named: "Edit note") { enterEdit() }
         }
     }
 
@@ -321,9 +332,12 @@ private struct NoteCardView: View {
                     )
                 } else {
                     Image(systemName: draft.symbol)
-                        .font(.system(size: 15))
-                        .foregroundStyle(type.tint.deep)
+                        .font(.title3)
+                        .foregroundStyle(type.tint.ink)
                         .frame(width: 26, height: 26)
+                        // The type pills below name the category; this glyph is
+                        // decoration on top of the title beside it.
+                        .accessibilityHidden(true)
                     Text(draft.displayTitle)
                         .font(.title3.weight(.bold))
                         .lineLimit(2)
@@ -348,8 +362,8 @@ private struct NoteCardView: View {
             showingSymbolPicker = true
         } label: {
             Image(systemName: draft.symbol)
-                .font(.system(size: 15))
-                .foregroundStyle(type.tint.deep)
+                .font(.title3)
+                .foregroundStyle(type.tint.ink)
                 .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -358,6 +372,7 @@ private struct NoteCardView: View {
         }
         .buttonStyle(.plain)
         .help("Change symbol")
+        .accessibilityLabel("Change symbol")
         .popover(isPresented: $showingSymbolPicker, arrowEdge: .bottom) {
             SymbolPicker(selection: draft.symbol, tint: type.tint) { picked in
                 draft.symbol = picked
@@ -406,7 +421,7 @@ private struct NoteCardView: View {
     private func projectLabel(_ name: String, symbol: String, tint: Tint) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol)
-                .foregroundStyle(tint.deep)
+                .foregroundStyle(tint.ink)
             Text(name)
         }
             .font(.caption)
@@ -419,37 +434,27 @@ private struct NoteCardView: View {
 
     // MARK: Type pills
 
-    /// One pill per configured type; the selected one is filled with its accent.
+    /// One pill per configured type; the selected one is filled with its `deep`.
     /// Doubles as the "pick a type" affordance for a freshly created note and as
     /// a way to re-categorize an existing one later.
+    ///
+    /// This was a hand-rolled copy of `FilterPill` differing only by a point of
+    /// padding. Now that selection is a fill rather than a border, both had to
+    /// change the same way — so they share the one view instead, which is what
+    /// "the notes and tasks columns read as one system" wanted in the first place.
     private var typePills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(settings.noteTypes) { pillType in
                     let selected = pillType.id == draft.typeID
-                    Button {
+                    FilterPill(
+                        label: pillType.name,
+                        symbol: pillType.symbol,
+                        tint: pillType.tint,
+                        selected: selected
+                    ) {
                         selectType(pillType)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: pillType.symbol)
-                            Text(pillType.name)
-                        }
-                            .font(.caption.weight(selected ? .semibold : .regular))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            // Constant wash, accented border for the current
-                            // type — same language as the filter pills above
-                            // (see `FilterPill`).
-                            .background(Capsule().fill(pillType.tint.chip))
-                            .overlay(
-                                Capsule().strokeBorder(
-                                    selected ? pillType.tint.deep.opacity(0.45) : Stone.line,
-                                    lineWidth: selected ? 1 : 0.5
-                                )
-                            )
                     }
-                    .buttonStyle(.plain)
                     .help(selected ? "\(pillType.name) (current type)" : "Mark as \(pillType.name)")
                 }
             }
@@ -474,7 +479,8 @@ private struct NoteCardView: View {
     @ViewBuilder
     private var bodyView: some View {
         if draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Text("Empty note — tap to write")
+            // "Click", not "tap": this is a pointer-driven Mac.
+            Text("Empty note — click to write")
                 .font(.body)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -549,13 +555,16 @@ private struct NoteCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .frame(width: 26, height: 22)
+                // 26×22 was under a comfortable click target; the glyph is
+                // unchanged, only the area around it grew.
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Note actions")
+        .accessibilityLabel("Note actions")
     }
 
     // MARK: Mode
