@@ -75,19 +75,18 @@ cp "Resources/Info.plist" "$APP/Contents/Info.plist"
 # treatment and deriving the dark / clear / tinted variants, which needs
 # Resources/AppIcon.icon compiled by actool (full Xcode only).
 #
-# OPT-IN for now, and off by default. The layered icon compiles cleanly, but the
-# foreground layers render as near-transparent glass — the white cards all but
-# vanish, badly worse than the flat icon. `icon.json` is written from a schema
-# reverse-engineered out of IconComposerFoundation, and while `specular`,
-# `opacity` and `translucency` were confirmed to work, nothing found so far stops
-# the fills being discarded, and `is-glass` / `fill` are ignored outright.
-# Finishing this needs the real appearance settings, which means opening
-# Resources/AppIcon.icon in Icon Composer once and reading back what it writes.
+# This is the icon Insert ships. It spent a while opt-in because it rendered as a
+# ghost of itself — the white cards all but invisible, badly worse than the flat
+# icon — and the manifest turned out to be asking for exactly that: the background
+# was `groups[0]`, which is the *front* of the stack, so a translucent gradient was
+# painted over the cards, and each group carried Icon Composer's default
+# translucency on top of that. Fixed in `iconManifest` (tools/IconGenerator.swift).
 #
-# Until then the flat .icns is the shipping icon. Set INSERT_LAYERED_ICON=1 to
-# try the layered path.
+# The flat .icns stays as the fallback for a machine with only the Command Line
+# Tools, where there's no actool to compile the layers. INSERT_LAYERED_ICON=0 forces
+# that path for comparison.
 ICON_COMPILED=0
-if [[ "${INSERT_LAYERED_ICON:-0}" == "1" ]] \
+if [[ "${INSERT_LAYERED_ICON:-1}" != "0" ]] \
     && [[ -d "Resources/AppIcon.icon" ]] && command -v actool >/dev/null 2>&1; then
   ICON_LOG="$(mktemp)"
   ICON_CMD=(actool "Resources/AppIcon.icon"
@@ -117,6 +116,9 @@ if [[ "${INSERT_LAYERED_ICON:-0}" == "1" ]] \
     grep -vE '^[[:space:]]*$|Abort trap' "$ICON_LOG" | sed 's/^/         /' | head -3
   fi
   rm -f "$ICON_LOG"
+elif [[ "${INSERT_LAYERED_ICON:-1}" != "0" ]] && ! command -v actool >/dev/null 2>&1; then
+  echo "note: no actool (full Xcode) — using the flat .icns, which forgoes the"
+  echo "      Liquid Glass icon treatment."
 fi
 
 # Copied *after* actool on purpose. actool derives its own AppIcon.icns from the
@@ -133,7 +135,7 @@ fi
 # comes from git (commit count — monotonic and reproducible), so About and Finder
 # always show which build this actually is. CI overrides the version from the
 # pushed tag via INSERT_VERSION.
-VERSION="${INSERT_VERSION:-0.2.0}"
+VERSION="${INSERT_VERSION:-0.3.0}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 
 /usr/libexec/PlistBuddy \

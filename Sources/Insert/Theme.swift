@@ -238,8 +238,14 @@ enum Metrics {
     /// Leading inset that lines text up with the labels in a `.sidebar` List.
     static let sidebarTextInset: CGFloat = 20
 
-    static let minSidebarWidth: CGFloat = 260
-    static let idealSidebarWidth: CGFloat = 340
+    /// The sidebar's resize range. 200pt is both the width a window opens at and
+    /// the narrowest it can be dragged: enough for a project row's name and its
+    /// `X notes · Y tasks` subtitle to read in full, and no wider, because every
+    /// point here is one the notes and tasks columns don't get. Neither value
+    /// survives a *stale* autosaved column width on its own — see
+    /// `AppDelegate.sanitizeSidebarWidth()`.
+    static let minSidebarWidth: CGFloat = 200
+    static let idealSidebarWidth: CGFloat = 200
     static let maxSidebarWidth: CGFloat = 460
 }
 

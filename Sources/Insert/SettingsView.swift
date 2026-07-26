@@ -511,7 +511,7 @@ private struct StorageSettingsTab: View {
         guard url.standardizedFileURL != library.rootURL.standardizedFileURL else { return }
 
         // With an empty library there's nothing to move, so skip the question.
-        if library.projects.isEmpty, library.notes.isEmpty, library.tasks.isEmpty {
+        if library.isEmpty {
             switchOnly(to: url)
         } else {
             pendingFolder = url

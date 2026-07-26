@@ -101,14 +101,21 @@ each update re-prompts for Documents access.
 ## Storage layout
 
 ```
-~/Documents/Insert/         (changeable in Settings → Storage)
-  Notes/       one Markdown file per note
-  Tasks/       one Markdown file per task
-  Projects.md  the list of projects
+~/Documents/Insert/            (changeable in Settings → Storage)
+  Notes/          one Markdown file per note
+  Tasks/          one Markdown file per task
+    Done/         tasks you've ticked off
+  Projects.md     the list of projects
 ```
 
 Notes and tasks carry their metadata in a small YAML frontmatter block and their
 content as Markdown — open the folder in any editor and everything just works.
+
+Insert reads all of it every time it starts. Nothing is paged in later, so every
+list is complete, every count is exact, and search sees everything — a thousand
+notes load in well under a tenth of a second. `Done/` is organisational only: it
+keeps a large vault navigable, and ticking a task off in Obsidian moves its file
+there the next time Insert reads the folder.
 
 ## Shortcuts
 

@@ -149,37 +149,119 @@ enum Frontmatter {
 /// Timestamps use RFC-3339 (`2026-07-24T10:00:00Z`); due dates use plain days
 /// (`2026-07-24`) to match Obsidian / todo.txt conventions.
 enum DateCoding {
-    // Formatters aren't Sendable, so build a fresh one per call rather than
-    // sharing mutable global state (this app's file counts make the cost
-    // negligible).
-    private static func timestampFormatter() -> ISO8601DateFormatter {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }
+    // `ISO8601DateFormatter` and `DateFormatter` are classes and not Sendable, so
+    // this used to build a fresh one per call rather than share mutable global
+    // state — with a note that "this app's file counts make the cost negligible".
+    //
+    // They don't. Constructing those formatters was **62% of the cost of loading a
+    // note** and about three quarters of a task's: 180 µs per note against 19 µs
+    // to read its file off disk. Every date on every record paid for a formatter
+    // that was then thrown away.
+    //
+    // So: `Calendar` and `Date.ISO8601FormatStyle` are Sendable *value* types, and
+    // can simply be held. On top of that the canonical shapes — the ones Insert
+    // itself writes — are parsed by hand, because integer arithmetic on twenty
+    // ASCII characters beats any formatter. Anything else (a hand-edited offset,
+    // fractional seconds) falls through to the format style, so the reader stays
+    // exactly as tolerant as it was. `DateCodingTests` pins both halves against
+    // the formatters this replaced.
 
-    private static func dayFormatter() -> DateFormatter {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone.current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }
+    /// Gregorian, POSIX, auto-updating zone — matching the `DateFormatter` this
+    /// replaced, including its use of the *local* zone for day-granularity dates.
+    private static let gregorian: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.locale = Locale(identifier: "en_US_POSIX")
+        c.timeZone = TimeZone.autoupdatingCurrent
+        return c
+    }()
 
-    static func string(_ date: Date) -> String { timestampFormatter().string(from: date) }
+    /// `2026-07-24T10:00:00Z` — the same text `.withInternetDateTime` produced.
+    private static let iso = Date.ISO8601FormatStyle(timeZone: .gmt)
+
+    // MARK: Timestamps (RFC-3339)
+
+    static func string(_ date: Date) -> String { iso.format(date) }
 
     static func date(_ string: String) -> Date? {
         let s = string.trimmingCharacters(in: .whitespaces)
         if s.isEmpty { return nil }
-        return timestampFormatter().date(from: s) ?? day(s)
+        if let fast = fastTimestamp(s) { return fast }
+        if let parsed = try? Date(s, strategy: iso.parseStrategy) { return parsed }
+        // A `created:` written as a bare day still reads, as it always did.
+        return day(s)
     }
 
-    static func dayString(_ date: Date) -> String { dayFormatter().string(from: date) }
+    // MARK: Days (`yyyy-MM-dd`, local midnight)
+
+    static func dayString(_ date: Date) -> String {
+        let c = gregorian.dateComponents([.year, .month, .day], from: date)
+        return pad(c.year ?? 0, 4) + "-" + pad(c.month ?? 0, 2) + "-" + pad(c.day ?? 0, 2)
+    }
 
     static func day(_ string: String) -> Date? {
         let s = string.trimmingCharacters(in: .whitespaces)
-        if s.isEmpty { return nil }
-        return dayFormatter().date(from: s)
+        guard let (y, m, d) = ymd(s) else { return nil }
+        // Through `Calendar`, not by hand: local midnight depends on the zone's
+        // offset *on that day*, which is a DST question and not arithmetic.
+        return gregorian.date(from: DateComponents(year: y, month: m, day: d))
+    }
+
+    // MARK: - Fast paths
+
+    /// `yyyy-MM-ddTHH:mm:ssZ` exactly — the shape `string(_:)` writes — parsed as
+    /// integers straight to an epoch offset. `nil` for anything else, which sends
+    /// the caller to the format style.
+    private static func fastTimestamp(_ s: String) -> Date? {
+        let a = s.utf8
+        guard a.count == 20, a.last == UInt8(ascii: "Z") else { return nil }
+        let c = Array(a)
+        guard c[4] == UInt8(ascii: "-"), c[7] == UInt8(ascii: "-"),
+              c[10] == UInt8(ascii: "T"), c[13] == UInt8(ascii: ":"), c[16] == UInt8(ascii: ":")
+        else { return nil }
+        guard let year = int(c, 0, 4), let month = int(c, 5, 2), let day = int(c, 8, 2),
+              let hour = int(c, 11, 2), let minute = int(c, 14, 2), let second = int(c, 17, 2),
+              (1...12).contains(month), (1...31).contains(day),
+              hour < 24, minute < 60, second <= 60
+        else { return nil }
+        let seconds = daysFromEpoch(year: year, month: month, day: day) * 86_400
+            + hour * 3600 + minute * 60 + second
+        return Date(timeIntervalSince1970: Double(seconds))
+    }
+
+    /// Leading `yyyy-MM-dd` of a string, as integers.
+    private static func ymd(_ s: String) -> (Int, Int, Int)? {
+        let c = Array(s.utf8)
+        guard c.count >= 10, c[4] == UInt8(ascii: "-"), c[7] == UInt8(ascii: "-"),
+              let y = int(c, 0, 4), let m = int(c, 5, 2), let d = int(c, 8, 2),
+              (1...12).contains(m), (1...31).contains(d)
+        else { return nil }
+        return (y, m, d)
+    }
+
+    private static func int(_ bytes: [UInt8], _ start: Int, _ length: Int) -> Int? {
+        var value = 0
+        for i in start..<(start + length) {
+            let digit = Int(bytes[i]) - 48
+            guard (0...9).contains(digit) else { return nil }
+            value = value * 10 + digit
+        }
+        return value
+    }
+
+    /// Days from 1970-01-01 to a proleptic-Gregorian date, by Howard Hinnant's
+    /// `days_from_civil`: shift the year to start in March so leap day lands at the
+    /// end, then count era/year-of-era/day-of-year. No loops, no lookup tables.
+    private static func daysFromEpoch(year: Int, month: Int, day: Int) -> Int {
+        let y = year - (month <= 2 ? 1 : 0)
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yoe = y - era * 400                                     // 0…399
+        let doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy             // 0…146096
+        return era * 146_097 + doe - 719_468
+    }
+
+    private static func pad(_ value: Int, _ width: Int) -> String {
+        let s = String(value)
+        return s.count >= width ? s : String(repeating: "0", count: width - s.count) + s
     }
 }

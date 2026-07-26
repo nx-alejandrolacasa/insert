@@ -7,9 +7,23 @@ private let log = Logger(subsystem: "com.alejandrolacasa.insert", category: "Lib
 /// The app's data store and in-memory index.
 ///
 /// Everything lives as Markdown on disk (see `MarkdownFiles`); `Library` loads
-/// it once into memory, serves fast in-memory queries to the UI, and writes the
+/// it into memory, serves fast in-memory queries to the UI, and writes the
 /// single affected file back on every change. A lightweight directory watcher
 /// reloads when the folder is edited externally (e.g. in Obsidian).
+///
+/// **Everything is loaded, always** — every note, every task, on every load. There
+/// is no window, no threshold and nothing deferred, which is what makes every list
+/// complete and every count exact no matter how the library is shaped. That is
+/// affordable because reading and parsing a note costs about 110 µs, of which 18 µs
+/// is the file read: a thousand notes is well under a tenth of a second, and the
+/// decode is spread across the cores (see `decoded(_:)`).
+///
+/// It was not always affordable, and the reason is worth remembering. `DateCoding`
+/// used to build a `DateFormatter` per date, which was 180 µs of that 110 — more
+/// than half the cost of loading a library went on formatters that were then thrown
+/// away. An earlier version of this file answered that with archive folders, age
+/// thresholds and on-demand loading; all of it was working around a bug, and all of
+/// it is gone. Measure before adding laziness back.
 @MainActor
 @Observable
 final class Library {
@@ -30,7 +44,17 @@ final class Library {
 
     var notesDir: URL { rootURL.appendingPathComponent("Notes", isDirectory: true) }
     var tasksDir: URL { rootURL.appendingPathComponent("Tasks", isDirectory: true) }
+    /// Completed tasks.
+    ///
+    /// Purely organisational — both folders are read in full on every load, so this
+    /// buys no speed. It keeps a large vault navigable in Obsidian, and it means the
+    /// folder a task file sits in agrees with its `done:` flag, which
+    /// `reconcileTaskFolders` maintains in both directions.
+    var tasksDoneDir: URL { tasksDir.appendingPathComponent("Done", isDirectory: true) }
     var projectsFile: URL { rootURL.appendingPathComponent("Projects.md") }
+
+    /// Whether there is anything here at all.
+    var isEmpty: Bool { projects.isEmpty && notes.isEmpty && tasks.isEmpty }
 
     // MARK: - Init
 
@@ -50,7 +74,7 @@ final class Library {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: "didSeed") else { return }
         defaults.set(true, forKey: "didSeed")
-        guard projects.isEmpty, notes.isEmpty, tasks.isEmpty else { return }
+        guard isEmpty else { return }
 
         let welcome = addProject(name: "Welcome", symbol: "hand.wave", tint: .blue)
         let sideProject = addProject(name: "Side Project", symbol: "paperplane", tint: .purple)
@@ -144,8 +168,18 @@ final class Library {
 
         let destNotes = url.appendingPathComponent("Notes", isDirectory: true)
         let destTasks = url.appendingPathComponent("Tasks", isDirectory: true)
-        try fm.createDirectory(at: destNotes, withIntermediateDirectories: true)
-        try fm.createDirectory(at: destTasks, withIntermediateDirectories: true)
+
+        // Every folder the library uses, source paired with destination. The done
+        // folder is as much the user's Markdown as the active ones, so a relocation
+        // carries it too — leaving it behind would look exactly like losing it.
+        let folders: [(from: URL, to: URL)] = [
+            (notesDir, destNotes),
+            (tasksDir, destTasks),
+            (tasksDoneDir, destTasks.appendingPathComponent("Done", isDirectory: true)),
+        ]
+        for folder in folders {
+            try fm.createDirectory(at: folder.to, withIntermediateDirectories: true)
+        }
 
         // Our own churn would otherwise have the watcher reload a half-moved
         // folder; drop it and re-arm from `setRoot` below.
@@ -153,9 +187,8 @@ final class Library {
         suppressReloadUntil = Date().addingTimeInterval(2)
 
         var result = MoveResult()
-        for (from, to) in [(notesDir, destNotes), (tasksDir, destTasks)] {
-            let files = (try? fm.contentsOfDirectory(at: from, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension.lowercased() == "md" {
+        for (from, to) in folders {
+            for file in markdownFiles(in: from) {
                 let target = to.appendingPathComponent(file.lastPathComponent)
                 if fm.fileExists(atPath: target.path) {
                     result.skipped += 1
@@ -193,10 +226,17 @@ final class Library {
 
     // MARK: - Filesystem setup
 
+    /// Creates the three folders the library reads from.
+    ///
+    /// `Done` is made up front even when it would stay empty, rather than on first
+    /// use: `startWatching` opens a file descriptor per folder, and one conjured
+    /// into existence later wouldn't be watched until the next relaunch — external
+    /// edits inside it would go unnoticed. An empty folder is the cheaper price.
     private func ensureStructure() {
         let fm = FileManager.default
-        try? fm.createDirectory(at: notesDir, withIntermediateDirectories: true)
-        try? fm.createDirectory(at: tasksDir, withIntermediateDirectories: true)
+        for dir in [notesDir, tasksDir, tasksDoneDir] {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
         if !fm.fileExists(atPath: projectsFile.path) {
             try? MarkdownFiles.encodeProjects([]).write(to: projectsFile, atomically: true, encoding: .utf8)
         }
@@ -204,10 +244,15 @@ final class Library {
 
     // MARK: - Loading
 
+    /// Reads the entire library — every note, every task — into the index.
     func reloadAll() {
         projects = loadProjects()
-        notes = loadNotes()
-        tasks = loadTasks()
+        notes = deduped(Self.decoded(markdownFiles(in: notesDir), MarkdownFiles.decodeNote))
+        tasks = deduped(Self.decoded(
+            markdownFiles(in: tasksDir) + markdownFiles(in: tasksDoneDir),
+            MarkdownFiles.decodeTask
+        ))
+        reconcileTaskFolders()
     }
 
     private func loadProjects() -> [Project] {
@@ -215,18 +260,89 @@ final class Library {
         return MarkdownFiles.decodeProjects(from: content)
     }
 
-    private func loadNotes() -> [Note] {
-        deduped(markdownFiles(in: notesDir).compactMap { url in
-            guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-            return MarkdownFiles.decodeNote(from: content, url: url)
-        })
+    /// Reads and decodes `urls`, across the cores when there are enough of them to
+    /// be worth the fan-out.
+    ///
+    /// `nonisolated` and `static` deliberately: it touches no library state, which is
+    /// what makes it safe to run in parallel at all. Decoding is pure — `Frontmatter`
+    /// and `DateCoding` hold only Sendable value types — so the work divides cleanly.
+    ///
+    /// Chunks are collected into pre-assigned slots rather than appended, so the
+    /// result is in the same order however the threads finish. Order isn't load-
+    /// bearing (every query sorts), but `deduped` breaks ties between two files
+    /// claiming one id by position, and a tie-break that varies run to run would be
+    /// a maddening thing to debug.
+    private nonisolated static func decoded<T: Sendable>(
+        _ urls: [URL],
+        _ decode: @Sendable (String, URL) -> T?
+    ) -> [T] {
+        // `@Sendable` because the fan-out below calls it from several threads at
+        // once: it captures only `decode`, which is itself `@Sendable`, so saying so
+        // costs nothing and lets the compiler check the claim rather than assume it.
+        @Sendable func read(_ url: URL) -> T? {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+            return decode(text, url)
+        }
+        // Under a few hundred files the whole load is a couple of milliseconds and
+        // thread setup is a bigger share of it than the reading.
+        guard urls.count >= 256 else { return urls.compactMap(read) }
+
+        let slots = min(ProcessInfo.processInfo.activeProcessorCount, 8)
+        let size = (urls.count + slots - 1) / slots
+        let collected = Collected<T>(slots: slots)
+        DispatchQueue.concurrentPerform(iterations: slots) { slot in
+            let start = slot * size
+            guard start < urls.count else { return }
+            let chunk = urls[start..<min(start + size, urls.count)]
+            collected.store(chunk.compactMap(read), at: slot)
+        }
+        return collected.joined()
     }
 
-    private func loadTasks() -> [TaskItem] {
-        deduped(markdownFiles(in: tasksDir).compactMap { url in
-            guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-            return MarkdownFiles.decodeTask(from: content, url: url)
-        })
+    /// Somewhere for `concurrentPerform`'s workers to put their results. A lock
+    /// rather than actor isolation because the callers are synchronous; each worker
+    /// takes it once, to hand over a finished chunk, so there is nothing to contend
+    /// over. Same shape as `DirectoryWatcher`'s `DebounceState`.
+    private final class Collected<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var slots: [[T]]
+
+        init(slots count: Int) { self.slots = Array(repeating: [], count: count) }
+
+        func store(_ values: [T], at slot: Int) {
+            lock.lock()
+            slots[slot] = values
+            lock.unlock()
+        }
+
+        func joined() -> [T] {
+            lock.lock()
+            defer { lock.unlock() }
+            return slots.flatMap { $0 }
+        }
+    }
+
+    /// Files every task under the folder its `done` flag calls for.
+    ///
+    /// Runs after each load, and does two jobs: it migrates a library written before
+    /// `Tasks/Done/` existed, and it keeps the folder honest when a task is ticked
+    /// off — or reopened — by hand in Obsidian. Nothing depends on it for *finding*
+    /// tasks, since both folders are read in full; it's what stops the layout
+    /// quietly becoming a lie.
+    private func reconcileTaskFolders() {
+        for idx in tasks.indices {
+            guard let from = tasks[idx].fileURL else { continue }
+            let wanted = tasks[idx].done ? tasksDoneDir : tasksDir
+            guard key(from.deletingLastPathComponent()) != key(wanted) else { continue }
+            let to = wanted.appendingPathComponent(from.lastPathComponent)
+            suppressReload()
+            do {
+                try FileManager.default.moveItem(at: from, to: to)
+                tasks[idx].fileURL = to
+            } catch {
+                log.error("could not file \(from.lastPathComponent, privacy: .public) under \(wanted.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     /// Keeps one file per id — the most recently updated — and trashes the rest.
@@ -255,9 +371,23 @@ final class Library {
         return items.filter { newest[$0.id]?.fileURL == $0.fileURL }
     }
 
+    /// A file's identity, for comparing one path with another.
+    ///
+    /// Not the `URL` itself. A URL built by appending to a folder and one handed
+    /// back by `FileManager` can name the very same file and still compare unequal.
+    /// That mismatch is not cosmetic: `persistNote` writes the new file *before*
+    /// unlinking the old one, so a raw `!=` there reported two spellings of one path
+    /// as different and deleted the file it had just written. Paths compare on the
+    /// one thing both forms agree about. See `StorageLayoutTests`.
+    private func key(_ url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
     private func markdownFiles(in dir: URL) -> [URL] {
         let fm = FileManager.default
         let urls = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        // Non-recursive, so `Tasks/Done` is simply not `.md` and drops out here —
+        // each folder is listed in its own right or not at all.
         return urls.filter { $0.pathExtension.lowercased() == "md" }
     }
 
@@ -302,20 +432,30 @@ final class Library {
     /// Writes the note to disk, renaming its file if the slug changed.
     private func persistNote(_ note: inout Note) {
         let desired = notesDir.appendingPathComponent(MarkdownFiles.noteFilename(note))
-        if let existing = note.fileURL, existing != desired {
-            remove(existing)
-        }
+        let existing = note.fileURL
         note.fileURL = desired
         write(MarkdownFiles.encode(note), to: desired)
+        // Write first, then drop the old file: `write` is atomic, so a failure
+        // leaves the previous copy rather than nothing at all.
+        //
+        // Compared by `key`, and it has to be. A note loaded from disk carries
+        // `FileManager`'s URL while `desired` is built by construction, so raw
+        // `!=` reports two spellings of *the same path* as different — and this
+        // would then delete the file it had just written.
+        if let existing, key(existing) != key(desired) { remove(existing) }
     }
 
+    /// Writes the task to disk. Which folder it lands in follows its done state:
+    /// pending in `Tasks/`, completed in `Tasks/Done/`, so ticking a task off moves
+    /// its file. Organisational only — both folders are read in full.
     private func persistTask(_ task: inout TaskItem) {
-        let desired = tasksDir.appendingPathComponent(MarkdownFiles.taskFilename(task))
-        if let existing = task.fileURL, existing != desired {
-            remove(existing)
-        }
+        let directory = task.done ? tasksDoneDir : tasksDir
+        let desired = directory.appendingPathComponent(MarkdownFiles.taskFilename(task))
+        let existing = task.fileURL
         task.fileURL = desired
         write(MarkdownFiles.encode(task), to: desired)
+        // By `key`, for the reason spelled out in `persistNote`.
+        if let existing, key(existing) != key(desired) { remove(existing) }
     }
 
     // MARK: - Projects CRUD
@@ -475,6 +615,7 @@ final class Library {
     @discardableResult
     func purgeCompletedTasks(retention: DoneTaskRetention, now: Date = Date()) -> Int {
         guard let cutoff = retention.cutoff(from: now) else { return 0 }
+
         let expired = tasks.filter { $0.done && ($0.completed ?? $0.updated) < cutoff }
         guard !expired.isEmpty else { return 0 }
 
@@ -494,7 +635,7 @@ final class Library {
 
     // MARK: - Queries
 
-    /// (notes, tasks) counts for a project.
+    /// (notes, tasks) counts for a project. Exact: everything is loaded.
     func counts(forProject id: UUID) -> (notes: Int, tasks: Int) {
         let n = notes.lazy.filter { $0.projectIDs.contains(id) }.count
         let t = tasks.lazy.filter { $0.projectIDs.contains(id) }.count
@@ -578,7 +719,7 @@ final class Library {
     // MARK: - Watching
 
     private func startWatching() {
-        watcher = DirectoryWatcher(urls: [notesDir, tasksDir, rootURL]) { [weak self] in
+        watcher = DirectoryWatcher(urls: [notesDir, tasksDir, tasksDoneDir, rootURL]) { [weak self] in
             guard let self else { return }
             if Date() < self.suppressReloadUntil { return }
             self.reloadAll()

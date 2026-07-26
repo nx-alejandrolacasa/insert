@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(python3 -)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(git config *)",
+      "Bash(gh auth *)",
+      "Read(//Users/alejandro/.ssh/**)",
+      "Bash(ssh-add -l)",
+      "Bash(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@github.com)",
+      "Bash(gh api *)",
+      "Bash(ruby -ryaml -e 'YAML.safe_load\\(File.read\\(\".github/workflows/release.yml\"\\), aliases: true\\); puts \"yaml OK\"')",
+      "Bash(INSERT_VERSION=0.1.0 ./build.sh release)",
+      "Bash(/usr/libexec/PlistBuddy -c \"Print :CFBundleShortVersionString\" -c \"Print :CFBundleVersion\" -c \"Print :CFBundleIdentifier\" build/Insert.app/Contents/Info.plist)",
+      "Bash(./dmg.sh 0.1.0)",
+      "Bash(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" -c \"Print :CFBundleShortVersionString\" build/Insert.app/Contents/Info.plist)",
+      "WebSearch",
+      "Bash(python3 -c ' *)",
+      "WebFetch(domain:developer.apple.com)",
+      "Bash(curl -s https://developer.apple.com/tutorials/data/design/human-interface-guidelines/foundations.json -o __TRACKED_VAR__/found.json)",
+      "Bash(screencapture -x -o __TRACKED_VAR__/shot.png)"
+    ]
+  }
+}

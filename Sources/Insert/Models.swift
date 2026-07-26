@@ -252,6 +252,15 @@ enum DoneTaskRetention: String, CaseIterable, Identifiable {
     }
 }
 
+// Note: there is deliberately no note-archiving setting here. Insert briefly moved
+// notes older than a month into `Notes/Archive/` and read them back on demand, to
+// keep a large library off the launch path. Two things were wrong with it. What a
+// project showed depended on *other* projects' activity, since the age window was
+// global — and the cost it was avoiding turned out to be a bug in `DateCoding`,
+// which built a `DateFormatter` per date and accounted for more than half of the
+// time spent loading a library. With that fixed, reading everything is fast enough
+// that the whole apparatus paid for itself in inconsistency and bought nothing.
+
 enum NoteSort: String, CaseIterable, Identifiable {
     case createdDesc
     case createdAsc

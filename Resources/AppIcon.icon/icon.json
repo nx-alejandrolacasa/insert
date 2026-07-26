@@ -1,63 +1,15 @@
 {
+  "fill" : {
+    "linear-gradient" : [
+      "extended-srgb:0.82000,0.78000,0.99000,1.00000",
+      "extended-srgb:0.99000,0.86000,0.72000,1.00000"
+    ]
+  },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "background.svg",
-          "name" : "Background"
-        }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "layers" : [
-        {
-          "blend-mode" : "normal",
-          "fill" : "automatic",
           "glass" : true,
-          "image-name" : "back-card.svg",
-          "name" : "Back Card",
-          "opacity" : 1
-        }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "layers" : [
-        {
-          "blend-mode" : "normal",
-          "glass" : true,
-          "hidden" : false,
-          "image-name" : "front-card.svg",
-          "name" : "Front Card"
-        }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "layers" : [
-        {
           "image-name" : "badge.svg",
           "name" : "Badge"
         }
@@ -67,7 +19,41 @@
         "opacity" : 0.5
       },
       "translucency" : {
-        "enabled" : true,
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "front-card.svg",
+          "name" : "Front Card"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "back-card.svg",
+          "name" : "Back Card"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
         "value" : 0.5
       }
     }
@@ -76,9 +62,6 @@
     "circles" : [
       "watchOS"
     ],
-    "squares" : [
-      "iOS",
-      "macOS"
-    ]
+    "squares" : "shared"
   }
 }

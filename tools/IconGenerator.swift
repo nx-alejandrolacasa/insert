@@ -2,9 +2,11 @@ import AppKit
 import CoreText
 
 // Insert app icon: a soft, modern mark for a projects / notes / tasks app.
-// A pastel gradient tile (lilac → warm apricot) with two stacked, glassy white
-// "note" cards; the front card carries a few text lines and a checkmark badge —
-// notes + tasks, at a glance. Minimalistic and "Liquid Glass" adjacent.
+// A pastel gradient tile (lilac → warm apricot) with two stacked white "note"
+// cards; the front card carries a few text lines and a checkmark badge — notes +
+// tasks, at a glance. Minimalistic and "Liquid Glass" adjacent: the cards
+// themselves are opaque, and the sheen, the shadows and the corner mask are the
+// system's to draw (see `iconManifest`).
 //
 // Regenerate with `./build.sh icon`; design notes in CLAUDE.md → Design intent →
 // Icon.
@@ -19,7 +21,10 @@ import CoreText
 //                     variants. HIG: "Providing layers with pre-defined masking
 //                     negatively impacts specular highlight effects and makes
 //                     edges look jagged", and "let the system handle blurring and
-//                     other visual effects".
+//                     other visual effects". The gradient background is *not* a
+//                     layer here — it's the manifest's own `fill`, which is where
+//                     Icon Composer looks when it derives the dark and tinted
+//                     variants; only the three foreground shapes are layers.
 //   AppIcon.iconset/  The classic flat raster set, still the fallback when the
 //                     layered icon can't be compiled. Nothing supplies effects to
 //                     a plain .icns, so this one *keeps* its own rounded tile,
@@ -45,6 +50,15 @@ private extension NSColor {
                       Int((c.redComponent * 255).rounded()),
                       Int((c.greenComponent * 255).rounded()),
                       Int((c.blueComponent * 255).rounded()))
+    }
+
+    /// `extended-srgb:r,g,b,a` — the colour syntax `icon.json` uses, so the
+    /// manifest's background gradient reads from the same palette as the SVGs.
+    /// Five decimals because that's what Icon Composer writes.
+    var iconComponents: String {
+        let c = usingColorSpace(.sRGB)!
+        return String(format: "extended-srgb:%.5f,%.5f,%.5f,%.5f",
+                      c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent)
     }
 }
 
@@ -177,20 +191,18 @@ private struct SVG {
     }
 }
 
-/// The four unmasked, full-bleed layers of the layered icon.
+/// The three unmasked, full-bleed foreground layers of the layered icon.
+///
+/// The background isn't among them: it's the manifest's `fill`. As a layer it
+/// would sit in a group and take that group's Liquid Glass treatment — a
+/// gradient rendered as glass over nothing — and the dark / clear / tinted
+/// variants are derived from the document's fill, so a background hidden inside
+/// a layer leaves the system nothing to work from.
 private func layerSVGs() -> [(name: String, svg: String)] {
     let c = Design.canvas
     let mid = CGPoint(x: c / 2, y: c / 2)
 
-    // --- Background: full bleed, fully opaque, no corner radius. The system
-    // masks it; drawing our own rounded tile here would fight the mask and
-    // wreck the specular highlights along the edge.
-    var background = SVG(size: c)
-    background.linearGradient(id: "tile", from: bgTop, to: bgBottom,
-                              x1: 0, y1: 0, x2: c, y2: c)   // lilac top-left → apricot bottom-right
-    background.roundedRect(x: 0, y: 0, w: c, h: c, corner: 0, fill: "url(#tile)")
-
-    // --- Card geometry, now measured against the whole canvas.
+    // --- Card geometry, measured against the whole canvas.
     let cardSize = CGSize(width: c * Design.cardWidth, height: c * Design.cardHeight)
     let backSize = CGSize(width: cardSize.width * Design.backCardScale,
                           height: cardSize.height * Design.backCardScale)
@@ -244,7 +256,6 @@ private func layerSVGs() -> [(name: String, svg: String)] {
     badge.endCard()
 
     return [
-        ("background", background.document),
         ("back-card", back.document),
         ("front-card", front.document),
         ("badge", badge.document),
@@ -254,45 +265,99 @@ private func layerSVGs() -> [(name: String, svg: String)] {
 /// The `.icon` package's manifest.
 ///
 /// `.icon` is a document *package* (`com.apple.iconcomposer.icon` conforms to
-/// `com.apple.package`), so it's a plain folder we can write. The schema below
-/// is the subset this icon needs — one group per layer, so each gets its own
-/// system lighting rather than sharing one group's treatment.
+/// `com.apple.package`), so it's a plain folder we can write. The keys below are
+/// the subset this icon needs — one group per layer, so each gets its own system
+/// lighting rather than sharing one group's treatment.
 ///
-/// Caveat worth knowing: this manifest format isn't publicly documented. If a
-/// future Icon Composer disagrees with it, open `AppIcon.icon` in Icon Composer
-/// (Xcode → Open Developer Tool) and re-add the same SVGs from `Assets/` — the
-/// layers are the real artifact here and they're what the design lives in.
-private let iconManifest = """
-{
-  "groups" : [
+/// **`groups` runs front to back.** `groups[0]` is drawn last, on top — the
+/// reverse of how a layers panel usually reads, and the first half of what used to
+/// make this icon render wrong: with the background listed first it was painted
+/// *over* the cards, a translucent gradient sheet that left the whole design a
+/// ghost of itself. Badge, then front card, then back card.
+///
+/// **`translucency` is off**, the other half. Icon Composer defaults it *on* at
+/// 0.5, and a white card on a pastel background that you can half see through is
+/// most of the way to not being there. With it off, `glass: true` is welcome — that
+/// one is the Liquid Glass treatment the design actually wants, and the system
+/// still lights the layer, rims it and drops the `neutral` (UI: "Natural") shadow
+/// that separates each card from the one behind it.
+///
+/// The **background is the `fill`**, not a layer — see `layerSVGs()`.
+///
+/// Two smaller notes. `linear-gradient` takes two stops and no direction, so the
+/// background runs top-to-bottom here where the flat `.icns` runs corner to
+/// corner — the one place the two renders differ on the drawing rather than the
+/// effects. And `squares: "shared"` is the same statement as listing `iOS` and
+/// `macOS`: both forms load, this is the one Icon Composer itself writes.
+///
+/// Which is the rule for the formatting below, too: **this is byte-for-byte what
+/// Icon Composer saves**, down to five decimals of colour, the expanded objects and
+/// the missing trailing newline. The format isn't publicly documented, so keeping
+/// the two identical is what makes opening the package in Icon Composer, saving,
+/// and regenerating a no-op instead of a diff.
+///
+/// The tools are the documentation. `ictool` (inside Xcode's `Icon Composer.app`)
+/// is the authority on validity — it refuses to open a document it dislikes, so a
+/// bad value reads as "the data couldn't be read" where a good one gets as far as
+/// rendering:
+///
+///   ictool Resources/AppIcon.icon --export-image --output-file /tmp/i.png \
+///       --platform macOS --rendition Default --width 1024 --height 1024 --scale 1
+///
+/// To *see* the composed result, `actool` writes a flat AppIcon.icns of it beside
+/// Assets.car, and needs no GPU — CLAUDE.md → Design intent → Icon has that one.
+private var iconManifest: String {
+    // Front to back.
+    let layers = [
+        (asset: "badge.svg", name: "Badge"),
+        (asset: "front-card.svg", name: "Front Card"),
+        (asset: "back-card.svg", name: "Back Card"),
+    ]
+    let groups = layers.map { iconGroup(asset: $0.asset, name: $0.name) }
+        .joined(separator: ",\n")
+    return """
     {
-      "layers" : [
-        { "image-name" : "background.svg", "name" : "Background" }
-      ]
-    },
-    {
-      "layers" : [
-        { "image-name" : "back-card.svg", "name" : "Back Card" }
-      ]
-    },
-    {
-      "layers" : [
-        { "image-name" : "front-card.svg", "name" : "Front Card" }
-      ]
-    },
-    {
-      "layers" : [
-        { "image-name" : "badge.svg", "name" : "Badge" }
-      ]
+      "fill" : {
+        "linear-gradient" : [
+          "\(bgTop.iconComponents)",
+          "\(bgBottom.iconComponents)"
+        ]
+      },
+      "groups" : [
+    \(groups)
+      ],
+      "supported-platforms" : {
+        "circles" : [
+          "watchOS"
+        ],
+        "squares" : "shared"
+      }
     }
-  ],
-  "supported-platforms" : {
-    "circles" : [ "watchOS" ],
-    "squares" : [ "iOS", "macOS" ]
-  }
+    """
 }
 
-"""
+/// One `groups` entry — a single layer, at the indentation `icon.json` puts it at.
+private func iconGroup(asset: String, name: String) -> String {
+    """
+        {
+          "layers" : [
+            {
+              "glass" : true,
+              "image-name" : "\(asset)",
+              "name" : "\(name)"
+            }
+          ],
+          "shadow" : {
+            "kind" : "neutral",
+            "opacity" : 0.5
+          },
+          "translucency" : {
+            "enabled" : false,
+            "value" : 0.5
+          }
+        }
+    """
+}
 
 // MARK: - Legacy raster (the flat .icns fallback)
 
@@ -494,4 +559,4 @@ for (name, size) in targets {
 }
 try! png(master, size: 1024).write(to: URL(fileURLWithPath: "AppIcon-preview.png"))
 
-print("Wrote \(iconPackage) (4 unmasked layers), \(outputDir) and AppIcon-preview.png")
+print("Wrote \(iconPackage) (3 unmasked layers over a gradient fill), \(outputDir) and AppIcon-preview.png")
