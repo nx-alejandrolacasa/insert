@@ -11,7 +11,7 @@
 #   ./build.sh release    build the bundle with the RELEASE signing identity —
 #                         what CI does before packaging the DMG (see dmg.sh)
 #   ./build.sh install    build + install into /Applications and relaunch
-#   ./build.sh icon       regenerate the app icon (Resources/AppIcon.icns)
+#   ./build.sh icon       regenerate the app icon (Resources/AppIcon.icon + .icns)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -22,11 +22,18 @@ CONFIG="release"
 BIN=".build/${CONFIG}/Insert"
 APP="build/${APP_NAME}.app"
 
+# The generator emits two things from one set of proportions: a layered
+# AppIcon.icon (unmasked full-bleed SVG layers, for macOS 26's Liquid Glass icon
+# treatment) and the classic flat AppIcon.iconset, which still backs the .icns
+# fallback below.
 if [[ "${1:-}" == "icon" ]]; then
   swiftc tools/IconGenerator.swift -o tools/icongen
   ./tools/icongen
   iconutil -c icns AppIcon.iconset -o Resources/AppIcon.icns
-  echo "Regenerated Resources/AppIcon.icns"
+  rm -rf Resources/AppIcon.icon
+  mv AppIcon.icon Resources/AppIcon.icon
+  rm -rf AppIcon.iconset
+  echo "Regenerated Resources/AppIcon.icon and Resources/AppIcon.icns"
   exit 0
 fi
 
@@ -40,6 +47,63 @@ mkdir -p "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/${APP_NAME}"
 cp "Resources/Info.plist" "$APP/Contents/Info.plist"
+
+# App icon.
+#
+# macOS 26 can draw an app icon from *layers*, applying the Liquid Glass
+# treatment and deriving the dark / clear / tinted variants, which needs
+# Resources/AppIcon.icon compiled by actool (full Xcode only).
+#
+# OPT-IN for now, and off by default. The layered icon compiles cleanly, but the
+# foreground layers render as near-transparent glass — the white cards all but
+# vanish, badly worse than the flat icon. `icon.json` is written from a schema
+# reverse-engineered out of IconComposerFoundation, and while `specular`,
+# `opacity` and `translucency` were confirmed to work, nothing found so far stops
+# the fills being discarded, and `is-glass` / `fill` are ignored outright.
+# Finishing this needs the real appearance settings, which means opening
+# Resources/AppIcon.icon in Icon Composer once and reading back what it writes.
+#
+# Until then the flat .icns is the shipping icon. Set INSERT_LAYERED_ICON=1 to
+# try the layered path.
+ICON_COMPILED=0
+if [[ "${INSERT_LAYERED_ICON:-0}" == "1" ]] \
+    && [[ -d "Resources/AppIcon.icon" ]] && command -v actool >/dev/null 2>&1; then
+  ICON_LOG="$(mktemp)"
+  ICON_CMD=(actool "Resources/AppIcon.icon"
+    --compile "$APP/Contents/Resources"
+    --platform macosx
+    --minimum-deployment-target 26.0
+    --app-icon AppIcon
+    --output-partial-info-plist "$(mktemp)")
+
+  # Launched through an inner `bash -c` on purpose. A misconfigured actool dies on
+  # SIGABRT, and whichever shell owns that process announces it as a bare
+  # "Abort trap: 6" — from this script it would land mid-build looking like our own
+  # crash. Handing it to a child shell moves the announcement onto *that* shell's
+  # stderr, which goes to the log with everything else.
+  #
+  # The `set +e; …; exit $?` matters: given a single command, `bash -c` execs it
+  # and there's no child shell left to absorb the message.
+  ICON_OK=0
+  bash -c 'set +e; "$@"; exit $?' _ "${ICON_CMD[@]}" >"$ICON_LOG" 2>&1 && ICON_OK=1 || true
+
+  if [[ "$ICON_OK" == "1" && -f "$APP/Contents/Resources/Assets.car" ]]; then
+    ICON_COMPILED=1
+    echo "Compiled Resources/AppIcon.icon (layered)."
+  else
+    echo "warning: could not compile Resources/AppIcon.icon — falling back to the"
+    echo "         flat .icns, which forgoes the Liquid Glass icon treatment."
+    grep -vE '^[[:space:]]*$|Abort trap' "$ICON_LOG" | sed 's/^/         /' | head -3
+  fi
+  rm -f "$ICON_LOG"
+fi
+
+# Copied *after* actool on purpose. actool derives its own AppIcon.icns from the
+# layers, but that render is a flat snapshot of art designed to be lit by the
+# system — the cards lose the separation the effects were going to give them.
+# Our hand-drawn one keeps its shadows and reads better, so it wins the fallback
+# slot. On macOS 26 this file is largely moot anyway: CFBundleIconName below
+# points the bundle at Assets.car.
 if [[ -f "Resources/AppIcon.icns" ]]; then
   cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
@@ -59,6 +123,16 @@ BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
   -c "Set :CFBundleShortVersionString ${VERSION}" \
   -c "Set :CFBundleVersion ${BUILD_NUMBER}" \
   "$APP/Contents/Info.plist"
+
+# Point the bundle at the compiled asset rather than the .icns. Only when the
+# layered icon actually built — naming an icon that isn't in the bundle leaves the
+# app with the generic placeholder, which is worse than the flat fallback.
+if [[ "$ICON_COMPILED" == "1" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" \
+    "$APP/Contents/Info.plist" >/dev/null 2>&1 \
+    || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" \
+      "$APP/Contents/Info.plist" >/dev/null
+fi
 
 # Code signing.
 #
