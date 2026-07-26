@@ -46,22 +46,61 @@ struct DateSections {
 
 /// Human-friendly relative due label ("Today", "Tomorrow", "Mon", "Aug 3").
 enum DueFormat {
+    /// A short due label, with every word coming from Foundation rather than
+    /// from a literal here.
+    ///
+    /// This used to concatenate an English `"Last "` onto a locale-formatted
+    /// weekday, so a Spanish system read `Last vie`, and it hardcoded
+    /// "Today" / "Tomorrow" / "Yesterday" beside that. The day arithmetic was
+    /// right, though, and is kept: due dates are whole days (`yyyy-MM-dd`), and
+    /// the *instant*-based relative styles are no use for them — asked about a
+    /// date at midnight today, they answer "17 hours ago".
+    /// `RelativeDateTimeFormatter.localizedString(from:)` takes explicit
+    /// components instead, so `day: 0` really is "Today".
     static func relative(_ due: Date?, now: Date = Date()) -> String {
         guard let due else { return "" }
         let cal = Calendar.current
-        let dueDay = cal.startOfDay(for: due)
-        let today = cal.startOfDay(for: now)
-        let diff = cal.dateComponents([.day], from: today, to: dueDay).day ?? 0
-        switch diff {
-        case 0: return "Today"
-        case 1: return "Tomorrow"
-        case -1: return "Yesterday"
-        default: break
+        let diff = cal.dateComponents([.day],
+                                      from: cal.startOfDay(for: now),
+                                      to: cal.startOfDay(for: due)).day ?? 0
+
+        let label = switch diff {
+        case -6...1:
+            // Named phrasing for anything overdue, today, or tomorrow. Some
+            // locales have words English doesn't — Spanish answers "anteayer"
+            // for -2 and "pasado mañana" for +2 — which is exactly the reason
+            // not to assemble these by hand. Overdue reads as "3 days ago"
+            // rather than a bare weekday, which carries the urgency and needs
+            // no qualifier to tell it from an upcoming one.
+            relativeDays(diff)
+        case 2...6:
+            // Inside the coming week a weekday is the most scannable, and a
+            // future weekday can't be mistaken for a past one.
+            due.formatted(.dateTime.weekday(.abbreviated))
+        default:
+            // Beyond that, a date. `.dateTime` orders the components per locale,
+            // which a hardcoded "MMM d" pattern doesn't.
+            due.formatted(.dateTime.month(.abbreviated).day())
         }
-        let f = DateFormatter()
-        if diff > 1 && diff < 7 { f.dateFormat = "EEE"; return f.string(from: due) }
-        if diff < -1 && diff > -7 { f.dateFormat = "EEE"; return "Last " + f.string(from: due) }
-        f.dateFormat = "MMM d"
-        return f.string(from: due)
+        return sentenceCased(label)
+    }
+
+    /// Formatters are built per call: a shared one isn't safe to hold under
+    /// Swift 6 strict concurrency.
+    private static func relativeDays(_ days: Int) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.dateTimeStyle = .named
+        return f.localizedString(from: DateComponents(day: days))
+    }
+
+    /// Lifts the first character the way the locale would.
+    ///
+    /// Applied to every branch so the badges match each other: Foundation hands
+    /// back lowercase relative words ("ayer"), and plenty of locales lowercase
+    /// weekday and month names too ("mié"), which looked untidy next to a capped
+    /// "Hoy". `MonthCalendar`'s month heading caps itself for the same reason.
+    private static func sentenceCased(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return String(first).localizedUppercase + text.dropFirst()
     }
 }

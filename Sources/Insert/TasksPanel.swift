@@ -642,10 +642,12 @@ private struct TaskCardView: View {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let day = cal.startOfDay(for: due)
+        // `DueFormat.relative` already reads as a phrase ("Yesterday", "3 days
+        // ago"), so don't put "due" in front of it — "Due 3 days ago" is clumsy
+        // where "Overdue, 3 days ago" isn't.
         let date = DueFormat.relative(due)
-        if draft.done { return "Due \(date)" }
-        if day < today { return "Overdue, due \(date)" }
-        if day == today { return "Due today" }
+        if draft.done { return date }
+        if day < today { return "Overdue, \(date)" }
         return "Due \(date)"
     }
 
