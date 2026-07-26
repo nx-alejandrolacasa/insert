@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The left column of the main window: a native macOS sidebar listing every
@@ -287,14 +288,15 @@ struct ProjectsSidebar: View {
                 subtitle: countsLabel(notes: counts.notes, tasks: counts.tasks)
             )
         }
-        // Right-click to edit name / symbol / colour. Deliberately *no* tap
-        // gesture here: any `onTapGesture` on a `List` row swallows the click the
+        // Right-click to edit name / symbol / colour. Ours rather than
+        // `.contextMenu` — see `rightClickMenu`. Deliberately *no* tap gesture
+        // here either: any `onTapGesture` on a `List` row swallows the click the
         // list needs for selection, which made picking a project unreliable.
-        .contextMenu {
-            Button("Edit…") { editing = project }
-            Divider()
-            Button("Delete…", role: .destructive) { deletionCandidate = project }
-        }
+        .rightClickMenu([
+            .command(title: "Edit…", action: { editing = project }),
+            .separator,
+            .command(title: "Delete…", action: { deletionCandidate = project }),
+        ])
     }
 
     /// Shared row scaffold: a leading glyph, the name, and a dimmed subtitle.
@@ -417,6 +419,92 @@ struct ProjectsSidebar: View {
             appState.selectedProjectID = nil
         }
         deletionCandidate = nil
+    }
+}
+
+// MARK: - Right-click menu
+
+/// One entry of a `rightClickMenu(_:)`: a command, or a divider between them.
+/// No destructive role: macOS contextual menus don't tint destructive items, so
+/// there is nothing to carry across.
+enum RowMenuEntry {
+    case command(title: String, action: () -> Void)
+    case separator
+}
+
+extension View {
+    /// A contextual menu that is *not* SwiftUI's `.contextMenu`.
+    ///
+    /// On a `List` row, `.contextMenu` goes through AppKit's table view, which
+    /// rings the whole row in the accent colour for as long as the menu is up —
+    /// the blue rectangle sitting a few points outside our selection pill, drawn
+    /// at the row's width and its own corner radius. Nothing restyles or
+    /// suppresses it (`.focusEffectDisabled()` only covers the *focus* ring a
+    /// click leaves behind), so the right-click is ours instead: an otherwise
+    /// invisible overlay claims it and pops the same system menu, leaving the
+    /// pill as the row's only highlight.
+    func rightClickMenu(_ entries: [RowMenuEntry]) -> some View {
+        overlay(RightClickMenu(entries: entries))
+    }
+}
+
+private struct RightClickMenu: NSViewRepresentable {
+    let entries: [RowMenuEntry]
+
+    func makeNSView(context: Context) -> RightClickView { RightClickView() }
+
+    func updateNSView(_ view: RightClickView, context: Context) {
+        view.entries = entries
+    }
+}
+
+/// Transparent to every event except the right- (or control-) click it exists
+/// for, which AppKit answers by asking for `menu(for:)` and popping it itself.
+final class RightClickView: NSView {
+    var entries: [RowMenuEntry] = []
+
+    /// Actions of the menu currently on screen, indexed by item tag: an
+    /// `NSMenuItem` can only target an object and a selector, and the SwiftUI
+    /// closures aren't objects.
+    private var actions: [() -> Void] = []
+
+    /// Claim the clicks this view handles and no others. Answering a plain left
+    /// click would put this overlay in front of the button underneath and
+    /// swallow row selection.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent else { return nil }
+        switch event.type {
+        case .rightMouseDown, .rightMouseUp, .rightMouseDragged:
+            return super.hitTest(point)
+        case .leftMouseDown, .leftMouseUp:
+            // Control-click is the trackpad-friendly way to the same menu.
+            return event.modifierFlags.contains(.control) ? super.hitTest(point) : nil
+        default:
+            return nil
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        actions = []
+        let menu = NSMenu()
+        for entry in entries {
+            switch entry {
+            case .separator:
+                menu.addItem(.separator())
+            case let .command(title, action):
+                let item = NSMenuItem(title: title, action: #selector(invoke), keyEquivalent: "")
+                item.target = self
+                item.tag = actions.count
+                actions.append(action)
+                menu.addItem(item)
+            }
+        }
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    @objc private func invoke(_ sender: NSMenuItem) {
+        guard actions.indices.contains(sender.tag) else { return }
+        actions[sender.tag]()
     }
 }
 
