@@ -10,9 +10,18 @@ Obsidian-style Markdown on disk. A menu-bar extra shows pending tasks at a glanc
 - `./build.sh` — compile + assemble `build/Insert.app`.
 - `./build.sh run` — build + (re)launch it.
 - `./build.sh install` — build + install into `/Applications` and relaunch.
+- `./build.sh release` — build signed with the *release* identity; what CI runs.
 - `./build.sh icon` — regenerate `Resources/AppIcon.icns` from `tools/IconGenerator.swift`.
+- `./dmg.sh [version]` — package the built app as `build/Insert[-version].dmg`.
 - `swift build --disable-sandbox` to just compile (`--disable-sandbox` is required
   inside agent/CI shells; harmless otherwise).
+
+Releasing: push a `vX.Y.Z` tag and `.github/workflows/release.yml` builds on a
+`macos-26` runner, packages the DMG and publishes a GitHub Release. Two stable
+self-signed certs keep macOS's Documents-folder grant from resetting — `Insert
+Dev` locally, `Insert Release` for `release`/`install` and CI (imported there from
+the `INSERT_CERT_P12` / `INSERT_CERT_PASSWORD` secrets; absent them the build
+falls back to ad-hoc). See README → "Sign once, grant once".
 
 ## Data model & storage
 
@@ -38,6 +47,8 @@ the in-memory index when the folder changes externally.
 Package.swift                 SwiftPM manifest (executable target, macOS 26)
 Resources/Info.plist          bundle metadata (regular app + menu-bar extra)
 build.sh                      build + bundle + sign
+dmg.sh                        package build/Insert.app into a distributable DMG
+.github/workflows/release.yml tag-triggered build → DMG → GitHub Release
 Sources/Insert/
   InsertApp.swift             @main App: WindowGroup + MenuBarExtra + Settings
   AppDelegate.swift           regular activation policy + appearance

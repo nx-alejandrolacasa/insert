@@ -19,6 +19,15 @@ A **menu-bar item** shows your pending tasks at a glance — a short "past · to
 
 Everything is saved as **plain Markdown** in a folder you choose, so your data stays yours and stays editable anywhere.
 
+## Download
+
+Grab the latest build from the
+**[Releases page](https://github.com/nx-alejandrolacasa/insert/releases/latest)**.
+
+> These builds aren't notarized by Apple, so Gatekeeper blocks them on first
+> launch. Either **right-click Insert → Open** and confirm the dialog, or run
+> `xattr -cr /Applications/Insert.app` once in Terminal.
+
 ## Build & run
 
 Requires macOS 26 with the Xcode Command Line Tools.
@@ -26,9 +35,62 @@ Requires macOS 26 with the Xcode Command Line Tools.
 ```sh
 ./build.sh run        # build and launch build/Insert.app
 ./build.sh install    # install into /Applications
+./build.sh release    # build with the release signing identity (what CI runs)
+./dmg.sh 1.2.0        # package build/Insert.app as build/Insert-1.2.0.dmg
 ```
 
 See [CLAUDE.md](CLAUDE.md) for the full layout, data format, and conventions.
+
+## Sign once, grant once (stop the repeated permission prompts)
+
+Insert keeps your notes and tasks in a folder under `~/Documents`, and macOS ties
+file-access permission to the app's **signing identity**. By default the build is
+**ad-hoc** signed, whose identity changes on every build — so macOS treats each
+rebuild as a new app and re-asks for access. Create **stable self-signed
+certificates once** and the grant sticks across all future builds.
+
+**One-time setup (≈1 min):**
+
+1. Open **Keychain Access** (⌘-Space → "Keychain Access").
+2. Menu bar → **Keychain Access → Certificate Assistant → Create a Certificate…**
+3. Fill in:
+   - **Name:** `Insert Dev` ← must match exactly
+   - **Identity Type:** Self-Signed Root
+   - **Certificate Type:** Code Signing
+4. Click **Create** → Continue through the warning → **Done**.
+5. Repeat for a second certificate named `Insert Release` — that's the one
+   `./build.sh release`, `./build.sh install` and CI use, so a locally-installed
+   copy and a released DMG share one identity (and one permission grant).
+
+Verify they're there:
+
+```sh
+security find-identity -v -p codesigning   # should list both
+```
+
+> Want different names? `INSERT_SIGN_IDENTITY="My Cert" ./build.sh`.
+
+## Releasing
+
+Push a version tag (`vX.Y.Z`) and GitHub Actions takes it from there — builds the
+app, packages a DMG, and publishes a GitHub Release with install instructions
+attached. See [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+For the release to be signed with the stable identity rather than ad-hoc, export
+the `Insert Release` certificate (Keychain Access → right-click → Export… as
+`.p12`) and add two repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `INSERT_CERT_P12` | `base64 -i Insert-Release.p12 \| pbcopy` |
+| `INSERT_CERT_PASSWORD` | the password you set when exporting |
+
+Without them the workflow still succeeds — the app is just ad-hoc signed, and
+each update re-prompts for Documents access.
 
 ## Storage layout
 

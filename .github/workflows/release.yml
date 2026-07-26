@@ -1,0 +1,92 @@
+name: Release
+
+# Push a version tag (e.g. v1.0.0) to build the app, package a DMG, and publish
+# a GitHub Release with the DMG attached.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required for `gh release create` to publish the release
+
+jobs:
+  release:
+    runs-on: macos-26 # Tahoe image ships Xcode 26 — required for the macOS 26 SDK (Liquid Glass)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — build.sh uses the commit count as the build number
+
+      - name: Derive version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # macOS ties file-access permission (TCC) to the signing identity, and
+      # Insert reads and writes a folder under ~/Documents. DMG updates only keep
+      # the user's grant if every release is signed with the SAME certificate.
+      # Import it from repo secrets into a throwaway keychain and trust it
+      # (codesign refuses untrusted self-signed certs); build.sh then finds the
+      # identity by name. Without the secrets this step no-ops and build.sh falls
+      # back to ad-hoc (updates re-prompt).
+      #
+      # Secrets: INSERT_CERT_P12 (base64 .p12 of the "Insert Release" cert +
+      # private key) and INSERT_CERT_PASSWORD (its password).
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.INSERT_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.INSERT_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ]; then
+            echo "No INSERT_CERT_P12 secret — the app will be signed ad-hoc."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p ci "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p ci "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          # Let codesign use the key headlessly (no keychain UI prompt exists in CI).
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k ci "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          # Trust the self-signed cert so codesign can build its chain.
+          security find-certificate -c "Insert Release" -p "$KEYCHAIN" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          rm "$RUNNER_TEMP/cert.pem"
+
+      # `release` signs with the "Insert Release" identity rather than the dev
+      # one, and stamps the tag's version plus the commit-count build number into
+      # the bundle itself.
+      - name: Build app bundle
+        env:
+          INSERT_VERSION: ${{ steps.version.outputs.version }}
+        run: ./build.sh release
+
+      - name: Package DMG
+        run: ./dmg.sh "${{ steps.version.outputs.version }}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/Insert-${{ steps.version.outputs.version }}.dmg" \
+            --title "Insert ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --notes-file - <<'NOTES'
+          ## Install
+
+          1. Open the DMG and drag **Insert** to **Applications**.
+          2. This build is **not notarized by Apple**, so Gatekeeper blocks it on first launch.
+             To open it, either:
+             - **Right-click Insert → Open**, then confirm in the dialog, **or**
+             - run once in Terminal: `xattr -cr /Applications/Insert.app`
+          3. Launch Insert — the window opens, and a menu-bar item shows your pending tasks.
+          4. Allow access to your **Documents** folder when prompted: notes and tasks are stored
+             as Markdown in `~/Documents/Insert` (changeable in Settings → Storage).
+          NOTES

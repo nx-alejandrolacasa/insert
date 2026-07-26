@@ -8,6 +8,8 @@
 # Usage:
 #   ./build.sh            build the app bundle (build/Insert.app)
 #   ./build.sh run        build + (re)launch it
+#   ./build.sh release    build the bundle with the RELEASE signing identity —
+#                         what CI does before packaging the DMG (see dmg.sh)
 #   ./build.sh install    build + install into /Applications and relaunch
 #   ./build.sh icon       regenerate the app icon (Resources/AppIcon.icns)
 
@@ -42,6 +44,10 @@ if [[ -f "Resources/AppIcon.icns" ]]; then
   cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
 
+# The marketing version. Bump it here when cutting a release; the build number
+# comes from git (commit count — monotonic and reproducible), so About and Finder
+# always show which build this actually is. CI overrides the version from the
+# pushed tag via INSERT_VERSION.
 VERSION="${INSERT_VERSION:-0.1.0}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 
@@ -54,13 +60,33 @@ BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
   -c "Set :CFBundleVersion ${BUILD_NUMBER}" \
   "$APP/Contents/Info.plist"
 
-# Stable-identity signing if available, else ad-hoc.
-SIGN_IDENTITY="${INSERT_SIGN_IDENTITY:-Insert Dev}"
+# Code signing.
+#
+# macOS ties file-access permissions (TCC) to the app's signing identity, and
+# Insert reads and writes a folder under ~/Documents. An ad-hoc signature ("-")
+# changes every build, so macOS treats each rebuild as a new app and re-prompts
+# for Documents access. Signing with a STABLE self-signed certificate keeps the
+# identity constant, so you grant it once and it sticks.
+#
+# Two identities, so a locally-built copy and a released DMG don't fight over
+# that grant: `release` (what CI runs) and `install` use the release cert, which
+# also lives in CI as repo secrets; plain builds and `run` use the dev cert,
+# which never leaves this machine. Create them once (see README → "Sign once,
+# grant once"); override either name with INSERT_SIGN_IDENTITY.
+if [[ "${1:-}" == "release" || "${1:-}" == "install" ]]; then
+  SIGN_IDENTITY="${INSERT_SIGN_IDENTITY:-Insert Release}"
+else
+  SIGN_IDENTITY="${INSERT_SIGN_IDENTITY:-Insert Dev}"
+fi
+
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
   codesign --force --sign "$SIGN_IDENTITY" "$APP"
-  echo "Signed with '$SIGN_IDENTITY'."
+  echo "Signed with '$SIGN_IDENTITY' (stable identity)."
 else
   codesign --force --sign - "$APP"
+  echo "warning: '$SIGN_IDENTITY' code-signing identity not found — used ad-hoc."
+  echo "         macOS will re-prompt for Documents access on each rebuild."
+  echo "         See README → 'Sign once, grant once' to fix this permanently."
 fi
 
 echo "Built ${APP}"
