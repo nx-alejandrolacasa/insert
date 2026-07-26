@@ -535,7 +535,8 @@ private struct NoteCardView: View {
     // MARK: Footer
 
     private var footer: some View {
-        Text(note.updated, format: .dateTime.month().day().year().hour().minute())
+        Text(note.updated, format: .dateTime.month().day().year().hour().minute()
+            .locale(Formatting.locale))
             .font(.caption2)
             .foregroundStyle(.tertiary)
     }

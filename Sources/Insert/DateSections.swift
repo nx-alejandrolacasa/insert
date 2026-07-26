@@ -57,6 +57,10 @@ enum DueFormat {
     /// date at midnight today, they answer "17 hours ago".
     /// `RelativeDateTimeFormatter.localizedString(from:)` takes explicit
     /// components instead, so `day: 0` really is "Today".
+    ///
+    /// The words come out in `Formatting.locale`, not the system language: the
+    /// rest of the UI is English literals, and half-translated labels were the
+    /// original complaint.
     static func relative(_ due: Date?, now: Date = Date()) -> String {
         guard let due else { return "" }
         let cal = Calendar.current
@@ -76,11 +80,11 @@ enum DueFormat {
         case 2...6:
             // Inside the coming week a weekday is the most scannable, and a
             // future weekday can't be mistaken for a past one.
-            due.formatted(.dateTime.weekday(.abbreviated))
+            due.formatted(.dateTime.weekday(.abbreviated).locale(Formatting.locale))
         default:
-            // Beyond that, a date. `.dateTime` orders the components per locale,
-            // which a hardcoded "MMM d" pattern doesn't.
-            due.formatted(.dateTime.month(.abbreviated).day())
+            // Beyond that, a date. `.dateTime` orders the components for the
+            // locale, which a hardcoded "MMM d" pattern doesn't.
+            due.formatted(.dateTime.month(.abbreviated).day().locale(Formatting.locale))
         }
         return sentenceCased(label)
     }
@@ -89,6 +93,7 @@ enum DueFormat {
     /// Swift 6 strict concurrency.
     private static func relativeDays(_ days: Int) -> String {
         let f = RelativeDateTimeFormatter()
+        f.locale = Formatting.locale
         f.dateTimeStyle = .named
         return f.localizedString(from: DateComponents(day: days))
     }
@@ -101,6 +106,6 @@ enum DueFormat {
     /// "Hoy". `MonthCalendar`'s month heading caps itself for the same reason.
     private static func sentenceCased(_ text: String) -> String {
         guard let first = text.first else { return text }
-        return String(first).localizedUppercase + text.dropFirst()
+        return String(first).uppercased(with: Formatting.locale) + text.dropFirst()
     }
 }

@@ -67,6 +67,7 @@ Sources/Insert/
   MarkdownFiles.swift         model <-> Markdown + filename conventions
   DirectoryWatcher.swift      debounced FS watcher (external edits)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
+  Formatting.swift            the locale the UI presents in (English)
   MarkdownText.swift          compact Markdown renderer for bodies
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)
@@ -108,6 +109,14 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
 - **Appearance** — Insert follows the system. There is deliberately **no** per-app
   Light/Dark override; HIG advises against one, and it previously lived in
   Settings → General. Please don't add it back.
+- **Language** — the app is **English only**, and that includes dates. Every UI
+  string is an English literal, so formatting dates in the *system* locale gave
+  interfaces in two languages at once: a Spanish Mac showed a due badge reading
+  "Last vie" and stamped an English note "25 jul 2026". Anything user-facing
+  formats through `Formatting.locale` (`en_GB` — English names, but day-first
+  dates and Monday-first weeks). Never format a user-facing date off
+  `Locale.current`. The on-disk format is separate and pinned to `en_US_POSIX`
+  in `DateCoding`, so none of this can rewrite a Markdown file.
 - **Glass** — Liquid Glass is for the *control* layer. Cards, rows and pills in the
   content layer use `.island()` and the flat `Stone`/`Tint` washes instead (glass
   islands also pooled their shadows — see `Theme.swift`). The exception HIG allows,

@@ -391,7 +391,7 @@ private struct TaskComposer: View {
     /// The "Other" pill shows the picked date once a custom one is chosen.
     private var customLabel: String {
         if isCustomSelected, let due = dueDate {
-            return due.formatted(.dateTime.month(.abbreviated).day())
+            return due.formatted(.dateTime.month(.abbreviated).day().locale(Formatting.locale))
         }
         return "Other"
     }

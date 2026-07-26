@@ -8,8 +8,9 @@ import SwiftUI
 /// fill a popover, and scaling it up just rasterizes the text. So the grid is
 /// drawn here instead: it stays crisp at any size and can wear the app's tints.
 ///
-/// Locale is respected throughout — the week starts on `Calendar.firstWeekday`
-/// and the headers come from the calendar's own symbols.
+/// Names are English and the layout is regional: the grid formats through
+/// `Formatting.calendar`, so weekday and month names come out in the app's
+/// language while the week still starts on `Calendar.firstWeekday` (Monday here).
 struct MonthCalendar: View {
     @Binding var selection: Date
     /// The tint the grid wears. A `Tint` rather than a single `Color` because the
@@ -26,14 +27,14 @@ struct MonthCalendar: View {
         _selection = selection
         self.tint = tint
         _visibleMonth = State(
-            initialValue: MonthGrid.startOfMonth(for: selection.wrappedValue, calendar: .current)
+            initialValue: MonthGrid.startOfMonth(for: selection.wrappedValue, calendar: Formatting.calendar)
         )
     }
 
     private static let rowHeight: CGFloat = 28
 
     var body: some View {
-        let calendar = Calendar.current
+        let calendar = Formatting.calendar
 
         VStack(spacing: 6) {
             header(calendar)
@@ -42,7 +43,7 @@ struct MonthCalendar: View {
         }
         // Picking a date elsewhere (a preset pill) should bring its month up.
         .onChange(of: selection) { _, newValue in
-            visibleMonth = MonthGrid.startOfMonth(for: newValue, calendar: .current)
+            visibleMonth = MonthGrid.startOfMonth(for: newValue, calendar: Formatting.calendar)
         }
     }
 
@@ -123,7 +124,7 @@ struct MonthCalendar: View {
         return Button {
             selection = calendar.startOfDay(for: day)
         } label: {
-            Text(day, format: .dateTime.day())
+            Text(day, format: .dateTime.day().locale(Formatting.locale))
                 // `.callout` is 12pt on macOS — same size, but it now follows the
                 // system text size rather than pinning itself.
                 .font(.callout.weight(isSelected || isToday ? .semibold : .regular))
@@ -146,7 +147,7 @@ struct MonthCalendar: View {
         // The cell renders only the day number, so VoiceOver would say "26" with
         // no month or year, and "selected" / "today" are fill-and-outline cues
         // with no text behind them.
-        .accessibilityLabel(day.formatted(date: .complete, time: .omitted))
+        .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month(.wide).year().locale(Formatting.locale)))
         .accessibilityValue(isToday ? "Today" : "")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
@@ -189,12 +190,12 @@ enum MonthGrid {
         return Array(symbols[offset...] + symbols[..<offset])
     }
 
-    /// "July 2026", localized. The formatter is built per call: shared date
-    /// formatters aren't safe under Swift 6 concurrency.
+    /// "July 2026", in the app's language. The formatter is built per call:
+    /// shared date formatters aren't safe under Swift 6 concurrency.
     static func title(for month: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
-        formatter.locale = calendar.locale ?? .current
+        formatter.locale = Formatting.locale
         formatter.setLocalizedDateFormatFromTemplate("LLLLyyyy")
         let text = formatter.string(from: month)
         // Some locales lowercase the month name; a heading reads better capped.
