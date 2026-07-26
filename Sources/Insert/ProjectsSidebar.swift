@@ -182,6 +182,12 @@ struct ProjectsSidebar: View {
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        // The pill *is* the selection indicator. Without this, clicking or
+        // right-clicking a row also gave it the system focus ring, which traces
+        // the row's full width at its own inset and radius — a blue rectangle
+        // floating a few points outside our fill. Keyboard navigation is handled
+        // by the List's own focus (see `onMoveCommand`), not by these buttons.
+        .focusEffectDisabled()
         .listRowInsets(EdgeInsets(top: 1, leading: 4, bottom: 1, trailing: 4))
         .listRowSeparator(.hidden)
     }
