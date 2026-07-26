@@ -10,6 +10,21 @@ struct RootView: View {
 
     @State private var keyMonitor: Any?
 
+    /// The detail toolbar's "show sidebar" button, tracked as presence *and*
+    /// opacity rather than straight off `appState.sidebarVisible` — see
+    /// `syncShowButton`. Both start closed because the sidebar starts open and
+    /// its visibility isn't persisted across launches.
+    @State private var showButtonPresent = false
+    @State private var showButtonOpacity: Double = 0
+    /// The pending "now actually take the button out of the toolbar" step,
+    /// cancelled if the sidebar is toggled again mid-fade.
+    @State private var showButtonRemoval: Task<Void, Never>?
+    /// The button's natural width, measured rather than hard-coded so the width
+    /// the animation opens up stays whatever `.glass` decides a circular toolbar
+    /// button is. Seeded with a plausible one for the frame before the first
+    /// measurement lands.
+    @State private var showButtonWidth: CGFloat = 30
+
     var body: some View {
         @Bindable var appState = appState
 
@@ -39,16 +54,50 @@ struct RootView: View {
             }
             .toolbar {
                 // Only "show" lives out here; the sidebar carries its own "hide"
-                // button once it's open (Safari's arrangement).
-                if !appState.sidebarVisible {
+                // button once it's open (Safari's arrangement). It stays in the
+                // toolbar a little longer than the sidebar is closed so it can
+                // fade with the column rather than blink — see `syncShowButton`.
+                if showButtonPresent {
                     ToolbarItem(placement: .navigation) {
                         Button {
                             toggleSidebar()
                         } label: {
                             Image(systemName: "sidebar.left")
                         }
+                        // The button brings its own glass because the capsule the
+                        // toolbar would wrap it in is AppKit's, drawn outside our
+                        // view and so beyond the reach of the fade below: it would
+                        // pop in and out around a dissolving glyph.
+                        .buttonStyle(.glass)
+                        // …and its own shape with it: left to itself `.glass`
+                        // draws the capsule it would use anywhere else, where the
+                        // toolbar rounds a lone icon into a circle.
+                        .buttonBorderShape(.circle)
                         .help("Show projects (⌘§)")
+                        // Keeps the button at its natural size whatever the frame
+                        // below proposes, so the measurement is of the button and
+                        // not of the animation measuring itself.
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                            if width > 0, abs(width - showButtonWidth) > 0.5 { showButtonWidth = width }
+                        }
+                        // Grow out of the gap rather than drop into one. The
+                        // toolbar reserves the item's full width the moment the
+                        // item exists, so fading alone shoved the title sideways
+                        // in a single step while the glyph was still arriving.
+                        // Width, scale and opacity all run off the same 0→1, so
+                        // the space and the thing filling it turn up together.
+                        .scaleEffect(showButtonOpacity)
+                        .frame(width: showButtonWidth * showButtonOpacity)
+                        // At nothing wide the item is still holding the toolbar's
+                        // gap to its neighbour; take that back too, or the title
+                        // keeps a smaller version of the same jump.
+                        .padding(.trailing, -Self.toolbarItemSpacing * (1 - showButtonOpacity))
+                        .opacity(showButtonOpacity)
+                        // Nothing to click while it's on its way out.
+                        .allowsHitTesting(showButtonOpacity > 0.5)
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 }
                 // The selected project's icon (or the inbox tray for Everything),
                 // beside the title. `sharedBackgroundVisibility(.hidden)` is what
@@ -82,6 +131,12 @@ struct RootView: View {
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
         .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in toggleSidebar() }
+        // Watched rather than driven from `toggleSidebar`, so the button keeps up
+        // with the column however it moved — including a drag of the split view's
+        // own divider, which never goes through our toggle.
+        .onChange(of: appState.sidebarVisible) { _, visible in
+            syncShowButton(sidebarVisible: visible)
+        }
     }
 
     /// Bridges the app's simple `sidebarVisible` flag to the split view's
@@ -120,13 +175,49 @@ struct RootView: View {
         return "Everything"
     }
 
+    /// How long the column takes to slide. The "show" button's fade rides the
+    /// same curve and length, so the two read as one movement.
+    private static let slide = Animation.easeInOut(duration: 0.25)
+    private static let slideDuration = Duration.milliseconds(250)
+
+    /// The gap the toolbar leaves between two items — the same one the title
+    /// icon pulls back with a negative inset.
+    private static let toolbarItemSpacing: CGFloat = 8
+
     /// Animated so the column slides, as a real macOS sidebar does — a bare
     /// mutation makes `NavigationSplitView` pop the column in and out. Every
     /// route in (⌘§, the menu, either button) lands here, so the animation is
     /// defined once.
     private func toggleSidebar() {
-        withAnimation(.easeInOut(duration: 0.25)) {
+        withAnimation(Self.slide) {
             appState.sidebarVisible.toggle()
+        }
+    }
+
+    /// Keeps the toolbar's "show" button in step with the sidebar it opens.
+    ///
+    /// SwiftUI won't animate a toolbar item in or out: it blinks into place the
+    /// moment the condition around it flips, which left the button snapping in
+    /// while the column was still sliding away — and vanishing before it had
+    /// finished coming back. So presence and opacity are tracked separately. The
+    /// button joins the toolbar *before* fading in, and only leaves it once it
+    /// has already faded out, which puts the un-animatable half of the change
+    /// where there is nothing left to see.
+    private func syncShowButton(sidebarVisible: Bool) {
+        showButtonRemoval?.cancel()
+        showButtonRemoval = nil
+
+        guard sidebarVisible else {
+            showButtonPresent = true
+            withAnimation(Self.slide) { showButtonOpacity = 1 }
+            return
+        }
+
+        withAnimation(Self.slide) { showButtonOpacity = 0 }
+        showButtonRemoval = Task { @MainActor in
+            try? await Task.sleep(for: Self.slideDuration)
+            guard !Task.isCancelled else { return }
+            showButtonPresent = false
         }
     }
 
