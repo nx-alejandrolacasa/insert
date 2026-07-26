@@ -24,6 +24,17 @@ Dev` locally, `Insert Release` for `release`/`install` and CI (imported there fr
 the `INSERT_CERT_P12` / `INSERT_CERT_PASSWORD` secrets; absent them the build
 falls back to ad-hoc). See README → "Sign once, grant once".
 
+Insert is deliberately **not** Developer ID signed, notarized or sandboxed — a
+settled decision, not an oversight. HIG asks for all three when shipping outside
+the App Store, so this is a knowing departure, on the grounds that the DMG exists
+for the author's own machines: Developer ID needs a paid Apple Developer account,
+and App Sandbox would mean reworking how the storage folder is reached, since a
+sandboxed app can't reopen an arbitrary path from a stored string across launches
+and would need a security-scoped bookmark instead. The cost is that anyone else
+meets Gatekeeper on first launch, which README → "Download" already tells them how
+to get past. Worth revisiting only if the Release is genuinely aimed at other
+people.
+
 ## Data model & storage
 
 Everything lives under a root folder (default `~/Documents/Insert`, changeable in
