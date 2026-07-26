@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Insert</string>
+	<key>CFBundleDisplayName</key>
+	<string>Insert</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.alejandrolacasa.insert</string>
+	<key>CFBundleExecutable</key>
+	<string>Insert</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- Placeholders — build.sh stamps the real version (its VERSION variable)
+	     and build number (git commit count) into the bundled copy. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<!-- A regular windowed app WITH a menu-bar extra. LSUIElement stays false
+	     so Insert has a Dock icon and a main window; the menu-bar item is added
+	     as an extra scene in code (see InsertApp). -->
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Alejandro G. Lacasa. All rights reserved.</string>
+</dict>
+</plist>
