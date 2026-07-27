@@ -15,6 +15,10 @@ final class AppState {
     /// in read-only (rendered) mode. Only one note edits at a time.
     var selectedNoteID: UUID?
 
+    /// The task currently open for editing — same contract as `selectedNoteID`:
+    /// `nil` means every task row is in its compact read-only shape.
+    var selectedTaskID: UUID?
+
     /// Whether the projects sidebar is visible (toggled from the toolbar or
     /// the ⌘§ shortcut).
     var sidebarVisible: Bool = true

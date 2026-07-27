@@ -1,28 +1,25 @@
 import AppKit
 import SwiftUI
 
-/// The right column: a quick-capture composer on top, then every task for the
-/// selected project (or all projects) rendered as editable Liquid Glass rows.
+/// The right column: every task for the selected project (or all projects)
+/// rendered as editable Liquid Glass rows.
 ///
 /// State ownership mirrors `NotesPanel`:
 /// - The state/search filter lives on `AppState` so it survives project
 ///   switches and stays in sync with the toolbar search field.
 /// - Per-task draft/editing state lives inside `TaskCardView`, reset per
 ///   identity (`.id(task.id)`), so unrelated rows never share focus or
-///   half-typed edits.
+///   half-typed edits. Which task is *open* for editing lives on
+///   `AppState.selectedTaskID`, same as notes, so only one edits at a time.
 ///
-/// The composer is the trickiest surface: it supports inline `#project`
-/// autocomplete (Tab / Return / click to accept, arrows to move) and
-/// double-click-to-remove assignment chips, so it lives in its own private
-/// `TaskComposer` view below.
+/// Creating works exactly like notes: "New Task" (⌘⇧N, the menu, the header
+/// button) adds a real task straight away and opens it for editing — typing is
+/// saving, so there's no separate composer and no "Add" step. A task left with
+/// no text is discarded when editing ends (see `TaskCardView.finishEditing`).
 struct TasksPanel: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// Whether the quick-capture composer is on screen. Opened by "New Task"
-    /// (⌘⇧N, the menu, the header button), closed by Esc.
-    @State private var composerVisible = false
 
     var body: some View {
         // Two-way binding for the segmented state filter.
@@ -34,68 +31,65 @@ struct TasksPanel: View {
             search: appState.searchText
         )
 
-        VStack(spacing: 0) {
-            header(appState: appState)
-                .padding(.horizontal, Metrics.panelPadding)
-                .padding(.top, Metrics.panelPadding)
-                .padding(.bottom, 8)
-
-            // A pill row mirroring the notes column's type filter, so both
-            // columns present their filters identically.
-            stateFilterPills
-                .padding(.horizontal, Metrics.panelPadding)
-                // Same gap as the notes column, so both headers sit at an
-                // identical distance from their first row of content.
-                .padding(.bottom, Metrics.headerGap)
-
-            // The composer sits above the list so newly captured tasks appear
-            // right below where they were typed. Like "New Note", it only shows
-            // up once asked for — a permanent capture field made the column look
-            // busy next to the notes one.
-            if composerVisible {
-                TaskComposer(onDismiss: hideComposer)
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                header(appState: appState)
                     .padding(.horizontal, Metrics.panelPadding)
+                    .padding(.top, Metrics.panelPadding)
+                    .padding(.bottom, 8)
+
+                // A pill row mirroring the notes column's type filter, so both
+                // columns present their filters identically.
+                stateFilterPills
+                    .padding(.horizontal, Metrics.panelPadding)
+                    // Same gap as the notes column, so both headers sit at an
+                    // identical distance from their first row of content.
                     .padding(.bottom, Metrics.headerGap)
-                    // Float the composer (and its autocomplete dropdown) above
-                    // the list that follows.
-                    .zIndex(1)
-                    .transition(.opacity)
-            }
 
-            if tasks.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: Metrics.cardSpacing) {
-                        ForEach(tasks) { task in
-                            TaskCardView(
-                                task: task,
-                                showsProjectChips: appState.selectedProjectID == nil
-                            )
-                            .id(task.id)
+                if tasks.isEmpty {
+                    emptyState
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: Metrics.cardSpacing) {
+                            ForEach(tasks) { task in
+                                TaskCardView(
+                                    task: task,
+                                    showsProjectChips: appState.selectedProjectID == nil
+                                )
+                                .id(task.id)
+                            }
                         }
+                        .padding(.horizontal, Metrics.panelPadding)
+                        .padding(.bottom, Metrics.panelPadding)
                     }
-                    .padding(.horizontal, Metrics.panelPadding)
-                    .padding(.bottom, Metrics.panelPadding)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newTask)) { _ in
+                createTask(proxy: proxy)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // ⌘⇧N / the menu / the header button post `.newTask`. The composer's own
-        // listener can't catch it while it's off screen, so opening it lives
-        // here; the composer focuses its field when it appears.
-        .onReceive(NotificationCenter.default.publisher(for: .newTask)) { _ in
-            withAnimation(reveal) { composerVisible = true }
+    }
+
+    /// Creates a task in the current project, then scrolls to and opens it —
+    /// the same flow as `NotesPanel.createNote`. An undated pending task sorts
+    /// below the dated ones, so the scroll matters.
+    private func createTask(proxy: ScrollViewProxy) {
+        // Anything that would hide the new task gets out of the way first.
+        if appState.taskFilter == .done { appState.taskFilter = .all }
+        appState.searchText = ""
+
+        let task = library.addTask(
+            projectIDs: appState.selectedProjectID.map { [$0] } ?? []
+        )
+        appState.selectedTaskID = task.id
+        // Let the list rebuild before scrolling so the target row exists.
+        Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                proxy.scrollTo(task.id, anchor: .top)
+            }
         }
-    }
-
-    private func hideComposer() {
-        withAnimation(reveal) { composerVisible = false }
-    }
-
-    /// The composer's show/hide curve, dropped when Reduce Motion is on.
-    private var reveal: Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.18)
     }
 
     // MARK: - Header
@@ -117,8 +111,10 @@ struct TasksPanel: View {
             } label: {
                 Label("New Task", systemImage: "plus").fontWeight(.semibold)
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.capsule)
+            // See "New Note" in `NotesPanel` for why neither the accent fill nor
+            // glass survived. These two are one control in two columns; they change
+            // together or not at all.
+            .buttonStyle(.actionCapsule)
             .controlSize(.large)
             .help("Create a new task")
         }
@@ -167,8 +163,7 @@ struct TasksPanel: View {
                 } label: {
                     Label("New Task", systemImage: "plus").fontWeight(.semibold)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+                .buttonStyle(.actionCapsule)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -185,286 +180,21 @@ struct TasksPanel: View {
     }
 }
 
-// MARK: - Composer
-
-/// The quick-capture field. Owns everything about the create flow:
-/// the title (with `#project` autocomplete), an optional body, an optional due
-/// date, and the set of assigned projects shown as removable chips.
-///
-/// Autocomplete design: as the user types, the trailing whitespace-delimited
-/// "token" is inspected. If it begins with `#`, a dropdown of matching projects
-/// is shown. Accepting a project *removes* the `#token` from the text (it was
-/// only ever a command, never part of the title) and adds the project to the
-/// assigned set. Keyboard: Tab accepts the first match, Return the highlighted
-/// one, ↑/↓ move the highlight, Esc dismisses — all handled via `onKeyPress`
-/// so they only fire while the dropdown is open and otherwise fall through to
-/// normal text editing / submit.
-private struct TaskComposer: View {
-    /// Called when the composer asks to be put away (Esc).
-    let onDismiss: () -> Void
-
-    @Environment(Library.self) private var library
-    @Environment(AppState.self) private var appState
-    @Environment(SettingsStore.self) private var settings
-
-    @State private var title = ""
-    @State private var body_ = ""
-    @State private var assignedProjectIDs: [UUID] = []
-    /// The chosen due date, or `nil` for no due date. Driven by the quick pills.
-    @State private var dueDate: Date?
-    /// Backing date for the "Other" calendar popover.
-    @State private var customDate = Calendar.current.startOfDay(for: Date())
-    @State private var showCalendar = false
-
-    @State private var showBody = false
-
-    @FocusState private var titleFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            fieldRow
-                // Keep the field (and its autocomplete dropdown) above the rows
-                // that follow.
-                .zIndex(1)
-
-            dueRow
-
-            if !assignedProjectIDs.isEmpty {
-                chipsRow
-            }
-
-            if showBody {
-                bodyEditor
-            }
-        }
-        .padding(10)
-        .island(radius: Metrics.rowRadius)
-        // Seed the assignment from the current project when the composer first
-        // appears, and whenever the sidebar selection changes while the
-        // composer is still empty (so it tracks the active project). Appearing
-        // *is* the create gesture now, so the field takes focus straight away.
-        .onAppear {
-            seedFromSelection()
-            titleFocused = true
-        }
-        .onChange(of: appState.selectedProjectID) { _, _ in
-            if title.isEmpty && body_.isEmpty { seedFromSelection() }
-        }
-        // ⌘⇧N / the menu / the header button post `.newTask`: focus the field
-        // and re-seed so the create flow always starts clean and assigned.
-        .onReceive(NotificationCenter.default.publisher(for: .newTask)) { _ in
-            seedFromSelection()
-            titleFocused = true
-        }
-    }
-
-    // MARK: Title field
-
-    private var fieldRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "plus.circle.fill")
-                .foregroundStyle(.secondary)
-                .font(.title3)
-                // Decorative: the field's own placeholder says what this is for.
-                .accessibilityHidden(true)
-
-            ProjectHashField(
-                placeholder: "Add a task…  (type # to tag a project)",
-                text: $title,
-                assigned: $assignedProjectIDs,
-                onSubmit: submit,
-                // Esc on a closed dropdown puts the whole composer away.
-                onEscape: {
-                    titleFocused = false
-                    onDismiss()
-                },
-                focused: $titleFocused
-            )
-
-            // Toggles the optional multi-line body editor.
-            Button {
-                showBody.toggle()
-            } label: {
-                Image(systemName: "note.text")
-                    .foregroundStyle(showBody ? Color.accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(showBody ? "Hide notes" : "Add notes")
-            .accessibilityLabel(showBody ? "Hide notes" : "Add notes")
-
-            // Plain glass, not prominent: "New Task" in the header above already
-            // carries the column's one coloured background, and this button is
-            // reached *through* it. Return submits too, and being disabled until
-            // there's a title gives it enough emphasis on its own.
-            Button("Add", action: submit)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-    }
-
-    // MARK: Chips
-
-    private var chipsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(assignedProjectIDs, id: \.self) { id in
-                    if let project = library.project(id: id) {
-                        ProjectChip(project: project) {
-                            assignedProjectIDs.removeAll { $0 == id }
-                        }
-                    }
-                }
-            }
-            .padding(.vertical, 1)
-        }
-    }
-
-    // MARK: Due date
-
-    /// The quick due-date pills offered while composing: Today / Tomorrow /
-    /// End of week / Next week, plus an "Other" pill that opens a calendar.
-    /// Tapping the selected pill again clears the due date.
-    private var dueRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "calendar")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-
-            ForEach(DuePreset.allCases) { preset in
-                DuePill(label: preset.label, selected: isSelected(preset)) {
-                    toggle(preset)
-                }
-            }
-
-            DuePill(label: customLabel, systemImage: "calendar", selected: isCustomSelected) {
-                customDate = dueDate ?? Calendar.current.startOfDay(for: Date())
-                showCalendar = true
-            }
-            .popover(isPresented: $showCalendar, arrowEdge: .bottom) {
-                VStack(spacing: 12) {
-                    MonthCalendar(selection: $customDate)
-                    HStack {
-                        Button("Clear") { dueDate = nil; showCalendar = false }
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.capsule)
-                        Spacer()
-                        Button("Set") {
-                            dueDate = Calendar.current.startOfDay(for: customDate)
-                            showCalendar = false
-                        }
-                        .buttonStyle(.glassProminent)
-                        .buttonBorderShape(.capsule)
-                        .keyboardShortcut(.defaultAction)
-                    }
-                }
-                .padding(14)
-                .frame(width: 300)
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func presetDate(_ preset: DuePreset) -> Date {
-        preset.date(now: Date(), weekStyle: settings.weekStyle)
-    }
-
-    /// Presets can collide — on a Thursday in work-week mode, "Tomorrow" and
-    /// "End of week" are both Friday. Highlight only the first (leftmost)
-    /// match so two pills never light up for one date.
-    private func isSelected(_ preset: DuePreset) -> Bool {
-        guard let due = dueDate else { return false }
-        let cal = Calendar.current
-        let firstMatch = DuePreset.allCases.first { cal.isDate(due, inSameDayAs: presetDate($0)) }
-        return firstMatch == preset
-    }
-
-    /// True when a due date is set that doesn't match any preset (a custom pick).
-    private var isCustomSelected: Bool {
-        guard let due = dueDate else { return false }
-        return !DuePreset.allCases.contains { Calendar.current.isDate(due, inSameDayAs: presetDate($0)) }
-    }
-
-    /// The "Other" pill shows the picked date once a custom one is chosen.
-    private var customLabel: String {
-        if isCustomSelected, let due = dueDate {
-            return due.formatted(.dateTime.month(.abbreviated).day().locale(Formatting.locale))
-        }
-        return "Other"
-    }
-
-    private func toggle(_ preset: DuePreset) {
-        let date = presetDate(preset)
-        if let due = dueDate, Calendar.current.isDate(due, inSameDayAs: date) {
-            dueDate = nil
-        } else {
-            dueDate = date
-        }
-    }
-
-    // MARK: Body
-
-    private var bodyEditor: some View {
-        ZStack(alignment: .topLeading) {
-            if body_.isEmpty {
-                Text("Notes (Markdown)…")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 5)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $body_)
-                .font(.callout)
-                .textEditorStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .frame(height: 60)
-        }
-    }
-
-    // MARK: Actions
-
-    private func seedFromSelection() {
-        assignedProjectIDs = appState.selectedProjectID.map { [$0] } ?? []
-    }
-
-    /// Create the task, then reset the composer (re-seeding the current project)
-    /// and keep focus so the user can keep capturing.
-    private func submit() {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let task = library.addTask(
-            title: trimmed,
-            projectIDs: assignedProjectIDs,
-            due: dueDate
-        )
-        // `addTask` doesn't take a body, so apply any composed notes with a
-        // follow-up update.
-        let bodyTrimmed = body_.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !bodyTrimmed.isEmpty {
-            var t = task
-            t.body = body_
-            library.updateTask(t)
-        }
-
-        title = ""
-        body_ = ""
-        showBody = false
-        dueDate = nil
-        seedFromSelection()
-        titleFocused = true
-    }
-}
-
 // MARK: - Task card
 
-/// A single task rendered as an editable Liquid Glass row. Like `NoteCardView`
-/// it owns a mutable `draft` so typing is instant, and coalesces writes onto a
-/// ~0.4s debounce (each `updateTask` rewrites a file and bumps `updated`).
+/// A single task rendered as a Liquid Glass row with two modes, mirroring
+/// `NoteCardView`:
+///
+/// - **View mode**: the title and a one-line body preview, with a chevron to
+///   unfold the full (rendered) notes in place. The whole row is a tap target
+///   that opens it for editing.
+/// - **Edit mode** (the task is selected via `AppState.selectedTaskID`): the
+///   title becomes a `#project` field, the notes become a Markdown editor with
+///   a "Notes…" placeholder, and the assignment chips grow a ＋.
+///
+/// Like `NoteCardView` it owns a mutable `draft` so typing is instant, and
+/// coalesces writes onto a ~0.4s debounce (each `updateTask` rewrites a file
+/// and bumps `updated`).
 private struct TaskCardView: View {
     /// The canonical task from the library. External edits and our own saves
     /// flow back in via `onChange`.
@@ -473,6 +203,8 @@ private struct TaskCardView: View {
     let showsProjectChips: Bool
 
     @Environment(Library.self) private var library
+    @Environment(AppState.self) private var appState
+    @Environment(SettingsStore.self) private var settings
 
     @State private var draft: TaskItem
     /// The in-flight debounced save, cancelled and restarted on every edit.
@@ -484,6 +216,8 @@ private struct TaskCardView: View {
     /// the only case that earns an expand chevron.
     @State private var previewHeight: CGFloat = 0
     @State private var fullBodyHeight: CGFloat = 0
+    /// Height of the notes editor's sizing proxy, so it grows with its content.
+    @State private var measuredBodyHeight: CGFloat = 28
 
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
@@ -493,6 +227,9 @@ private struct TaskCardView: View {
         self.showsProjectChips = showsProjectChips
         _draft = State(initialValue: task)
     }
+
+    /// This card is the one currently open for editing.
+    private var isEditing: Bool { appState.selectedTaskID == task.id }
 
     private var hasBody: Bool {
         !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -505,32 +242,7 @@ private struct TaskCardView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            checkbox
-
-            VStack(alignment: .leading, spacing: 8) {
-                // The ⋯ menu rides the title row, as it does on a note card.
-                HStack(alignment: .center, spacing: 8) {
-                    TextField("Task", text: $draft.title)
-                        .textFieldStyle(.plain)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(draft.done ? Color.secondary : Color.primary)
-                        .strikethrough(draft.done)
-                        .focused($titleFocused)
-
-                    actionsMenu
-                }
-
-                // Body, then the chips / due row — same order as a note card,
-                // where the pills sit under the text you're writing.
-                bodySection
-
-                metaRow
-            }
-        }
-        .padding(12)
-        .island(radius: Metrics.rowRadius)
-        .opacity(draft.done ? 0.7 : 1)
+        tappableCard
         // Adopt upstream changes without clobbering local edits or looping on
         // our own timestamp-only updates: only re-seed when content differs.
         .onChange(of: task) { _, newValue in
@@ -544,14 +256,103 @@ private struct TaskCardView: View {
         }
         .onChange(of: draft.title) { scheduleSave() }
         .onChange(of: draft.body) { scheduleSave() }
+        .onChange(of: draft.projectIDs) { scheduleSave() }
+        .onAppear { if isEditing { focusForEntry() } }
+        // Focus on entering edit; persist-or-discard on leaving it (e.g. when
+        // another task is opened).
+        .onChange(of: isEditing) { _, editing in
+            if editing { focusForEntry() } else { finishEditing() }
+        }
         .onDisappear {
-            // Flush any pending edit so nothing is lost when the row scrolls out
-            // or the project changes.
-            if saveTask != nil {
-                saveTask?.cancel()
-                saveTask = nil
-                library.updateTask(draft)
+            // Settle any pending edit so nothing is lost when the row scrolls
+            // out or the project changes — including mid-edit, where an empty
+            // task must still be discarded rather than flushed.
+            if isEditing { finishEditing() } else { flushSave() }
+        }
+    }
+
+    /// The row island. In view mode the whole island is a tap target that opens
+    /// edit mode; in edit mode no container gesture is attached, so taps reach
+    /// the title / notes fields normally.
+    @ViewBuilder
+    private var tappableCard: some View {
+        let card = HStack(alignment: .top, spacing: 10) {
+            checkbox
+
+            VStack(alignment: .leading, spacing: 8) {
+                // The ⋯ menu rides the title row, as it does on a note card.
+                titleRow
+                    // The title's `#project` dropdown drops over the notes
+                    // editor below; without this the editor — a later sibling —
+                    // would sit on top of it and take its clicks.
+                    .zIndex(1)
+
+                // Body, then the chips / due row — same order as a note card,
+                // where the pills sit under the text you're writing.
+                if isEditing {
+                    bodyEditor
+                } else {
+                    bodySection
+                }
+
+                metaRow
+
+                footer
             }
+        }
+        .padding(12)
+        // Optionally wash the row in its due colour (Settings → Tasks); the
+        // badge and the background then tell the same story. `dueTint` is nil for
+        // undated and done rows — and for every row with the setting off — which
+        // leaves those on plain white paper (see `island`).
+        .island(radius: Metrics.rowRadius, tint: settings.dueTintedTasks ? dueTint : nil)
+        .opacity(draft.done ? 0.7 : 1)
+
+        if isEditing {
+            card
+        } else {
+            card
+                .contentShape(RoundedRectangle(cornerRadius: Metrics.rowRadius, style: .continuous))
+                .onTapGesture { enterEdit() }
+                // A bare tap gesture is pointer-only; the container action and
+                // the ⋯ menu's "Edit" cover assistive tech and the keyboard.
+                .accessibilityElement(children: .contain)
+                .accessibilityAction(named: "Edit task") { enterEdit() }
+        }
+    }
+
+    // MARK: Title row
+
+    @ViewBuilder
+    private var titleRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            if isEditing {
+                // `#project` tags a project and is stripped from the title,
+                // same as in the composer.
+                ProjectHashField(
+                    placeholder: "Task  (type # to tag a project)",
+                    text: $draft.title,
+                    assigned: $draft.projectIDs,
+                    font: .body.weight(.medium),
+                    // Return commits the quick-capture flow: type, Return, done.
+                    onSubmit: { exitEdit() },
+                    onEscape: { exitEdit() },
+                    focused: $titleFocused
+                )
+
+                Button("Done") { exitEdit() }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+            } else {
+                Text(draft.title.isEmpty ? "Untitled" : draft.title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(draft.done ? Color.secondary : Color.primary)
+                    .strikethrough(draft.done)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            actionsMenu
         }
     }
 
@@ -580,11 +381,7 @@ private struct TaskCardView: View {
     /// and the debounce cancelled first, so a stale snapshot can't later revert
     /// the toggle; `draft` is kept in sync immediately to avoid a flash.
     private func toggleDone() {
-        if saveTask != nil {
-            saveTask?.cancel()
-            saveTask = nil
-            library.updateTask(draft)
-        }
+        flushSave()
         library.toggleTask(id: draft.id)
         draft.done.toggle()
     }
@@ -593,15 +390,24 @@ private struct TaskCardView: View {
 
     private var metaRow: some View {
         HStack(spacing: 6) {
-            if showsProjectChips {
+            // Edit mode always shows the assignments (that's where they're
+            // managed); otherwise only the aggregate view labels rows.
+            if isEditing || showsProjectChips {
                 ForEach(draft.projectIDs, id: \.self) { id in
                     if let project = library.project(id: id) {
                         ProjectChip(project: project) {
                             draft.projectIDs.removeAll { $0 == id }
-                            persistNow()
                         }
                     }
                 }
+            }
+            // Unassigned: the full "＋ Add project" pill, always on show like
+            // "Add due" across the row. Once assigned, adding *another* is an
+            // edit-mode affair — a bare ＋ beside the chips it extends.
+            if draft.projectIDs.isEmpty {
+                AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
+            } else if isEditing {
+                AddProjectMenu(assigned: draft.projectIDs, compact: true) { draft.projectIDs.append($0) }
             }
 
             Spacer(minLength: 0)
@@ -618,18 +424,20 @@ private struct TaskCardView: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "calendar")
-                Text(draft.due == nil ? "Due" : DueFormat.relative(draft.due))
+                // Undated, the badge is an affordance, so it says what it does.
+                Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due))
             }
             .font(.caption)
-            .foregroundStyle(dueColor)
+            .foregroundStyle(dueForeground)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Capsule().fill(dueColor.opacity(0.14)))
+            .background(Capsule().fill(dueBackground))
         }
         .buttonStyle(.plain)
         .help("Set due date")
-        // Overdue vs today is carried by colour alone (red / blue), which some
-        // people can't tell apart — so it goes in the spoken label as words.
+        // Overdue vs today vs upcoming is carried by colour alone (orange /
+        // green / purple), which some people can't tell apart — so it goes in
+        // the spoken label as words.
         .accessibilityLabel(dueLabel)
         .popover(isPresented: $showDuePopover, arrowEdge: .bottom) {
             duePopover
@@ -651,19 +459,41 @@ private struct TaskCardView: View {
         return "Due \(date)"
     }
 
-    /// Red once overdue, blue for today, secondary otherwise / undated.
-    private var dueColor: Color {
-        guard let due = draft.due, !draft.done else { return .secondary }
+    /// Orange once overdue, green for today, purple for anything upcoming —
+    /// a *dated* badge is never grey, so it can't be confused with the grey
+    /// "Add due" / "Add project" affordances beside it. `nil` (grey) is only
+    /// the undated affordance and the muted done state.
+    private var dueTint: Tint? {
+        guard let due = draft.due, !draft.done else { return nil }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let day = cal.startOfDay(for: due)
-        if day < today { return .red }
-        if day == today { return .blue }
-        return .secondary
+        if day < today { return .orange }
+        if day == today { return .green }
+        return .purple
+    }
+
+    private var dueForeground: Color { dueTint?.ink ?? .secondary }
+
+    private var dueBackground: Color {
+        dueTint?.chip ?? Color.secondary.opacity(0.14)
     }
 
     private var duePopover: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // The quick presets the composer used to offer, so the common
+            // cases stay one click away of the badge.
+            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
+                GridRow {
+                    presetPill(.today)
+                    presetPill(.tomorrow)
+                }
+                GridRow {
+                    presetPill(.endOfWeek)
+                    presetPill(.nextWeek)
+                }
+            }
+
             MonthCalendar(
                 selection: Binding(
                     get: { draft.due ?? Calendar.current.startOfDay(for: Date()) },
@@ -687,20 +517,37 @@ private struct TaskCardView: View {
         .frame(width: 300)
     }
 
-    // MARK: Body
+    private func presetPill(_ preset: DuePreset) -> some View {
+        DuePill(label: preset.label, selected: firstMatchingPreset == preset) {
+            draft.due = preset.date(now: Date(), weekStyle: settings.weekStyle)
+            persistNow()
+            showDuePopover = false
+        }
+    }
 
-    /// A growing Markdown editor, revealed by the disclosure control. Mirrors
-    /// `NoteCardView`'s sizing-proxy approach so the row expands to fit rather
-    /// than scrolling internally.
-    /// Collapsed: the body's first line, ellipsised, tappable to open. Expanded:
-    /// the editor. The chevron lives here rather than in the corner, next to the
-    /// text it reveals, and only appears when there's something hidden.
+    /// Presets can collide — on a Thursday in work-week mode, "Tomorrow" and
+    /// "End of week" are both Friday. Highlight only the first match so two
+    /// pills never light up for one date.
+    private var firstMatchingPreset: DuePreset? {
+        guard let due = draft.due else { return nil }
+        return DuePreset.allCases.first {
+            Calendar.current.isDate(due, inSameDayAs: $0.date(now: Date(), weekStyle: settings.weekStyle))
+        }
+    }
+
+    // MARK: Body — view mode
+
+    /// Collapsed: the body's first line, ellipsised. Expanded: the notes as
+    /// *rendered* Markdown, read-only — editing happens in edit mode. The
+    /// chevron lives here rather than in the corner, next to the text it
+    /// reveals, and only appears when there's something hidden.
     @ViewBuilder
     private var bodySection: some View {
-        if expanded || hasBody {
+        if hasBody {
             HStack(alignment: .top, spacing: 6) {
                 if expanded {
-                    bodyEditor
+                    MarkdownText(markdown: draft.body)
+                        .padding(.horizontal, 5)
                 } else {
                     bodyPreview
                 }
@@ -708,7 +555,6 @@ private struct TaskCardView: View {
                 if showsChevron {
                     Button {
                         expanded.toggle()
-                        if expanded { bodyFocused = true }
                     } label: {
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
@@ -732,19 +578,6 @@ private struct TaskCardView: View {
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 5)
-            .contentShape(Rectangle())
-            // Tapping the preview opens the editor, so a one-line body — which
-            // gets no chevron — is still editable.
-            .onTapGesture {
-                expanded = true
-                bodyFocused = true
-            }
-            // Same reason as the note card: a tap gesture on its own is
-            // pointer-only. The ⋯ menu's "Show Notes" covers the keyboard.
-            .accessibilityAction(named: "Edit notes") {
-                expanded = true
-                bodyFocused = true
-            }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { previewHeight = $0 }
             .background(alignment: .topLeading) {
                 // The same text laid out unbounded: taller means the preview is
@@ -757,48 +590,66 @@ private struct TaskCardView: View {
             }
     }
 
+    // MARK: Body — edit mode
+
+    /// A growing Markdown editor, always on show while editing so the notes
+    /// affordance is visible — a "Notes…" placeholder marks the spot when the
+    /// task has none yet. Mirrors `NoteCardView`'s sizing-proxy approach so the
+    /// row expands to fit rather than scrolling internally.
     private var bodyEditor: some View {
         ZStack(alignment: .topLeading) {
+            // Invisible sizing proxy (same font/insets as the editor). It stays
+            // in the layout so the ZStack height tracks the wrapped text; the
+            // editor is then pinned to that height rather than growing greedily.
             Text(draft.body.isEmpty ? " " : draft.body)
                 .font(.callout)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 6)
                 .padding(.horizontal, 5)
-                .opacity(0)
+                .hidden()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    measuredBodyHeight = $0
+                }
 
-            if draft.body.isEmpty && !bodyFocused {
-                Text("Notes (Markdown)…")
+            // Shown whenever the notes are empty — the field takes focus on
+            // entry, and hiding the placeholder then would leave nothing saying
+            // what the empty space is for.
+            if draft.body.isEmpty {
+                Text("Notes…")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 9)
+                    // (5, 0): the editor's first line starts at the very top of
+                    // its frame, 5pt in — the placeholder sits on the caret.
+                    .padding(.horizontal, 5)
                     .allowsHitTesting(false)
             }
 
-            TextEditor(text: $draft.body)
-                .font(.callout)
-                .textEditorStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .scrollDisabled(true)
-                .focused($bodyFocused)
+            MarkdownEditor(text: $draft.body, font: .callout, focused: $bodyFocused)
+                .frame(height: max(28, measuredBodyHeight))
+                // Esc leaves the editor, matching the title field.
+                .onKeyPress(.escape) {
+                    exitEdit()
+                    return .handled
+                }
         }
-        .frame(minHeight: 28)
+    }
+
+    // MARK: Footer
+
+    private var footer: some View {
+        CardDatesFooter(kind: .task, created: task.created, updated: task.updated)
     }
 
     // MARK: Trailing controls
 
     private var actionsMenu: some View {
         Menu {
-            if !expanded {
-                Button {
-                    expanded = true
-                    bodyFocused = true
-                } label: {
-                    Label(hasBody ? "Show Notes" : "Add Notes", systemImage: "note.text")
-                }
+            if !isEditing {
+                Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
             }
             Button(role: .destructive) {
                 saveTask?.cancel()
+                if isEditing { appState.selectedTaskID = nil }
                 library.deleteTask(id: draft.id)
             } label: {
                 Label("Delete", systemImage: "trash")
@@ -813,6 +664,42 @@ private struct TaskCardView: View {
         .fixedSize()
         .help("Task actions")
         .accessibilityLabel("Task actions")
+    }
+
+    // MARK: Mode
+
+    private func enterEdit() { appState.selectedTaskID = task.id }
+
+    /// Just clears the selection — `onChange(of: isEditing)` runs
+    /// `finishEditing()`, so every way out of edit mode settles the same way.
+    private func exitEdit() {
+        if isEditing { appState.selectedTaskID = nil }
+    }
+
+    /// Put the cursor where it's most useful: the title for a brand-new task,
+    /// otherwise straight into the notes.
+    private func focusForEntry() {
+        if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            titleFocused = true
+        } else {
+            bodyFocused = true
+        }
+    }
+
+    /// Ending an edit either persists the draft or, when the task was left
+    /// with no text at all, discards it — a task *is* its text, so there's
+    /// nothing to keep. This is also how "New Task" gets cancelled: blur the
+    /// empty card and it's gone.
+    private func finishEditing() {
+        let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if blank {
+            saveTask?.cancel()
+            saveTask = nil
+            library.deleteTask(id: draft.id)
+        } else {
+            flushSave()
+        }
     }
 
     // MARK: Persistence
@@ -831,10 +718,19 @@ private struct TaskCardView: View {
         }
     }
 
-    /// Persist an immediate, structural change (done/due/projects). Cancels the
-    /// text debounce and flushes the whole draft so nothing is lost and no stale
+    /// Persist an immediate, structural change (done/due). Cancels the text
+    /// debounce and flushes the whole draft so nothing is lost and no stale
     /// snapshot can revert what we just set.
     private func persistNow() {
+        saveTask?.cancel()
+        saveTask = nil
+        library.updateTask(draft)
+    }
+
+    /// Flush a pending debounced save, if any (editing ended or the row is
+    /// going away).
+    private func flushSave() {
+        guard saveTask != nil else { return }
         saveTask?.cancel()
         saveTask = nil
         library.updateTask(draft)
@@ -843,7 +739,7 @@ private struct TaskCardView: View {
 
 // MARK: - Due-date pills
 
-/// The quick relative due-date options offered in the composer.
+/// The quick relative due-date options offered in the due-date popover.
 private enum DuePreset: String, CaseIterable, Identifiable {
     case today, tomorrow, endOfWeek, nextWeek
 
@@ -897,9 +793,9 @@ private enum DuePreset: String, CaseIterable, Identifiable {
 /// *content* layer, where HIG asks for standard materials and reserves glass for
 /// controls and navigation. And the selected one used `.glassProminent`, which
 /// paints the accent colour behind the label: with the column's "New Task" button
-/// already doing that and the composer's "Add" beside it, picking a due date put
-/// three coloured backgrounds on screen at once, against "refrain from adding
-/// color to the background of multiple controls".
+/// already doing that, picking a due date put several coloured backgrounds on
+/// screen at once, against "refrain from adding color to the background of
+/// multiple controls".
 ///
 /// Not literally a `FilterPill`, because that takes a `Tint` per option — its
 /// options *are* colour-coded categories. A date preset has no inherent colour,
@@ -911,8 +807,8 @@ private struct DuePill: View {
     let selected: Bool
     let action: () -> Void
 
-    /// Blue for a set date, echoing the due badge's own "today" colour.
-    private static let tint = Tint.blue
+    /// Green for a set date, echoing the due badge's own "today" colour.
+    private static let tint = Tint.green
 
     var body: some View {
         Button(action: action) {

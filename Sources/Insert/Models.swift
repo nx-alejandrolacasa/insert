@@ -277,6 +277,79 @@ enum NoteSort: String, CaseIterable, Identifiable {
     }
 }
 
+/// Holds edited notes' places in an Updated sort for as long as you stay in one
+/// view of the list.
+///
+/// Typing saves on a debounce and every save bumps `updated`, so under the
+/// default "Updated (newest)" order the card you were writing in slid to the top
+/// of the list mid-sentence — from third place to first, taking the text under
+/// the cursor with it. `NotesPanel` pins a note's `updated` as it opens for
+/// editing and sorts it by that value; the pins are dropped only when the list is
+/// being rebuilt anyway — a different project, type filter, search or sort order —
+/// so a note never moves while you are looking at it, and the re-sort lands on the
+/// frame that replaces the list. See
+/// `Library.notes(forProject:sort:typeFilter:search:pinned:)`.
+///
+/// A date per note rather than a frozen list order, because an order can't say
+/// where a note created (or externally edited) meanwhile belongs.
+struct NotePins: Equatable {
+    private var updated: [UUID: Date] = [:]
+
+    /// Records the note's current `updated`, unless it is already pinned — a
+    /// second edit in the same view must not re-pin it at its new timestamp.
+    mutating func pin(_ note: Note) {
+        if updated[note.id] == nil { updated[note.id] = note.updated }
+    }
+
+    /// The `updated` this note sorts by: its pinned value, or the live one.
+    func key(for note: Note) -> Date {
+        updated[note.id] ?? note.updated
+    }
+}
+
+/// Which timestamps a card's footer carries (see `CardDatesFooter`). Notes and
+/// tasks each have their own setting.
+enum CardDates: String, CaseIterable, Identifiable {
+    case none
+    case created
+    case updated
+    case mostRecent
+    case both
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .none: "None"
+        case .created: "Created only"
+        case .updated: "Last edited only"
+        case .mostRecent: "Most recent"
+        case .both: "Both"
+        }
+    }
+
+    /// `edited` is whether the card has been touched since it was made — the
+    /// footer compares at the minute it displays, so a fresh card counts as
+    /// unedited. `mostRecent` prefers the edit and falls back to creation;
+    /// `both` collapses to one stamp rather than showing the same moment twice.
+    func showsCreated(edited: Bool) -> Bool {
+        switch self {
+        case .created: true
+        case .both: true
+        case .mostRecent: !edited
+        case .none, .updated: false
+        }
+    }
+
+    func showsUpdated(edited: Bool) -> Bool {
+        switch self {
+        case .updated: true
+        case .mostRecent, .both: edited
+        case .none, .created: false
+        }
+    }
+}
+
 enum TaskFilter: String, CaseIterable, Identifiable {
     case all
     case pending

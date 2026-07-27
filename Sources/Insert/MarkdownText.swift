@@ -64,6 +64,23 @@ struct MarkdownText: View {
     }
 
     private func inline(_ text: String) -> Text {
+        // Markdown has no underline; ⌘U writes `<u>…</u>` (the Obsidian
+        // convention), which `AttributedString` would show literally — so pull
+        // those spans out and underline them, parsing the rest as usual.
+        guard text.contains("<u>") else { return inlineFragment(text) }
+        var result = Text(verbatim: "")
+        var rest = Substring(text)
+        while let open = rest.range(of: "<u>"),
+              let close = rest.range(of: "</u>", range: open.upperBound..<rest.endIndex) {
+            let before = inlineFragment(String(rest[..<open.lowerBound]))
+            let underlined = inlineFragment(String(rest[open.upperBound..<close.lowerBound])).underline()
+            result = Text("\(result)\(before)\(underlined)")
+            rest = rest[close.upperBound...]
+        }
+        return Text("\(result)\(inlineFragment(String(rest)))")
+    }
+
+    private func inlineFragment(_ text: String) -> Text {
         if let attr = try? AttributedString(
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)

@@ -24,6 +24,11 @@ struct NotesPanel: View {
     /// read this to decide whether to grab focus on appear.
     @State private var newlyCreatedID: UUID?
 
+    /// A note opened for editing keeps the `updated` it had at that moment, so
+    /// its debounced saves don't slide the card out from under the cursor. Held
+    /// until the list is rebuilt for another reason. See `NotePins`.
+    @State private var pins = NotePins()
+
     var body: some View {
         // Sort order is a preference (Settings → General), not a per-window
         // control, which keeps this header down to a title and one button.
@@ -31,7 +36,8 @@ struct NotesPanel: View {
             forProject: appState.selectedProjectID,
             sort: settings.noteSort,
             typeFilter: appState.noteTypeFilter,
-            search: appState.searchText
+            search: appState.searchText,
+            pinned: pins
         )
 
         ScrollViewReader { proxy in
@@ -73,6 +79,18 @@ struct NotesPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // One choke point for every route into edit mode — a tap on a card, ⌘N,
+        // the ⋯ menu — since they all go through `selectedNoteID`.
+        .onChange(of: appState.selectedNoteID) { _, id in
+            if let note = library.notes.first(where: { $0.id == id }) { pins.pin(note) }
+        }
+        // The list re-sorts when you change what it's showing, and only then: on
+        // those frames it is being rebuilt from scratch anyway, so a note taking
+        // its new place is invisible rather than a card jumping under your eye.
+        .onChange(of: appState.selectedProjectID) { pins = NotePins() }
+        .onChange(of: appState.noteTypeFilter) { pins = NotePins() }
+        .onChange(of: appState.searchText) { pins = NotePins() }
+        .onChange(of: settings.noteSort) { pins = NotePins() }
     }
 
     // MARK: - Header
@@ -98,8 +116,12 @@ struct NotesPanel: View {
                 Label("New Note", systemImage: "plus")
                     .fontWeight(.semibold)
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.capsule)
+            // Not `.glassProminent` (it paints the system accent) and no longer
+            // plain `.glass` either (glass casts a drop shadow, and this window
+            // doesn't) — see `FlatButtonStyle` for both arguments. The
+            // semibold label is what carries "primary action" now; it doesn't need
+            // a colour to.
+            .buttonStyle(.actionCapsule)
             .controlSize(.large)
             .help("Create a new note (⌘N)")
         }
@@ -157,8 +179,7 @@ struct NotesPanel: View {
                 } label: {
                     Label("New Note", systemImage: "plus").fontWeight(.semibold)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+                .buttonStyle(.actionCapsule)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -175,6 +196,14 @@ struct NotesPanel: View {
 
     /// Creates a note in the current project, then scrolls to and focuses it.
     private func createNote(proxy: ScrollViewProxy) {
+        // Anything that would hide the new note gets out of the way first: it
+        // is born as the default type, so any other type filter would swallow
+        // it, and an empty note matches no search.
+        if appState.noteTypeFilter != nil && appState.noteTypeFilter != NoteType.noteID {
+            appState.noteTypeFilter = nil
+        }
+        appState.searchText = ""
+
         let note = library.addNote(
             type: settings.noteType(id: NoteType.noteID),
             projectIDs: appState.selectedProjectID.map { [$0] } ?? []
@@ -259,12 +288,16 @@ private struct NoteCardView: View {
         .onChange(of: draft.typeID) { scheduleSave() }
         .onChange(of: draft.projectIDs) { scheduleSave() }
         .onAppear { if isEditing { focusForEntry() } }
-        // Focus on entering edit; flush the pending save on leaving it (e.g.
-        // when another note is selected).
+        // Focus on entering edit; persist-or-discard on leaving it (e.g. when
+        // another note is selected).
         .onChange(of: isEditing) { _, editing in
-            if editing { focusForEntry() } else { flushSave() }
+            if editing { focusForEntry() } else { finishEditing() }
         }
-        .onDisappear { flushSave() }
+        .onDisappear {
+            // Settle any pending edit — including mid-edit, where an empty
+            // note must still be discarded rather than flushed.
+            if isEditing { finishEditing() } else { flushSave() }
+        }
     }
 
     /// The card island. In view mode the whole island is a tap target that opens
@@ -274,6 +307,10 @@ private struct NoteCardView: View {
     private var tappableIsland: some View {
         let island = VStack(alignment: .leading, spacing: 8) {
             titleRow
+                // The title's `#project` dropdown drops over the body editor
+                // below; without this the editor — a later sibling — would sit
+                // on top of it and take its clicks.
+                .zIndex(1)
             if isEditing {
                 // Pills sit *under* the editor: between title and body they cut
                 // the note in half and pushed the text you're writing down the
@@ -399,13 +436,19 @@ private struct NoteCardView: View {
                         }
                     }
                 }
-                AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
+                // Bare ＋ beside chips it extends; the full wording only when
+                // it stands alone.
+                AddProjectMenu(assigned: draft.projectIDs, compact: !draft.projectIDs.isEmpty) {
+                    draft.projectIDs.append($0)
+                }
                 Spacer(minLength: 0)
             }
         } else {
             HStack(spacing: 6) {
                 if draft.projectIDs.isEmpty {
-                    projectLabel("Unassigned", symbol: "circle.dashed", tint: .gray)
+                    // Actionable where "Unassigned" was inert: the same pill
+                    // flags the stray note *and* fixes it.
+                    AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
                 } else {
                     ForEach(draft.projectIDs, id: \.self) { id in
                         if let project = library.project(id: id) {
@@ -512,17 +555,13 @@ private struct NoteCardView: View {
                 Text("Write in Markdown…")
                     .font(.body)
                     .foregroundStyle(.tertiary)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 9)
+                    // (5, 0): the editor's first line starts at the very top of
+                    // its frame, 5pt in — the placeholder sits on the caret.
+                    .padding(.horizontal, 5)
                     .allowsHitTesting(false)
             }
 
-            TextEditor(text: $draft.body)
-                .font(.body)
-                .textEditorStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .scrollDisabled(true)
-                .focused($bodyFocused)
+            MarkdownEditor(text: $draft.body, focused: $bodyFocused)
                 .frame(height: max(34, measuredBodyHeight))
                 // Esc leaves the Markdown editor, matching the title field.
                 .onKeyPress(.escape) {
@@ -535,10 +574,7 @@ private struct NoteCardView: View {
     // MARK: Footer
 
     private var footer: some View {
-        Text(note.updated, format: .dateTime.month().day().year().hour().minute()
-            .locale(Formatting.locale))
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+        CardDatesFooter(kind: .note, created: note.created, updated: note.updated)
     }
 
     /// The "⋯" actions menu. Offers Edit in view mode and Delete everywhere.
@@ -572,9 +608,25 @@ private struct NoteCardView: View {
 
     private func enterEdit() { appState.selectedNoteID = note.id }
 
+    /// Just clears the selection — `onChange(of: isEditing)` runs
+    /// `finishEditing()`, so every way out of edit mode settles the same way.
     private func exitEdit() {
-        flushSave()
         if isEditing { appState.selectedNoteID = nil }
+    }
+
+    /// Ending an edit either persists the draft or, when the note was left
+    /// with no text at all, discards it — which is also how a just-created
+    /// note is cancelled: blur the empty card and it's gone.
+    private func finishEditing() {
+        let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if blank {
+            saveTask?.cancel()
+            saveTask = nil
+            library.deleteNote(id: draft.id)
+        } else {
+            flushSave()
+        }
     }
 
     /// Put the cursor where it's most useful: the title for a brand-new note,

@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 
@@ -30,25 +31,60 @@ final class SettingsStore {
         didSet { defaults.set(doneTaskRetention.rawValue, forKey: Keys.doneTaskRetention) }
     }
 
+    /// Auto / Light / Dark — applied to the whole app immediately.
+    var appearance: Appearance {
+        didSet {
+            defaults.set(appearance.rawValue, forKey: Keys.appearance)
+            applyAppearance()
+        }
+    }
+
+    /// The gradient wash behind the main window — decoration only, and off by
+    /// default. Adapts to `appearance` on its own (see `Backdrop`), so this
+    /// needs no re-apply step the way the theme does.
+    var backdrop: Backdrop {
+        didSet { defaults.set(backdrop.rawValue, forKey: Keys.backdrop) }
+    }
+
     /// Whether the menu-bar extra is shown.
     var showMenuBar: Bool {
         didSet { defaults.set(showMenuBar, forKey: Keys.showMenuBar) }
     }
 
+    /// Wash each task row in its due badge's colour — orange overdue, green
+    /// today, purple upcoming. Undated and done rows keep the neutral stone,
+    /// same as when this is off.
+    var dueTintedTasks: Bool {
+        didSet { defaults.set(dueTintedTasks, forKey: Keys.dueTintedTasks) }
+    }
+
+    /// Which timestamps the card footers carry (✦ created, ✎ last edited) —
+    /// notes and tasks each pick their own. See `CardDatesFooter`.
+    var noteCardDates: CardDates {
+        didSet { defaults.set(noteCardDates.rawValue, forKey: Keys.noteCardDates) }
+    }
+
+    var taskCardDates: CardDates {
+        didSet { defaults.set(taskCardDates.rawValue, forKey: Keys.taskCardDates) }
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
-        // Note: there is no `appearance` key. Insert used to offer an Auto /
-        // Light / Dark override; HIG advises against a per-app appearance
-        // setting, because it leaves people adjusting two places to get one
-        // result and looks broken when the app ignores their system choice. The
-        // app now always follows the system. An `appearance` value saved by an
-        // older build is simply left in `UserDefaults` and never read.
+        static let appearance = "appearance"
+        static let backdrop = "backdrop"
         static let noteTypes = "noteTypes"
         static let noteSort = "noteSort"
         static let weekStyle = "weekStyle"
         static let doneTaskRetention = "doneTaskRetention"
         static let showMenuBar = "showMenuBar"
+        static let dueTintedTasks = "dueTintedTasks"
+        static let noteCardDates = "noteCardDates"
+        static let taskCardDates = "taskCardDates"
+        // Superseded by the two per-kind pickers above; still read once to seed
+        // them, never written.
+        static let showCreatedDate = "showCreatedDate"
+        static let showUpdatedDate = "showUpdatedDate"
         static let noteTintMigrated = "noteTintMigrated"
     }
 
@@ -59,7 +95,18 @@ final class SettingsStore {
         // Deleting finished work is opt-in, so an install that has never been
         // asked keeps everything.
         doneTaskRetention = DoneTaskRetention(rawValue: defaults.string(forKey: Keys.doneTaskRetention) ?? "") ?? .never
+        appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
+        // Plain window background unless asked otherwise, so an install that
+        // never opens Settings looks exactly as it did before backdrops existed.
+        backdrop = Backdrop(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? .plain
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
+        dueTintedTasks = defaults.object(forKey: Keys.dueTintedTasks) as? Bool ?? false
+        // Both seeded from the toggle pair this setting used to be — which also
+        // covers the fresh install: absent toggles read as "last edited only",
+        // the stamp the cards have always worn.
+        let legacyCardDates = Self.legacyCardDates(from: defaults)
+        noteCardDates = CardDates(rawValue: defaults.string(forKey: Keys.noteCardDates) ?? "") ?? legacyCardDates
+        taskCardDates = CardDates(rawValue: defaults.string(forKey: Keys.taskCardDates) ?? "") ?? legacyCardDates
 
         // Grey became the reserved "All" colour in the filter rows, so the base
         // "Note" type moved to blue. Recolour it once for installs that saved
@@ -73,6 +120,27 @@ final class SettingsStore {
                 persistNoteTypes()
             }
         }
+    }
+
+    /// The card-dates choice implied by the old show-created/show-updated
+    /// toggle pair, for installs that set them before the pickers existed.
+    private static func legacyCardDates(from defaults: UserDefaults) -> CardDates {
+        let created = defaults.object(forKey: Keys.showCreatedDate) as? Bool ?? false
+        let updated = defaults.object(forKey: Keys.showUpdatedDate) as? Bool ?? true
+        switch (created, updated) {
+        case (false, false): return .none
+        case (true, false): return .created
+        case (false, true): return .updated
+        case (true, true): return .both
+        }
+    }
+
+    // MARK: - Appearance
+
+    /// Re-applies the saved appearance. Call once at launch (see `AppDelegate`),
+    /// since `didSet` doesn't fire for the value loaded in `init`.
+    func applyAppearance() {
+        NSApp.appearance = appearance.nsAppearance
     }
 
     // MARK: - Note types

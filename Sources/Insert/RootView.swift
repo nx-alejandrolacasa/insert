@@ -2,14 +2,22 @@ import AppKit
 import SwiftUI
 
 /// The main window: a collapsible projects sidebar on the left, then the notes
-/// and tasks panels sharing the remaining width 50/50. A global search field in
-/// the toolbar filters all three panels at once.
+/// and tasks panels sharing the remaining width — 50/50 by default, resizable
+/// via a hover-revealed handle between them (see `ColumnDivider`). A global
+/// search field in the toolbar filters all three panels at once.
 struct RootView: View {
     @Environment(AppState.self) private var appState
     @Environment(Library.self) private var library
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Read for the backdrop alone.
+    @Environment(SettingsStore.self) private var settings
+
     @State private var keyMonitor: Any?
+
+    /// Notes column's share of the detail width. Persisted, like the split
+    /// view's own sidebar width, so the arrangement survives relaunches.
+    @AppStorage("notesTasksSplit") private var notesSplit: Double = 0.5
 
     /// The detail toolbar's "show sidebar" button, tracked as presence *and*
     /// opacity rather than straight off `appState.sidebarVisible` — see
@@ -44,13 +52,24 @@ struct RootView: View {
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             // No separator lines anywhere: the columns are told apart by their
-            // headers and the glass islands inside them, not by rules.
+            // headers and the glass islands inside them, not by rules. The
+            // boundary between them is still draggable — a hover-revealed
+            // handle floats over it.
             GeometryReader { geo in
+                let notesWidth = notesWidth(in: geo.size.width)
                 HStack(spacing: 0) {
                     NotesPanel()
-                        .frame(width: geo.size.width / 2)
+                        .frame(width: notesWidth)
                     TasksPanel()
                         .frame(maxWidth: .infinity)
+                }
+                .overlay(alignment: .leading) {
+                    ColumnDivider(
+                        fraction: $notesSplit,
+                        notesWidth: notesWidth,
+                        totalWidth: geo.size.width
+                    )
+                    .offset(x: notesWidth - ColumnDivider.hitWidth / 2)
                 }
             }
             .toolbar {
@@ -65,15 +84,17 @@ struct RootView: View {
                         } label: {
                             Image(systemName: "sidebar.left")
                         }
-                        // The button brings its own glass because the capsule the
-                        // toolbar would wrap it in is AppKit's, drawn outside our
-                        // view and so beyond the reach of the fade below: it would
-                        // pop in and out around a dissolving glyph.
-                        .buttonStyle(.glass)
-                        // …and its own shape with it: left to itself `.glass`
-                        // draws the capsule it would use anywhere else, where the
-                        // toolbar rounds a lone icon into a circle.
-                        .buttonBorderShape(.circle)
+                        // The button brings its own background because the capsule
+                        // the toolbar would wrap it in is AppKit's, drawn outside
+                        // our view and so beyond the reach of the fade below: it
+                        // would pop in and out around a dissolving glyph.
+                        //
+                        // Flat rather than `.glass`, and circular because that's
+                        // what the toolbar rounds a lone icon to — glass drew a
+                        // drop shadow under it, the last one left in the window
+                        // once the search field's platter was flattened. See
+                        // `FlatButtonStyle`.
+                        .buttonStyle(.toolbarGlyph)
                         .help("Show projects (⌘§)")
                         .accessibilityLabel("Show projects")
                         // Keeps the button at its natural size whatever the frame
@@ -111,8 +132,10 @@ struct RootView: View {
                     Image(systemName: titleSymbol)
                         .foregroundStyle(titleTint.ink)
                         // Toolbar items are spaced for buttons; this one is really
-                        // part of the title, so pull the gap in.
-                        .padding(.trailing, -8)
+                        // part of the title, so pull the gap right in — -8 only
+                        // cancels the item spacing and still read as a detached
+                        // glyph next to the title.
+                        .padding(.trailing, -12)
                         // Decorative: `navigationTitle` right beside it already
                         // names the selected project.
                         .accessibilityHidden(true)
@@ -127,6 +150,13 @@ struct RootView: View {
             .navigationTitle(navigationTitle)
         }
         .navigationSplitViewStyle(.balanced)
+        // The chosen gradient, painted behind the whole window — under the
+        // sidebar as well as the two panels, and up under the (background-less)
+        // toolbar, so it's one uninterrupted wash. Applied unconditionally:
+        // "None" resolves to `.windowBackground`, which is what the window would
+        // have drawn anyway. See `Backdrop.windowStyle` for why this isn't an
+        // `if`.
+        .containerBackground(settings.backdrop.windowStyle, for: .window)
         // Let the sidebar's material run the full height of the window instead
         // of starting below a title-bar strip: drop the toolbar's background
         // and make the title bar itself transparent (see WindowConfigurator),
@@ -142,6 +172,15 @@ struct RootView: View {
         .onChange(of: appState.sidebarVisible) { _, visible in
             syncShowButton(sidebarVisible: visible)
         }
+    }
+
+    /// The notes column's width for the stored split, with both columns held
+    /// to a generous minimum so neither can be dragged into a sliver. In a
+    /// window too narrow to honour both minimums, fall back to an even split.
+    private func notesWidth(in total: CGFloat) -> CGFloat {
+        let floor = Metrics.minPanelWidth
+        guard total > floor * 2 else { return total / 2 }
+        return max(floor, min(total - floor, total * notesSplit))
     }
 
     /// Bridges the app's simple `sidebarVisible` flag to the split view's
@@ -162,12 +201,13 @@ struct RootView: View {
         return SymbolCatalog.everything
     }
 
-    /// The selected project's colour, or blue for Everything.
+    /// The selected project's colour, or the same neutral grey the sidebar's
+    /// "Everything" row wears.
     private var titleTint: Tint {
         if let id = appState.selectedProjectID, let project = library.project(id: id) {
             return project.tint
         }
-        return .blue
+        return .gray
     }
 
     /// Stays a plain `String`: a `Text` with an interpolated `Image` gets
@@ -256,6 +296,81 @@ struct RootView: View {
     private func removeKeyMonitor() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+    }
+}
+
+/// The draggable boundary between the notes and tasks columns. Invisible at
+/// rest — the columns are told apart by their content, not by rules — it
+/// reveals a small capsule handle on hover (the resize cursor with it) and
+/// drags the split, with both columns held to `Metrics.minPanelWidth`.
+private struct ColumnDivider: View {
+    /// Width of the invisible hit strip straddling the boundary.
+    static let hitWidth: CGFloat = 11
+
+    /// The stored split (notes' share of the width), written as the drag moves.
+    @Binding var fraction: Double
+    /// The notes column's *rendered* width — the clamped value, which is what
+    /// a drag starts from, not whatever stale fraction is on disk.
+    let notesWidth: CGFloat
+    let totalWidth: CGFloat
+
+    @State private var hovering = false
+    @State private var dragging = false
+    /// `notesWidth` captured when the drag began, so each move is absolute.
+    @State private var dragBase: CGFloat?
+
+    var body: some View {
+        Color.clear
+            .frame(width: Self.hitWidth)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .overlay {
+                Capsule()
+                    .fill(Stone.surface)
+                    // Fill plus hairline, no drop shadow: the window is shadowless
+                    // throughout (see the `#project` dropdown), and a 5pt capsule
+                    // that only appears under the pointer doesn't need lifting to
+                    // be found.
+                    .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
+                    .frame(width: 5, height: 48)
+                    .opacity(hovering || dragging ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+            .onHover { inside in
+                withAnimation(.easeInOut(duration: 0.12)) { hovering = inside }
+                if inside {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        dragging = true
+                        if dragBase == nil { dragBase = notesWidth }
+                        let proposed = (dragBase ?? notesWidth) + value.translation.width
+                        let floor = Metrics.minPanelWidth
+                        let clamped = max(floor, min(totalWidth - floor, proposed))
+                        fraction = clamped / totalWidth
+                    }
+                    .onEnded { _ in
+                        dragging = false
+                        dragBase = nil
+                    }
+            )
+            // Dragging is pointer-only; give assistive tech a real control.
+            .accessibilityElement()
+            .accessibilityLabel("Resize columns")
+            .accessibilityValue("Notes \(Int((notesWidth / max(totalWidth, 1)) * 100)) percent")
+            .accessibilityAdjustableAction { direction in
+                let floor = Metrics.minPanelWidth / max(totalWidth, 1)
+                switch direction {
+                case .increment: fraction = min(1 - floor, fraction + 0.05)
+                case .decrement: fraction = max(floor, fraction - 0.05)
+                @unknown default: break
+                }
+            }
     }
 }
 

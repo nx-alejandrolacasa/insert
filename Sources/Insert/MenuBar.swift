@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// Unlike `MenuBarContent`, this view is NOT rendered inside a `.menu`-style
 /// dropdown — it *is* the status item — so a normal `HStack` of `Image` + `Text`
-/// renders correctly here. We keep it deliberately compact: just the checklist
+/// renders correctly here. We keep it deliberately compact: just the state
 /// glyph when there is nothing pressing, plus a short count only when there are
 /// overdue or due-today tasks (mirroring TXTodo's "glance" behaviour).
 struct MenuBarLabel: View {
@@ -24,13 +24,13 @@ struct MenuBarLabel: View {
         // the menu bar, next to the icon. When everything is clear the summary is
         // empty, so we fall back to just the icon to keep the footprint minimal.
         if summary.isEmpty {
-            Image(systemName: Self.glyph)
+            Image(systemName: Self.glyph(overdue: !sections.overdue.isEmpty))
                 // Without this VoiceOver announces the status item as an unnamed
                 // menu; the glyph alone carries the "no pending tasks" state.
                 .accessibilityLabel("\(Self.appName) — no pending tasks")
         } else {
             HStack(spacing: 4) {
-                Image(systemName: Self.glyph)
+                Image(systemName: Self.glyph(overdue: !sections.overdue.isEmpty))
                     .accessibilityHidden(true)
                 Text(summary)
             }
@@ -42,11 +42,15 @@ struct MenuBarLabel: View {
     /// A hammer for the dev build, so two menu-bar items are telling apart
     /// without clicking either.
     ///
-    /// Deliberately not a `checklist` variant: the near-identical ones are too
-    /// easy to miss at menu-bar size, and `checklist.checked` would read as "all
-    /// done" — the opposite of what this item exists to report.
-    private static var glyph: String {
-        BuildVariant.isDev ? "hammer.fill" : "checklist"
+    /// Otherwise the glyph itself reports the one state worth noticing at a
+    /// glance: `checkmark.circle` while nothing is late, and the
+    /// `trianglebadge.exclamationmark` variant the moment something is overdue.
+    /// The two differ by a badge in a corner rather than by stroke weight, which
+    /// is what makes them distinguishable at menu-bar size — the failing of the
+    /// near-identical `checklist` variants this replaced.
+    private static func glyph(overdue: Bool) -> String {
+        if BuildVariant.isDev { return "hammer.fill" }
+        return overdue ? "checkmark.circle.trianglebadge.exclamationmark" : "checkmark.circle"
     }
 
     private static var appName: String {

@@ -223,6 +223,10 @@ enum Metrics {
     static let islandRadius: CGFloat = 16
     static let rowRadius: CGFloat = 10
     static let cardSpacing: CGFloat = 12
+    /// The narrowest either the notes or the tasks column may be dragged —
+    /// generous on purpose, so a stray drag can't leave a 90pt sliver where
+    /// every card truncates to nothing.
+    static let minPanelWidth: CGFloat = 320
     // The sidebar has to fit a project name plus its "X notes · Y tasks"
     // subtitle without crowding, so it opens comfortably wide by default.
     /// Height of the window's title-bar row, which the sidebar header sits in.
@@ -333,14 +337,122 @@ struct TintPicker: View {
     }
 }
 
+// MARK: - Flat controls
+
+/// The app's stand-in for Liquid Glass on a button — a flat fill and a hairline, no
+/// material and **no drop shadow**. Two shapes use it: the capsule each column's
+/// primary action wears ("New Note", "New Task") and the toolbar's circular
+/// show-sidebar glyph.
+///
+/// The capsules are on their third look, and the reason for each change is worth
+/// keeping. `.glassProminent` went because it paints the *system accent*, the one
+/// colour in the window drawn from neither `Tint` nor a `Backdrop`, so it was the
+/// loudest thing on screen and fought whatever gradient sat behind it. Plain
+/// `.buttonStyle(.glass)` then went because **Liquid Glass draws its own drop
+/// shadow** and there is no API to turn it off: with the window otherwise
+/// shadowless, these were the only things left casting light. Nothing in the app's
+/// own code passes `.shadow(…)` any more, and this is where the last of it would
+/// have crept back in.
+///
+/// So: `Stone.chip` and `Stone.line`, exactly what the filter pills use, and what
+/// `AppDelegate`'s `FlatToolbarCapsule` paints behind the search field — the flat
+/// world's version of "these surfaces are one material". Hover is a `.primary`
+/// wash — the state plain glass never gave them, and `.primary` rather than the
+/// accent for the `.glassProminent` reason above. A press deepens that wash instead
+/// of scaling: with no material left to respond, the fill is the only thing that
+/// can answer.
+struct FlatButtonStyle<S: InsettableShape>: ButtonStyle {
+    /// How the label is sized. `padded` follows `.controlSize`, so the column
+    /// headers' `.large` capsules and the empty states' default-size ones keep the
+    /// difference they had under `.glass`; `square` pins both axes, which is what a
+    /// lone glyph needs — padded, the toolbar's circle came out an oval.
+    enum Sizing {
+        case padded
+        case square(CGFloat)
+    }
+
+    let shape: S
+    let sizing: Sizing
+
+    func makeBody(configuration: Configuration) -> some View {
+        Surface(configuration: configuration, shape: shape, sizing: sizing)
+    }
+
+    /// A view, not the style itself: `ButtonStyle` isn't a `View`, so `@State`
+    /// declared on it is never tracked and hover would silently do nothing.
+    private struct Surface: View {
+        let configuration: Configuration
+        let shape: S
+        let sizing: Sizing
+
+        @Environment(\.controlSize) private var controlSize
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, insets.width)
+                .padding(.vertical, insets.height)
+                // `nil` on both axes for the padded case, where it's a no-op.
+                .frame(width: side, height: side)
+                .background {
+                    shape.fill(Stone.chip)
+                    shape.fill(.primary.opacity(wash))
+                }
+                .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
+                .contentShape(shape)
+                .animation(.easeInOut(duration: 0.12), value: hovering)
+                .onHover { hovering = $0 }
+        }
+
+        private var insets: CGSize {
+            switch sizing {
+            case .padded:
+                let large = controlSize >= .large
+                return CGSize(width: large ? 14 : 11, height: large ? 8 : 6)
+            case .square:
+                return .zero
+            }
+        }
+
+        private var side: CGFloat? {
+            switch sizing {
+            case .padded: nil
+            case .square(let side): side
+            }
+        }
+
+        private var wash: Double {
+            if configuration.isPressed { return 0.14 }
+            return hovering ? 0.07 : 0
+        }
+    }
+}
+
+extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
+    /// A column's primary action.
+    static var actionCapsule: Self { .init(shape: Capsule(), sizing: .padded) }
+}
+
+extension ButtonStyle where Self == FlatButtonStyle<Circle> {
+    /// A lone toolbar glyph, at the diameter AppKit rounds one to.
+    static var toolbarGlyph: Self { .init(shape: Circle(), sizing: .square(28)) }
+}
+
 // MARK: - Card surface
 
 extension View {
     /// Wraps content in the app's standard rounded "island" — a *flat* fill, not
     /// Liquid Glass. Glass islands each cast their own drop shadow, which the
     /// columns' scroll views clipped at their edges and which pooled into a grubby
-    /// band wherever cards stacked. A note takes its type's colour wash; anything
-    /// untinted (a task row, the composer) takes the warm `Stone` neutral.
+    /// band wherever cards stacked.
+    ///
+    /// A tint gives the card that colour's wash over an opaque base. **No tint is
+    /// plain paper** — `textBackgroundColor`, white in Light and near-black in
+    /// Dark. That's the untinted task row, and it's neither of the two things it
+    /// has been before: not the warm `Stone` neutral, which made the tasks column
+    /// a stack of faintly grey slabs, and not transparent, which let the backdrop
+    /// gradient run under the text. Opaque and *neutral* — the card is white, the
+    /// colour is the backdrop's job.
     func island(radius: CGFloat = Metrics.islandRadius, tint: Tint? = nil) -> some View {
         modifier(IslandSurface(radius: radius, tint: tint))
     }
@@ -353,7 +465,29 @@ private struct IslandSurface: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
-            .background { shape.fill(tint?.soft ?? Stone.surface) }
+            // A tinted card gets two stacked fills. `tint.soft` is a
+            // *translucent* wash — it's meant to tint whatever is behind it — so
+            // over a `Backdrop` gradient it stopped being a card and became a
+            // slightly tinted window onto the wash, with the gradient running
+            // through the text. The opaque base under it stops that.
+            // `windowBackgroundColor` specifically, because that is exactly what
+            // sits behind an island when no backdrop is set, so a tinted card is
+            // pixel-identical there and needs no branching on the setting.
+            //
+            // The base is listed first so the wash paints *over* it. Chaining two
+            // `.background` modifiers instead would put the wash further back
+            // than the base and hide it.
+            .background {
+                if let tint {
+                    shape.fill(Color(nsColor: .windowBackgroundColor))
+                    shape.fill(tint.soft)
+                } else {
+                    // Paper, not the window's grey: `textBackgroundColor` is the
+                    // white a document surface uses, and it flips to near-black in
+                    // Dark on its own.
+                    shape.fill(Color(nsColor: .textBackgroundColor))
+                }
+            }
             // A hairline keeps the card's edge readable now that there's no
             // shadow separating it from the background.
             .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }

@@ -103,6 +103,8 @@ Sources/Insert/
   BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
+  Appearance.swift            Auto / Light / Dark preference
+  Backdrop.swift              the five window gradients + their Settings picker
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)
 Resources/AppIcon.icon/       generated layered icon (icon.json + SVG layers)
 Resources/AppIcon.icns        generated flat icon, the fallback
@@ -156,6 +158,22 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   Meeting (🤝🏻, yellow), Feedback (💬, purple) and Staffing (👥, green); users
   can add/edit/remove types in Settings, except **Note**, which is locked
   (`NoteType.isLocked`) because it is the fallback type.
+  **A note never moves while you're looking at it.** Typing saves on a ~0.4s
+  debounce and every save bumps `updated`, so under the default "Updated (newest)"
+  sort the card you were writing in slid from third place to first mid-sentence,
+  taking the text under the cursor with it. `NotesPanel` pins a note's `updated`
+  as it opens for editing (`NotePins`, keyed off `selectedNoteID` so every route
+  into edit mode is covered) and `Library.notes(…, pinned:)` sorts it by the
+  pinned value. The pins are dropped **only when the list is being rebuilt
+  anyway** — another project, type filter, search or sort order — not when editing
+  ends: the re-sort then lands on a frame where the whole column is replaced, so
+  it is invisible. That is also why the reorder isn't animated; there is nothing
+  left to animate, and animating a filter change would be wrong.
+  Two things to keep: pin the *value*, not the whole list's order (an order can't
+  say where a note created or externally edited meanwhile belongs), and
+  `pin(_:)` is a no-op on an already-pinned note — re-pinning on a second edit
+  would hand back exactly the jump this prevents. Covered by
+  `StorageLayoutTests`.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
   task can be assigned to several projects. Typing `#` opens a project
   autocomplete; Tab picks the first match; the `#word` is *not* kept in the
@@ -204,9 +222,108 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   stay plain `Color`. **Selection is a filled pill, never an outline**: `deep` and
   `chip` share a hue, so a border drawn from one against the other can't reach
   the 3:1 an indicator needs in both appearances at any opacity.
-- **Appearance** — Insert follows the system. There is deliberately **no** per-app
-  Light/Dark override; HIG advises against one, and it previously lived in
-  Settings → General. Please don't add it back.
+- **Appearance** — Settings → General has a Theme picker: Auto / Light / Dark,
+  the same control prtscn has (`Appearance.swift` is a copy of its enum). Auto
+  means `NSApp.appearance = nil` — follow the system — and is the default, so an
+  install that never touches it behaves as before. This override was removed once
+  on HIG grounds (a per-app appearance makes people adjust two places to get one
+  result) and put back deliberately in July 2026; if you're weighing removing it
+  again, that's the argument, and it has already been overruled.
+  `applyAppearance()` runs from `applicationWillFinishLaunching`, before the first
+  window, so a non-Auto choice isn't a flash of the system appearance on launch.
+  Every colour in `Tint`/`Stone` resolves through a dynamic `NSColor`, so setting
+  `NSApp.appearance` is all it takes — nothing reads `Locale`-style globals or
+  caches a resolved shade.
+- **Backdrop** — Settings → General also offers five gradient washes for the main
+  window — Cloud, Stone, Dawn, Dusk, Grove, quietest first —
+  plus "None", which stays the default.
+  Dawn and Dusk come from the icon's warm family and Grove is their
+  cool counterpart — the only cool one left — kept low in saturation so its green
+  and blue read as scenery rather than as the status colours those hues carry
+  everywhere else in the app, and running sky *into* sage.
+  Dawn and Dusk were toned well down from the icon's values — they were the two
+  most saturated members and sat oddly beside the near-white borrowed ones. Every
+  stop kept its hue and its lead channel and lost only chroma, with the pale ends
+  holding more colour than the middle, because that's where each name lives
+  (Dawn's lilac, Dusk's coral). Those two also **share a stop** — Dawn's last and
+  Dusk's first are near-identical pale apricots — and get away with it only
+  because they *chain* rather than mirror, so each reads as the colour at its own
+  far end. Toning them down narrowed that margin; narrowing it again is how
+  they'd collapse into one gradient.
+  Cloud and Stone are borrowed from a CSS gradient gallery
+  with their hex values intact; only their Dark halves are inferred. Stone is
+  the one **radial** — hence `Ramp` carrying a shape alongside its stops — and its
+  source is two stacked radials blended with `screen`, resolved here to two plain
+  stops rather than reproduced: screening with black is the identity, so the outer
+  stop is just the base colour, and screening with white at half alpha lands
+  halfway to white. Its **outer stop is deepened past the source** on purpose: the
+  CSS's own two stops are 1% apart and even with the bloom screened over them the
+  result was a ~12% swing in luminance, which reads as a flat colour in the window
+  and as nothing at all in a 52pt swatch. It's now ~30%. If a borrowed gradient's
+  stops are that close together, copying them exactly is the wrong kind of
+  faithful. Note Stone also *inherited* its name from a cut linear
+  near-white-into-sand, so a saved `"stone"` from before now selects the radial.
+  **Seven** others were tried and cut, and between them they are the brief for a
+  sixth: a Honey and a Dune too close to Dawn's pale warm end, an Orchid that
+  ended on the very lilac Dawn begins with, a linear near-white-into-sand that
+  gave its name to Stone, a Neon (magenta → violet → cyan) simply too loud to look
+  at all day, a Rare Wind (pink → aqua), and a Soft grass too bright at its deep
+  end. Two rules come out of that: a gradient earns its place by **not being
+  reachable from an existing one** — sharing a hue family is fine, sharing a *stop*
+  makes two entries read as one mirrored — and by being **quiet enough to sit
+  behind text all day**, because the one that wins the swatch row is usually the
+  one you switch off within the hour. Five of the seven cuts were for one of those.
+  What's left has one pair near the first line, ordered as neighbours so it reads
+  as deliberate rather than duplicated: Cloud/Stone, both near-white, one cool and
+  flat and one warm and lit, surviving on temperature alone.
+  The picker is a **single row**: six entries at 52pt plus 10pt gaps is 362pt
+  against the Settings pane's ~420. **Seven is where that stops fitting** (424pt),
+  and the answer then is a `LazyVGrid` of four columns — not smaller swatches,
+  since below about 46pt a gradient preview stops previewing anything, which
+  defeats the point of not using a `Picker`.
+  A backdrop is **one** gradient, not two:
+  the hues are fixed per name and only their *value* changes between Light and
+  Dark, resolved through the same dynamic `NSColor` trick `Tint` uses, so the
+  choice follows the Theme picker with nothing to re-apply. Both halves of every
+  pair clear 13:1 against the text drawn on them, which is why — unlike `Tint` —
+  there are no Increase Contrast variants. Two things here are easy to get wrong:
+  the window style is applied **unconditionally** (`None` resolves to
+  `.windowBackground`), because branching on it in the view builder gives the two
+  cases different identities and tears down `NavigationSplitView` — and with it
+  the autosaved column widths — on every change of the picker. And the sidebar
+  takes **Liquid Glass** over the backdrop, not AppKit's sidebar material, which
+  blends *behind the window*: it frosts the desktop and is blind to anything
+  Insert draws, so the gradient simply wouldn't be there. Glass rather than a
+  `Material` — a `.thinMaterial` was the first attempt and it reads as a flat grey
+  panel laid over the design, because a material only blurs and dims. Glass also
+  refracts and picks up the backdrop's light, and it matches the toolbar's search
+  field, the window's other large glass surface. With "None" the whole layer drops
+  out, leaving the AppKit material and its desktop translucency exactly as they
+  were. Two things about how that layer is attached, both of which bit. The `if`
+  sits *inside* a `.background { }` builder, not around the
+  column: branching around the `List` would give it a new identity on every change
+  of the setting and tear down the autosaved split widths, the same trap
+  `windowStyle` documents. And the glass layer needs its **own**
+  `.ignoresSafeArea()` — the sidebar's content ignores the top safe area so the
+  header can sit level with the traffic lights, but a background layer doesn't
+  inherit that, so it started below the toolbar inset and left the titlebar band
+  one glass layer short. That showed up as a hard seam under the traffic lights,
+  reading as two stacked panels instead of one column.
+
+  `.island()` changed with it, and only for tinted cards: those gained an
+  **opaque base fill** under the wash, because `tint.soft` is translucent by
+  design and over a gradient a note card stopped being a card — the wash ran
+  through it and took the text with it. The base is `windowBackgroundColor`,
+  exactly what sits behind an island with no backdrop, so that case stays
+  pixel-identical. An **untinted** card is plain paper — `textBackgroundColor`,
+  white in Light and near-black in Dark. That's the task row, and it is
+  deliberately neither of the two things it has been before: not the warm `Stone`
+  neutral (a column of faintly grey slabs) and not transparent (the gradient ran
+  under the text). Opaque and neutral; colour is the backdrop's job. So
+  `Stone.surface` is no longer an island fill — it survives only on the note
+  composer's symbol well and the column divider's handle. Task rows are the
+  untinted case (`dueTint` is nil for
+  undated and done rows, and for every row with "Color tasks by due date" off).
 - **Language** — the app is **English only**, and that includes dates. Every UI
   string is an English literal, so formatting dates in the *system* locale gave
   interfaces in two languages at once: a Spanish Mac showed a due badge reading
@@ -215,14 +332,66 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   dates and Monday-first weeks). Never format a user-facing date off
   `Locale.current`. The on-disk format is separate and pinned to `en_US_POSIX`
   in `DateCoding`, so none of this can rewrite a Markdown file.
-- **Glass** — Liquid Glass is for the *control* layer. Cards, rows and pills in the
+- **Glass** — Liquid Glass is for the *control* and *navigation* layers. Cards,
+  rows and pills in the
   content layer use `.island()` and the flat `Stone`/`Tint` washes instead (glass
-  islands also pooled their shadows — see `Theme.swift`). The exception HIG allows,
-  and the one Insert takes, is a transient floating control: the `#project`
-  autocomplete dropdown. `.glassProminent` paints the accent colour behind a
-  label, so it's rationed to **one per surface** — "New Note", "New Task", and the
-  confirm button of each popover. Adding a second to any one surface is the thing
-  to avoid.
+  islands also pooled their shadows — see `Theme.swift`). Two things outside plain
+  controls take it: a transient floating control, the `#project` autocomplete
+  dropdown — the exception HIG allows — and, once a **Backdrop** is chosen, the
+  projects sidebar, which is a navigation container and the one surface that has to
+  refract the gradient rather than dim it. Those plus the toolbar's search field
+  are the window's large glass surfaces, and they're meant to read as the same
+  material; don't give one of them a `Material` and call it close enough.
+  `.glassProminent` paints the **system accent** behind a
+  label, so it's rationed to one per surface, and now survives only on the confirm
+  button of each popover. "New Note" and "New Task" gave it up: system blue is the
+  one colour in the window drawn from neither `Tint` nor a `Backdrop`, so against a
+  pale wash it was the loudest thing on screen and it fought whatever gradient sat
+  behind it. Their **semibold label** is what marks them as the primary action now —
+  a colour isn't needed for that, and adding a second prominent button to any one
+  surface is still the thing to avoid. They then gave up plain `.glass` as well, over
+  its drop shadow — see "No shadows" below — so the two are the one *control*-layer
+  place that draws a flat fill, and `.glassProminent` on a popover's confirm button
+  is the only prominent left.
+- **No shadows, anywhere.** Not a gap: the window is deliberately flat, the look it
+  wears when it goes inactive and every glass surface settles down, which is the
+  look it's tuned for. Separation is a **hairline** (`Stone.line`) plus, on glass,
+  the material's own refraction — that's what `.island()` swapped its shadow for and
+  what the `#project` dropdown and the column-divider handle now use too. There is
+  no elevation scale to add a level to, and adding one lifted element would make it
+  the only thing in the window casting light.
+  Which is also why the window's **buttons are no longer glass**: Liquid Glass draws
+  its own drop shadow and there's no API to turn it off. "New Note", "New Task" and
+  the toolbar's show-sidebar glyph wear `FlatButtonStyle` instead — the same
+  `Stone.chip` fill and `Stone.line` hairline as the filter pills, with hover as a
+  `.primary` wash and a press as a deeper one. That wash *is* the hover state plain
+  `.glass` never gave them, which had the primary action of each column reading as
+  decoration. One style, two shapes, and the `Sizing` is why: `.actionCapsule` pads
+  its label off `.controlSize`, `.toolbarGlyph` pins a square 28pt, because a padded
+  lone glyph comes out an oval rather than the circle the toolbar rounds one to.
+  The toolbar's **search field stays the system's** (`.searchable(placement:
+  .toolbar)`) — a hand-built field costs ⌘F, Escape-to-clear and the search item's
+  collapse behaviour — so its glass is dealt with in AppKit instead, by
+  `AppDelegate.flattenToolbarGlass()`, the one place in the app that reaches past the
+  public API. What's worth knowing:
+  its shadow is **not a `CALayer` shadow**. Dumping the whole titlebar's view *and*
+  layer tree found no `shadowOpacity` anywhere in it — the only shadowed layers in
+  the app belong to the menu-bar extra — so it's painted inside the glass renderer,
+  `NSGlassEffectView` (public in macOS 26) offers only `cornerRadius`, `tintColor`
+  and `style`, and an earlier pass that zeroed every layer shadow in the titlebar did
+  exactly nothing. What makes it tractable is that the glass is a **platter behind
+  the field, not the field's background**: `NSToolbarPlatterView` holds the
+  `NSGlassEffectView` while the field lives in its own `NSSearchToolbarItemView`. So
+  the platter is hidden and a `FlatToolbarCapsule` — a plain `NSView` drawing the
+  same chip-and-hairline capsule — goes in its place, as a **sibling**, because a
+  hidden view doesn't draw its children either. It runs from `applicationDidUpdate`,
+  since AppKit rebuilds the platter as the field expands and takes focus; it assumes
+  no depth, so a reshuffled hierarchy degrades to "the glass is back" rather than
+  breaking; and it **skips the content view**, which is load-bearing — the projects
+  sidebar is glass and is meant to stay glass. Only the titlebar band is touched.
+  Otherwise anything the *system* draws — popover and menu shadows, the glass
+  controls' own lighting — is untouched; `.shadow(…)` appears nowhere in Insert's
+  own code.
 - **Icon** — minimal stacked cards on a pastel lilac → warm apricot gradient
   with a purple/orange badge. Keep it soft and modern; palette and proportions
   live at the top of `tools/IconGenerator.swift`.

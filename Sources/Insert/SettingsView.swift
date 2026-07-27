@@ -151,11 +151,6 @@ private struct SettingsPaneLabel: View {
 
 /// The app-wide preferences. Anything specific to notes or tasks lives in their
 /// own pane.
-///
-/// Deliberately has no appearance control: Insert follows the system's Light /
-/// Dark choice and offers no override, per HIG — a per-app appearance setting
-/// makes people adjust two places to get one result, and reads as a bug when the
-/// app ignores the choice they already made.
 private struct GeneralSettingsTab: View {
     // The Settings window is hosted by AppKit (see SettingsWindowController),
     // so there is no injected environment here — read the shared store directly.
@@ -163,6 +158,23 @@ private struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $settings.appearance) {
+                    ForEach(Appearance.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section {
+                BackdropPicker(selection: settings.backdrop) { settings.backdrop = $0 }
+            } header: {
+                Text("Background")
+            } footer: {
+                Text("A gradient behind the main window. Each one has a light and a dark version, so it follows the theme above — the swatches show whichever is in use right now.")
+            }
+
             Section {
                 Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
             } footer: {
@@ -190,6 +202,22 @@ private struct TasksSettingsTab: View {
                 }
             } footer: {
                 Text("A full week ends on Sunday, a work week on Friday — this is what a task's “End of week” due date means.")
+            }
+
+            Section {
+                Toggle("Color tasks by due date", isOn: $settings.dueTintedTasks)
+            } footer: {
+                Text("Task backgrounds take their due badge's color — orange when overdue, green due today, purple upcoming. Undated tasks keep the neutral background.")
+            }
+
+            Section {
+                Picker("Show dates", selection: $settings.taskCardDates) {
+                    ForEach(CardDates.allCases) { dates in
+                        Text(dates.label).tag(dates)
+                    }
+                }
+            } footer: {
+                Text("Stamped at the foot of each task — a sparkle marks when it was created, a pencil when it was last edited. “Most recent” shows the last edit, or the creation date if it has never been edited.")
             }
 
             Section {
@@ -240,6 +268,16 @@ private struct NotesSettingsTab: View {
                         Text(sort.label).tag(sort)
                     }
                 }
+            }
+
+            Section {
+                Picker("Show dates", selection: $settings.noteCardDates) {
+                    ForEach(CardDates.allCases) { dates in
+                        Text(dates.label).tag(dates)
+                    }
+                }
+            } footer: {
+                Text("Stamped at the foot of each note — a sparkle marks when it was created, a pencil when it was last edited. “Most recent” shows the last edit, or the creation date if it has never been edited.")
             }
 
             Section {

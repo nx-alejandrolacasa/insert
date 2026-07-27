@@ -213,4 +213,72 @@ final class StorageLayoutTests: XCTestCase {
             XCTAssertEqual(library.notes.map(\.id), order, "load order is not stable")
         }
     }
+
+    /// `NotePins` keeps the note you're typing in where it is under an Updated
+    /// sort, and gives it up when the pins are dropped — the two halves of what
+    /// stops a card sliding out from under the cursor mid-sentence.
+    @MainActor
+    func testEditingPinsHoldNotesPlacesUnderUpdatedSort() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-pin-\(UUID().uuidString)", isDirectory: true)
+        let notes = root.appendingPathComponent("Notes", isDirectory: true)
+        try fm.createDirectory(at: notes, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        // Three notes an hour apart, so "Second" is the one in the middle — the
+        // 2nd/3rd place the bug was reported from.
+        let now = Date()
+        let titles = ["First", "Second", "Third"]
+        for (i, title) in titles.enumerated() {
+            let stamp = now.addingTimeInterval(TimeInterval(-3_600 * i))
+            let note = Note(title: title, created: stamp, updated: stamp)
+            try MarkdownFiles.encode(note).write(
+                to: notes.appendingPathComponent(MarkdownFiles.noteFilename(note)),
+                atomically: true, encoding: .utf8)
+        }
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        let library = Library.shared
+        library.setRoot(root)
+
+        func order(pinned: NotePins = NotePins()) -> [String] {
+            library.notes(
+                forProject: nil, sort: .updatedDesc, typeFilter: nil, search: "", pinned: pinned
+            ).map(\.title)
+        }
+
+        XCTAssertEqual(order(), titles)
+
+        // Opening "Second" for editing pins it where it is.
+        var second = try XCTUnwrap(library.notes.first { $0.title == "Second" })
+        var pins = NotePins()
+        pins.pin(second)
+
+        // A debounced save while it's open: `updated` jumps to now.
+        second.body = "typing"
+        library.updateNote(second)
+        XCTAssertEqual(order(pinned: pins), titles, "the pinned note moved while being edited")
+
+        // Closing the card doesn't drop the pin, and neither does editing it again
+        // in the same view — a second `pin(_:)` must not re-pin it at the newer
+        // timestamp, which would put it back at the top.
+        second = try XCTUnwrap(library.notes.first { $0.id == second.id })
+        second.body = "typing more"
+        library.updateNote(second)
+        pins.pin(second)
+        XCTAssertEqual(order(pinned: pins), titles, "a re-pin moved the note")
+
+        // Another note edited in the same view is held too, rather than displacing
+        // the first one.
+        var third = try XCTUnwrap(library.notes.first { $0.title == "Third" })
+        pins.pin(third)
+        third.body = "typing"
+        library.updateNote(third)
+        XCTAssertEqual(order(pinned: pins), titles, "the second pinned note moved")
+
+        // Changing project / filter / search / sort drops the pins, and the list
+        // re-sorts on the frame it was being rebuilt on anyway.
+        XCTAssertEqual(order(), ["Third", "Second", "First"])
+    }
 }

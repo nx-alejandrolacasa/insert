@@ -1,10 +1,29 @@
 import AppKit
+import SwiftUI
+
+/// The flat capsule that stands in for the search field's glass platter — the same
+/// `Stone.chip` fill and `Stone.line` hairline as `FlatButtonStyle`, so the
+/// toolbar's field and the columns' "New Note" / "New Task" buttons read as one
+/// material, which is what they were meant to do as glass.
+///
+/// Drawn in `draw(_:)` rather than set as a `layer.backgroundColor` so the colours
+/// resolve against the *current* appearance every time: a `CGColor` is a resolved
+/// shade and would need re-setting on every Light/Dark switch.
+private final class FlatToolbarCapsule: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        let radius = bounds.height / 2
+        let capsule = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25),
+                                  xRadius: radius, yRadius: radius)
+        NSColor(Stone.chip).setFill()
+        capsule.fill()
+        NSColor(Stone.line).setStroke()
+        capsule.lineWidth = 0.5
+        capsule.stroke()
+    }
+}
 
 /// Classic AppKit application delegate. Keeps the app a regular (Dock-visible)
-/// app and starts the storage housekeeping.
-///
-/// Nothing here touches `NSApp.appearance`: Insert follows the system appearance
-/// and no longer offers a per-app override (see `GeneralSettingsTab`).
+/// app, applies the saved appearance and starts the storage housekeeping.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Keeps housekeeping honest in a window that stays open for days: without it,
     /// it would only ever happen at launch.
@@ -14,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before any window exists, so the split view restores the corrected value
         // and the first frame drawn is already the right width.
         Self.sanitizeSidebarWidth()
+        // Same reason: set the appearance before the first frame, or a Light /
+        // Dark override lands as a visible flash on every launch.
+        SettingsStore.shared.applyAppearance()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -28,6 +50,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         housekeepingTimer?.invalidate()
+    }
+
+    /// Where the toolbar's glass is flattened, once per update cycle.
+    ///
+    /// It has to be *repeated*, not done once at launch: AppKit rebuilds the platter
+    /// behind a toolbar item as the item changes — the search field expanding,
+    /// taking and losing focus — and on an appearance change or a second window.
+    ///
+    /// `applicationDidUpdate` fires after each event, so this is on the hot path.
+    /// It's kept cheap by walking only the titlebar (a few dozen views, and the
+    /// content view is skipped outright) and by touching nothing already flat.
+    func applicationDidUpdate(_ notification: Notification) {
+        Self.flattenToolbarGlass()
+    }
+
+    /// Replaces the Liquid Glass platter behind the toolbar's search field with a
+    /// flat capsule, because the glass draws an elevation the window has nowhere
+    /// else (see the shadows note in CLAUDE.md).
+    ///
+    /// **This is the one place in the app that reaches past the public API**, and
+    /// what's worth knowing is *why it has to*. `NSGlassEffectView` is public in
+    /// macOS 26 and offers `cornerRadius`, `tintColor` and a `style` — and nothing
+    /// about elevation. The shadow isn't a `CALayer` shadow either: dumping the whole
+    /// titlebar's view *and* layer tree turned up no `shadowOpacity` anywhere in it
+    /// (the only shadowed layers in the app belong to the menu-bar extra's window),
+    /// so it's painted inside the glass renderer and there is nothing to switch off.
+    /// An earlier pass that zeroed every layer shadow in the titlebar therefore did
+    /// exactly nothing, which is how this got here.
+    ///
+    /// What makes it tractable is that the glass is a **platter behind the field, not
+    /// the field's background**: `NSToolbarPlatterView` holds the
+    /// `NSGlassEffectView`, while the field itself lives in a separate
+    /// `NSSearchToolbarItemView` under its own item viewer. So the platter can be
+    /// hidden and a flat capsule put in its place without touching the field, which
+    /// stays the system's — and keeps ⌘F, Escape-to-clear and the search item's
+    /// collapse behaviour that a hand-built `TextField` would have cost.
+    ///
+    /// The trade: **nothing here is contractual.** It matches on `NSGlassEffectView`,
+    /// which is at least public, and assumes no depth — but if a macOS release stops
+    /// putting a glass view behind the field, or renders the platter some other way,
+    /// the capsule simply doesn't get installed. That failure is visible and benign:
+    /// the glass, and its shadow, come back. Nothing crashes and nothing is lost.
+    ///
+    /// **The content view is skipped**, which is load-bearing rather than an
+    /// optimisation: the projects sidebar is Liquid Glass too, and it's meant to stay
+    /// glass. Only the titlebar band is touched.
+    @MainActor
+    private static func flattenToolbarGlass() {
+        for window in NSApp.windows where window.toolbar != nil {
+            // The frame view owns both the titlebar container and the content view;
+            // start there and skip the latter.
+            guard let frame = window.contentView?.superview else { continue }
+            flattenGlass(in: frame, skipping: window.contentView)
+        }
+    }
+
+    @MainActor
+    private static func flattenGlass(in view: NSView, skipping content: NSView?) {
+        if view === content { return }
+        if let glass = view as? NSGlassEffectView {
+            replace(glass)
+            // Its subviews are the platter's own content holder, never the field's,
+            // so there's nothing below this worth walking.
+            return
+        }
+        for subview in view.subviews { flattenGlass(in: subview, skipping: content) }
+    }
+
+    /// Hides one glass platter and puts a `FlatToolbarCapsule` in its place, once.
+    ///
+    /// The capsule is a sibling rather than a subview of the glass: a hidden view
+    /// doesn't draw its children either, so anything parented to the platter would
+    /// go with it.
+    @MainActor
+    private static func replace(_ glass: NSGlassEffectView) {
+        guard let host = glass.superview else { return }
+        if !glass.isHidden { glass.isHidden = true }
+
+        if let existing = host.subviews.first(where: { $0 is FlatToolbarCapsule }) {
+            // The platter is re-laid-out as the field resizes; follow it. (The
+            // autoresizing mask covers the common case, this covers the rest.)
+            if existing.frame != glass.frame { existing.frame = glass.frame }
+            return
+        }
+
+        let capsule = FlatToolbarCapsule(frame: glass.frame)
+        capsule.autoresizingMask = [.width, .height]
+        host.addSubview(capsule, positioned: .below, relativeTo: glass)
     }
 
     /// Set once this install's sidebar has been moved to the current default width,

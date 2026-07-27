@@ -642,8 +642,15 @@ final class Library {
         return (n, t)
     }
 
-    /// Notes for a project (`nil` = all), sorted and filtered.
-    func notes(forProject projectID: UUID?, sort: NoteSort, typeFilter: String?, search: String) -> [Note] {
+    /// Notes for a project (`nil` = all), sorted and filtered. `pinned` holds the
+    /// sort position of notes being edited steady — see `NotePins`.
+    func notes(
+        forProject projectID: UUID?,
+        sort: NoteSort,
+        typeFilter: String?,
+        search: String,
+        pinned: NotePins = NotePins()
+    ) -> [Note] {
         var result = notes
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
         if let typeFilter { result = result.filter { $0.typeID == typeFilter } }
@@ -653,15 +660,15 @@ final class Library {
                 $0.title.lowercased().contains(query) || $0.body.lowercased().contains(query)
             }
         }
-        return result.sorted { sortNotes($0, $1, by: sort) }
+        return result.sorted { sortNotes($0, $1, by: sort, pinned: pinned) }
     }
 
-    private func sortNotes(_ a: Note, _ b: Note, by sort: NoteSort) -> Bool {
+    private func sortNotes(_ a: Note, _ b: Note, by sort: NoteSort, pinned: NotePins) -> Bool {
         switch sort {
         case .createdDesc: a.created > b.created
         case .createdAsc: a.created < b.created
-        case .updatedDesc: a.updated > b.updated
-        case .updatedAsc: a.updated < b.updated
+        case .updatedDesc: pinned.key(for: a) > pinned.key(for: b)
+        case .updatedAsc: pinned.key(for: a) < pinned.key(for: b)
         }
     }
 

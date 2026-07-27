@@ -59,6 +59,10 @@ struct ProjectsSidebar: View {
                 }
             }
             .listStyle(.sidebar)
+            // The column's frosting is applied below, over the window's
+            // backdrop; without this the List paints its own opaque sidebar
+            // background on top of it and the gradient stops at the divider.
+            .scrollContentBackground(.hidden)
             // ↑/↓ walk the same list the rows show, so keyboard and mouse agree
             // even while a search is filtering it.
             .focusable()
@@ -76,6 +80,33 @@ struct ProjectsSidebar: View {
         // traffic lights rather than in a band below them. `header` insets
         // itself past the lights.
         .ignoresSafeArea(.container, edges: .top)
+        // Liquid Glass over the window's backdrop, so the column refracts the
+        // gradient instead of merely dimming it — the same treatment the toolbar's
+        // search field wears, which is what the two large glass surfaces in this
+        // window need to have in common. With no backdrop there's nothing of ours
+        // to refract, so this drops out entirely and AppKit's own sidebar material
+        // (and its desktop translucency) is left alone.
+        //
+        // The `if` lives *inside* the background builder on purpose. Branching
+        // around the column itself would give the `List` a new identity every time
+        // the setting changed, which tears down the split view's autosaved widths
+        // — the same trap `Backdrop.windowStyle` documents. Here only the
+        // background layer is rebuilt.
+        .background {
+            if settings.backdrop.frostsSidebar {
+                // `.ignoresSafeArea()` is the whole reason this reads as one
+                // column. The sidebar's content already ignores the top safe area
+                // so the header can sit level with the traffic lights, but the
+                // *background* layer doesn't inherit that: left alone it starts
+                // below the toolbar's inset, and the titlebar band above it ends
+                // up with one fewer glass layer than everything below. The join
+                // showed as a hard horizontal seam right under the traffic lights
+                // — which reads as two stacked panels, not as a sidebar.
+                Color.clear
+                    .glassEffect(.regular, in: Rectangle())
+                    .ignoresSafeArea()
+            }
+        }
         // The "New Project" menu command (⌘N) posts this; open the same flow.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
             showingAdd = true
@@ -261,7 +292,9 @@ struct ProjectsSidebar: View {
     // MARK: - Rows
 
     private var everythingRow: some View {
-        selectableRow(tint: .blue, selected: isSelected(nil)) {
+        // Grey, not a project colour: "Everything" is the absence of a filter,
+        // and the neutral keeps it in the same stone family as the task rows.
+        selectableRow(tint: .gray, selected: isSelected(nil)) {
             select(nil)
         } content: {
             rowLabel(
@@ -271,7 +304,7 @@ struct ProjectsSidebar: View {
                         // White on the highlight, its own colour off it.
                         .foregroundStyle(isSelected(nil)
                             ? AnyShapeStyle(.white)
-                            : AnyShapeStyle(Tint.blue.ink))
+                            : AnyShapeStyle(Tint.gray.ink))
                         .frame(width: 22)
                         // Decorative: the row's title says the same thing.
                         .accessibilityHidden(true)
