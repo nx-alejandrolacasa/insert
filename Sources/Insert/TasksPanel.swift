@@ -222,6 +222,9 @@ private struct TaskCardView: View {
 
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
+    /// The notes editor's caret/selection, held here so `focusForEntry()` can
+    /// place it; the editor writes the user's own selection back through it.
+    @State private var bodySelection: TextSelection?
 
     init(task: TaskItem, showsProjectChips: Bool) {
         self.task = task
@@ -669,7 +672,12 @@ private struct TaskCardView: View {
                     .allowsHitTesting(false)
             }
 
-            MarkdownEditor(text: $draft.body, font: .callout, focused: $bodyFocused)
+            MarkdownEditor(
+                text: $draft.body,
+                font: .callout,
+                focused: $bodyFocused,
+                selection: $bodySelection
+            )
                 // Esc leaves the editor, matching the title field.
                 .onKeyPress(.escape) {
                     exitEdit()
@@ -749,12 +757,21 @@ private struct TaskCardView: View {
     }
 
     /// Put the cursor where it's most useful: the title for a brand-new task,
-    /// otherwise straight into the notes.
+    /// otherwise the end of the notes.
+    ///
+    /// Deferred by one main-actor turn for the reason spelled out on
+    /// `NoteCardView.focusForEntry()` — the fields are created by the very
+    /// update that calls this, so an immediate `@FocusState` write is dropped and
+    /// the row opens with no caret and no Esc.
     private func focusForEntry() {
-        if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            titleFocused = true
-        } else {
-            bodyFocused = true
+        Task { @MainActor in
+            guard isEditing else { return }
+            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                titleFocused = true
+            } else {
+                bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+                bodyFocused = true
+            }
         }
     }
 

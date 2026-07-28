@@ -21,8 +21,12 @@ struct MarkdownEditor: View {
     var scrollable = false
     /// Owned by the caller, which decides when the editor takes focus.
     @FocusState.Binding var focused: Bool
-
-    @State private var selection: TextSelection?
+    /// Owned by the caller as well, so that when it hands the editor focus it
+    /// can also say where the caret goes — a card opening for editing puts it at
+    /// the end of the text rather than at offset 0. Set it only alongside a
+    /// programmatic focus: writing it on every focus change would stamp on the
+    /// position a click inside the editor just chose.
+    @Binding var selection: TextSelection?
 
     var body: some View {
         TextEditor(text: $text, selection: $selection)

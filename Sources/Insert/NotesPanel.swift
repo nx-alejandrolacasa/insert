@@ -259,6 +259,10 @@ private struct NoteCardView: View {
     @State private var measuredBodyHeight: CGFloat = 34
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
+    /// The body editor's caret/selection, held here so `focusForEntry()` can
+    /// place it. Left alone otherwise — the editor writes the user's own
+    /// selection back through it.
+    @State private var bodySelection: TextSelection?
 
     init(note: Note, showsProjectChips: Bool) {
         self.note = note
@@ -612,7 +616,7 @@ private struct NoteCardView: View {
                     .allowsHitTesting(false)
             }
 
-            MarkdownEditor(text: $draft.body, focused: $bodyFocused)
+            MarkdownEditor(text: $draft.body, focused: $bodyFocused, selection: $bodySelection)
                 .frame(height: max(34, measuredBodyHeight))
                 // Esc leaves the Markdown editor, matching the title field.
                 .onKeyPress(.escape) {
@@ -681,12 +685,30 @@ private struct NoteCardView: View {
     }
 
     /// Put the cursor where it's most useful: the title for a brand-new note,
-    /// otherwise straight into the body.
+    /// otherwise the end of the body, ready to keep writing.
+    ///
+    /// **The one-turn delay is the point.** Called straight from
+    /// `onChange(of: isEditing)` this wrote focus into fields that did not exist
+    /// yet — the same update swaps the rendered Markdown for the editor, and a
+    /// `@FocusState` write naming a field SwiftUI hasn't registered is dropped
+    /// silently. That was the first click doing nothing visible: the card opened
+    /// with no caret, and Esc — which the editor answers through `onKeyPress` —
+    /// never reached it either, because nothing was focused to receive the key.
+    /// The second click then focused the field the AppKit way and both worked.
+    /// Deferring to the next main-actor turn puts the write after the editor is
+    /// in the hierarchy (and after the click's own responder handling, which is
+    /// the other thing that can take focus straight back).
     private func focusForEntry() {
-        if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            titleFocused = true
-        } else {
-            bodyFocused = true
+        Task { @MainActor in
+            guard isEditing else { return }
+            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                titleFocused = true
+            } else {
+                // The caret would otherwise land at offset 0, in front of the
+                // text, which reads as an editor that isn't ready.
+                bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+                bodyFocused = true
+            }
         }
     }
 

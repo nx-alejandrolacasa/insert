@@ -215,6 +215,23 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   number — and it keeps measuring in view mode, without which the first open of a
   long task grew twice, once to the floor and again when the real height arrived.
   Note cards still snap while typing; only the mode change is animated there.
+- **Focus on entry is deferred by a turn, and has to be.** The click that opens a
+  card is also the update that creates the editor, so `focusForEntry()` writing
+  `@FocusState` straight from `onChange(of: isEditing)` named a field SwiftUI had
+  not registered yet and was dropped in silence. The card opened with no caret and
+  Esc did nothing either — the editor answers Esc through `onKeyPress`, which needs
+  focus to fire — so it took a *second* click, which focused the text view the
+  AppKit way, to make either work. Both cards now wrap the write in
+  `Task { @MainActor in }`, which lands it after the editor exists and after the
+  click's own responder handling, the other thing that can take focus straight
+  back. Entry also places the caret at the **end of the body**, through the
+  `selection` binding `MarkdownEditor` hands its owner; set it *only* alongside a
+  programmatic focus, since writing it on every focus change stamps on the position
+  a click inside the editor just chose. Not the character you clicked, and that is
+  as close as this gets: view mode shows `MarkdownText`'s render, which strips
+  `**`/`#`, draws bullets as circles and joins hard-wrapped lines into one
+  paragraph, so a point in the preview has no source character to map to.
+  Landing in the right *block* would mean `MarkdownParser` carrying source ranges.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three
