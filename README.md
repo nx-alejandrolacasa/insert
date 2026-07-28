@@ -8,7 +8,7 @@
 
 **Insert** is a three-column macOS app (macOS 26, SwiftUI, Liquid Glass):
 
-- **Projects** on the left — your projects and topics, each with an emoji and a live `X notes · Y tasks` count. Sort by latest-used or A–Z, add/rename/delete.
+- **Projects** on the left — your projects and topics, each with an emoji and a live `X notes · Y tasks` count. Drag them into whatever order you like, add/rename/delete.
 - **Notes** in the middle — shown as scrollable "islands", each with a title, emoji and a Markdown body. Pick a type (Note, Meeting, Feedback, Staffing… or your own) with colored pills. Sort by created/updated and filter by type.
 - **Tasks** on the right — tick them off, give them due dates, and tag one or more projects by typing `#`. Filter by all / pending / done.
 
@@ -16,6 +16,10 @@ The search field in the toolbar filters all three columns at once, and hiding th
 sidebar gives notes and tasks half the window each.
 
 A **menu-bar item** shows your pending tasks at a glance — a short "past · today · upcoming" summary, grouped into Overdue / Today / Up Next / Unscheduled — and lets you tick tasks off without opening the app.
+
+Settings → Tasks can also send you a **daily reminder** at a time you pick — "You
+have 3 tasks for today", and nothing at all on a day with nothing due. It never
+names a task, and Insert has to be running to send it.
 
 Everything is saved as **plain Markdown** in a folder you choose, so your data stays yours and stays editable anywhere.
 

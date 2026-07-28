@@ -99,6 +99,7 @@ Sources/Insert/
   MarkdownFiles.swift         model <-> Markdown + filename conventions
   DirectoryWatcher.swift      debounced FS watcher (external edits)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
+  TaskReminder.swift          the once-a-day "N tasks for today" notification
   Formatting.swift            the locale the UI presents in (English)
   BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies
@@ -111,7 +112,8 @@ Resources/AppIcon.icns        generated flat icon, the fallback
 Tests/InsertTests/            the one test target — see below
 ```
 
-`swift test --disable-sandbox` runs two suites. `StorageLayoutTests` drives the real
+`swift test --disable-sandbox` runs two suites over the data on disk.
+`StorageLayoutTests` drives the real
 `Library` against a throwaway root — the legacy-flat-layout migration, filing tasks
 under `Done/`, writes that must not lose a file, the retention purge, and that the
 parallel load is complete and ordered. `DateCodingTests` pins the date reader and
@@ -122,6 +124,14 @@ Both exist because this code moves the user's Markdown around, where a mistake i
 data loss rather than a wrong pixel; between them they caught three real bugs that
 reading the code had not. `swift build` skips the test target, so neither `build.sh`
 nor CI is affected.
+
+Two more suites cover the pure functions the UI is built on, for the reason given
+under "Return continues a list": the interesting logic there is arithmetic over
+offsets or dates, and arithmetic can be tested without a view.
+`MarkdownFormattingTests` pins the ⌘B/⌘I wrapping and the list-continuation rules;
+`ReminderScheduleTests` pins when the daily reminder is owed — the minute either
+side of the time itself, the grace window, and the once-a-day rule — since the
+alternative is waiting until tomorrow morning to find out.
 
 ## Design intent
 
@@ -152,7 +162,61 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
 - **Search** — the toolbar field filters all three columns at once (projects,
   notes and tasks), not just the focused one.
 - **Projects** — each row shows its emoji, name and a live `X notes · Y tasks`
-  subtitle. Sorting is latest-used or A–Z.
+  subtitle. **The order is the user's own**: rows are dragged into place, and
+  `Projects.md`'s line order *is* that order, so there is no sort control and
+  nothing to persist beyond the file the list already lives in. (`lastUsed` is
+  still recorded per project, and nothing reads it — it outlived the "Latest used"
+  sort it was added for.)
+  **The drag is a `DragGesture`, and both of the platform's own ways of doing it
+  were observed not to work here.** `ForEach.onMove` gives an AppKit reorder for
+  free and no row could be picked up; `.draggable` per row plus `.dropDestination`
+  per gap, the modern spelling of the same thing, didn't lift a row either. Those
+  two failures are the finding. The *explanation* — that both begin a native drag
+  session from the row's **mouse-down**, and the row is a `Button`, because the
+  selection pill is Insert's own rather than the system's, so the button answers
+  that mouse-down and no session ever starts — fits, but it was never tested; the
+  reorder was rewritten instead of instrumented. Don't repeat it as fact. What
+  would settle it is one throwaway row that isn't a `Button` with `.draggable` on
+  it. What stands on its own: a gesture *does* reach these rows (this file's own
+  note that an `onTapGesture` on a row *swallows* the list's click is the same
+  fact from the other side), so `reorderable` does it by
+  hand: `.simultaneousGesture(DragGesture(minimumDistance: 4))`, each row
+  reporting its frame with `onGeometryChange`, and the pointer's y read against
+  those frames' **midpoints** — the rule every reorderable list on the platform
+  uses, and the reason nothing needs to know a row's height in points.
+  `simultaneousGesture` and a non-zero `minimumDistance` are both load-bearing:
+  below the threshold the gesture never recognises, so the click that selects a
+  project still lands, and "simultaneous" is what keeps the button and the drag
+  from competing for one event stream.
+  Both measurements are `.global`, and a **named** coordinate space measurably
+  isn't a substitute. With `.coordinateSpace(.named(…))` on the `List` and both the
+  row frames and the gesture asking for that name, the only position a project
+  could be dragged to was the **top of the list** — which is what you get if both
+  sides are really measuring *row-local* coordinates, since every row's local frame
+  is then the same rectangle and the pointer is always above the first midpoint.
+  Switching both to `.global` fixed it. That the name fails to reach the rows
+  because a list hosts each one separately is the likely reason and is not
+  something this repo has verified. `.global` needs no registration and does
+  resolve inside a row, which the sidebar header's own measurement already relies
+  on — reason enough to use it here without settling the rest.
+  Three details worth keeping. The insertion line is drawn **inside** a row's
+  bounds (top edge for the gap above it, bottom edge of the last row for the gap
+  no row owns), because an overlay that leaves its row is the table cell's to clip
+  and half a line is worse than none. The row in flight **fades rather than
+  moves**, for the same clipping reason. And `gap(at:)` returns `nil` — no line,
+  no write — both for the two gaps a row is already in and when *no* frame has
+  been measured yet, since the fallback there reads as "past the last row" and
+  would have any drag at all send the project to the end.
+  Reordering is off while **searching**: the move would be well defined (gaps are
+  named by row, not by offset), but the list on screen is a subset, so "above this
+  row" would jump the project over rows the search is hiding, and there'd be no
+  visible end of the list to aim at. `Library.moveProject(_:before:)` owns the
+  off-by-one (`move(fromOffsets:toOffset:)` counts the source itself, so "stay
+  put" is `from + 1`) and refuses a move that changes nothing rather than
+  rewriting the file; `StorageLayoutTests` covers both ends of that and the round
+  trip through the Markdown. The reorder **is** animated, unlike the notes
+  column's re-sort: here it's the same rows in a new order, where there the whole
+  list is replaced on the frame it happens and there is nothing left to animate.
 - **Notes** — with no project selected, all notes are shown and each island
   displays the project it belongs to. Default types are Note (📝, blue),
   Meeting (🤝🏻, yellow), Feedback (💬, purple) and Staffing (👥, green); users
@@ -188,6 +252,138 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   task text, it only adds the assignment. Assignments appear as chips below and
   are removed by double-clicking them (or via the chip's context menu — the
   double-click is deliberately hard to trigger, so it can't be the only route).
+  **A task doesn't move while you're looking at it either**, the notes column's
+  rule read off a different sort key. Tasks sort pending-first, then by due date,
+  then newest — and *both* mutable halves of that are things a row changes about
+  itself, so `TaskPins` freezes the pair the moment it changes and
+  `Library.tasks(…, pinned:)` sorts by the frozen value. The pins drop only when
+  the list is being rebuilt anyway (project, task filter, search — there is no task
+  sort setting, so that's the whole list), same as `NotePins`, and `pin(_:)` is the
+  same no-op on an already-pinned row.
+  The due-date popover is what this was reported from, and the shape of the
+  report is worth keeping: **the preset pills "set the wrong date" while the month
+  grid was fine.** Neither was true — due date is the list's *main* key, so dating
+  an undated task sent it from the tail of the list to wherever that date belongs,
+  and a pill dismisses the popover on the click that sets it, so the row left at
+  the same instant the popover did and a *different*, still-undated task slid under
+  the cursor. Two tasks are often the same shape, so that read as the click having
+  landed wrong. The grid looked fine only because it leaves the popover open, which
+  kept the row it was anchored to in view. Filtering is deliberately **not** pinned:
+  under "Pending" a task you tick still leaves the list, because it is no longer one
+  of the things that view is showing — the same line `NotePins` draws against the
+  notes column's type filter. Covered by `StorageLayoutTests`.
+- **The daily reminder counts, and says nothing else.** Settings → Tasks can post
+  one notification a day — "You have 3 tasks for today" — off by default, at a time
+  the user picks (09:00 to begin with, and the picker allows any hour rather than
+  policing "morning"). It counts the same bucket the menu bar labels **Today**:
+  due today, still pending, with **overdue work deliberately left out**, so the
+  sentence means exactly what it says. A day with nothing due sends nothing, and no
+  notification ever names a task or a project — a banner is read on a lock screen
+  and over a shoulder, and a count is the most that is always safe to show there.
+  **It only arrives while Insert is running, and that is the design.** The
+  alternative is a `UNCalendarNotificationTrigger`, which the system delivers
+  whether the app is running or not — but a trigger's text is fixed when the request
+  is added, and there is no way to keep a count fresh in one: a task due tomorrow
+  becomes a task due today at midnight, with nothing happening in the app to
+  re-schedule on. So the count is computed at the moment it is delivered, which
+  means someone has to be there to compute it. Insert is a menu-bar app that stays
+  open; overstating the day's work is worse than a reminder that needs the app
+  running.
+  Which is why the timer **ticks every minute and asks** whether the reminder is
+  owed (`ReminderSchedule.isDue`), rather than being aimed at the reminder's exact
+  minute: a timer aimed at 09:00 has to be re-aimed on wake from sleep, on a
+  timezone change and on a clock change, where a comparison against `Date()` is
+  right through all three by construction. Three details carry the behaviour, and
+  all three are pinned by `ReminderScheduleTests`. There is a **two-hour grace
+  window**, so a Mac woken at 09:40 still says what the day holds and one woken at
+  16:00 doesn't, since by then the day is the thing being reminded about. The
+  "already told you" stamp is a **date, not a flag**, compared with
+  `isDate(_:inSameDayAs:)`, which is what keeps a relaunch at 09:05 quiet. And it is
+  stamped **even when the day is clear** — otherwise dating a task for today at
+  10:30 would earn an unprompted notification seconds later, from a feature the user
+  thinks of as a morning thing.
+  `ReminderSchedule.time(_:on:)` builds the day's moment from explicit components
+  rather than `Calendar.date(bySettingHour:minute:second:of:)`, which resolves the
+  *next* matching time and answers "tomorrow at 09:00" when asked in the afternoon —
+  exactly the case that has to come back "not due".
+  **Not verified: that a self-signed build can post at all.** `build.sh` signs with
+  a self-signed certificate and falls back to ad-hoc, and notification authorization
+  is one of the things macOS can decline on that basis. Nothing assumes it works — a
+  refused authorization or a rejected `add` is logged and the app is otherwise
+  unaffected — but if the reminder never appears, the signature is the first thing to
+  rule out, ahead of the schedule.
+- **Return continues a list** — in any Markdown body (note card, task card),
+  Return on `- `, `* `, `+ `, `1. `/`1) ` or `- [ ] ` opens the next item with the
+  same marker and indent, incrementing ordered numbers and continuing a ticked
+  `- [x]` as an unchecked `- [ ]`. Return on an item with **no content** ends the
+  list instead of adding an empty one to it. The rest of the list is never
+  renumbered — Markdown renders it right either way, and rewriting lines the
+  caret isn't on is how an editor loses text. ⇧Return is the plain newline that
+  leaves a list without ending it.
+  The rules are a pure function (`MarkdownFormatting.listReturn`) over character
+  offsets, testable without a view like the ⌘B/⌘I toggles beside it and pinned by
+  `MarkdownFormattingTests`.
+  Return is caught by a **local `NSEvent` monitor** (`MarkdownReturn`), not
+  `onKeyPress` and not an invisible `keyboardShortcut` button: an unmodified
+  Return carries no key equivalent, and the text view consumes it as
+  `insertNewline(_:)` before SwiftUI's key-press handlers see it — the wall
+  `ProjectHashField` documents for Tab and Return, hit again here.
+  The monitor is **one, app-wide**, installed from `AppDelegate`, not one per
+  editor, and it reads the **first responder** rather than `@FocusState` and the
+  `TextSelection` binding. It was written the other way first, and the rewrite
+  happened while chasing a "nothing happens" report that turned out to be Return
+  pressed on lines that weren't list items — so **the first version was never
+  shown to be broken**, and "those bindings can't be read from an `NSEvent`
+  monitor" is a hypothesis that went untested. Don't repeat it as fact. What
+  stands on its own is the shape: the text view holds the text and the caret, so
+  nothing has to ask SwiftUI for state outside a view update, and there's nothing
+  to gate on focus, because the first responder *is* the focused editor.
+  And the edit is applied **through the text view**
+  (`shouldChangeText` → `replaceCharacters` → `didChangeText`), not by assigning
+  the `text` binding, which is what gives it native undo and lets SwiftUI pull
+  the new string back the same way it does for typing.
+  **Field editors are skipped**, which is the line between a multiline body and a
+  single-line field where Return submits — the note title and the `#project`
+  field keep their own behaviour. The event is swallowed *only* when `listReturn`
+  returns an edit, so Return is ordinary everywhere else.
+- **Cards read in SF Pro Rounded with the one-storey `a`** (`Card` in
+  `Theme.swift`). Two separate things, and it takes both — this is the bit that
+  was got wrong first. The **rounded design**
+  (`NSFontDescriptor.withDesign(.rounded)`) softens the terminals but **keeps the
+  two-storey `a`**; the round single-storey `a` is a *stylistic alternate*,
+  `Alternative Stylistic Sets` → `One storey a`, applied through
+  `.featureSettings` as type 35 / selector 14. Those numbers were read off the
+  font's own table with `CTFontCopyFeatures`, which is also how to check them
+  again rather than trusting this paragraph. Both are the system font, so nothing
+  is bundled and the no-dependencies rule is untouched.
+  Because the alternate can only be asked for through a descriptor, **the AppKit
+  font is the real one** and the SwiftUI `Font` is `Font(nsFont)` derived from it
+  — and **weight has to be baked in** (`Card.font(.title3, weight: .bold)`), never
+  added afterwards with `.weight()`/`.fontWeight()`, which resolves to a
+  different font and silently drops the alternate. Inline `**bold**` inside a
+  `Text(AttributedString)` still works; that was checked with `ImageRenderer`
+  rather than assumed.
+  Scope is the **content** of a card — title and body, rendered and source,
+  headings included. Chrome stays on the default design: panel headers, chips,
+  pills, the due badge, the metadata footer. Fenced code stays monospaced.
+  `Card` hands out **both** a SwiftUI `Font` and the matching `NSFont`, and both
+  are needed: the `NSFont` is what `MarkdownText` measures `blankLine` from and
+  what the cards' hidden sizing proxies lay out in, so taking the `Font` alone
+  would leave every card's height computed in a face it no longer draws.
+- **The preview and the source keep the same rhythm.** A card shows
+  `MarkdownText` in view mode and the raw Markdown in edit mode, and the flip
+  between them is the one moment the two are compared — so they are sized and
+  spaced to match, and drift here shows up as the card changing shape under the
+  cursor. Two things do it. `MarkdownText` takes a **`textStyle`** rather than
+  hardcoding `.body`, because the note card's editor is `.body` and the task
+  card's is `.callout`, and the task card was previewing a size it never edited
+  at. And its **block spacing is one blank line**, measured off that same font
+  (`blankLine`) instead of written down: two paragraphs are separated in the
+  source by a blank line at full line height, so a flat 8pt made every paragraph
+  break tighten on entering view mode. List items get **0** for the same reason
+  read the other way — they sit on consecutive source lines with nothing between
+  them, so the 4pt they used to add had lists loosening while paragraphs
+  tightened.
 - **Cards opening and closing** — a card's **height** animates
   (`Metrics.cardModeDuration`), and its **content does not**. Both matter, and
   each took a wrong turn first.

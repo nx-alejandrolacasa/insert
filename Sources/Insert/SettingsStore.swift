@@ -51,6 +51,34 @@ final class SettingsStore {
         didSet { defaults.set(showMenuBar, forKey: Keys.showMenuBar) }
     }
 
+    /// Whether Insert posts one notification a day counting the tasks due that day.
+    /// Off by default: it needs the system's permission, and asking for that is
+    /// something the user should have started (see `TaskReminder`).
+    var dailyReminder: Bool {
+        didSet { defaults.set(dailyReminder, forKey: Keys.dailyReminder) }
+    }
+
+    /// When that reminder goes out, as minutes since midnight.
+    ///
+    /// Minutes rather than a `Date`: the setting is a time of day, and storing a
+    /// date would carry a day and a timezone with it that would then have to be
+    /// ignored on every read. `reminderTime` puts a `DatePicker`'s `Date` back on
+    /// top of it.
+    var reminderMinutes: Int {
+        didSet { defaults.set(reminderMinutes, forKey: Keys.reminderMinutes) }
+    }
+
+    /// `reminderMinutes` as a point on today, which is the shape `DatePicker`
+    /// binds to. Reading and writing both go through `reminderMinutes`, so
+    /// observation and persistence come along for free.
+    var reminderTime: Date {
+        get { ReminderSchedule.time(reminderMinutes, on: Date()) ?? Date() }
+        set {
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+            reminderMinutes = (parts.hour ?? 9) * 60 + (parts.minute ?? 0)
+        }
+    }
+
     /// Wash each task row in its due badge's colour — orange overdue, green
     /// today, purple upcoming. Undated and done rows keep the neutral stone,
     /// same as when this is off.
@@ -78,6 +106,8 @@ final class SettingsStore {
         static let weekStyle = "weekStyle"
         static let doneTaskRetention = "doneTaskRetention"
         static let showMenuBar = "showMenuBar"
+        static let dailyReminder = "dailyReminder"
+        static let reminderMinutes = "reminderMinutes"
         static let dueTintedTasks = "dueTintedTasks"
         static let noteCardDates = "noteCardDates"
         static let taskCardDates = "taskCardDates"
@@ -100,6 +130,10 @@ final class SettingsStore {
         // never opens Settings looks exactly as it did before backdrops existed.
         backdrop = Backdrop(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? .plain
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
+        dailyReminder = defaults.object(forKey: Keys.dailyReminder) as? Bool ?? false
+        // 09:00 — the reminder is a morning one by default, whatever the picker
+        // then allows.
+        reminderMinutes = defaults.object(forKey: Keys.reminderMinutes) as? Int ?? 9 * 60
         dueTintedTasks = defaults.object(forKey: Keys.dueTintedTasks) as? Bool ?? false
         // Both seeded from the toggle pair this setting used to be — which also
         // covers the fresh install: absent toggles read as "last edited only",

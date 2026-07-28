@@ -12,8 +12,9 @@ struct Project: Identifiable, Hashable, Codable {
     /// Colours that symbol, so projects are told apart at a glance.
     var tint: Tint
     var created: Date
-    /// Bumped whenever the project (or something under it) is used — drives the
-    /// "Latest used" sort.
+    /// Bumped whenever the project (or something under it) is used. Kept in the
+    /// file, read by nothing: the sidebar's rows are in the order they were dragged
+    /// into, which outlived the "Latest used" sort this was added for.
     var lastUsed: Date
 
     init(id: UUID = UUID(), name: String, symbol: String = SymbolCatalog.defaultProject,
@@ -304,6 +305,46 @@ struct NotePins: Equatable {
     /// The `updated` this note sorts by: its pinned value, or the live one.
     func key(for note: Note) -> Date {
         updated[note.id] ?? note.updated
+    }
+}
+
+/// `NotePins` for the tasks column: holds a task's place for as long as you stay
+/// in one view of the list.
+///
+/// The same problem read off a different sort key. Tasks sort pending-first, then
+/// by due date, and **both halves of that are things a row can change under your
+/// cursor**: giving an undated task a date sent it from the tail of the list to
+/// wherever that date belongs, and ticking one dropped it into the done block. The
+/// due-date popover made it worst — it dismisses on the click that sets the date,
+/// so the row left at the same instant the popover did, and since two tasks are
+/// often the same shape it read as the click having landed on the wrong card.
+///
+/// So the pair is frozen the moment the row changes it, and the list re-sorts only
+/// when it is being rebuilt anyway — a different project, task filter or search.
+/// See `Library.tasks(forProject:filter:search:pinned:)`.
+///
+/// Sorting only, never filtering: under "Pending" a task you tick still leaves the
+/// list, because it is no longer one of the things that view is showing. That's the
+/// same line `NotePins` draws against the notes column's type filter.
+struct TaskPins: Equatable {
+    /// The two components of the task order a row can change: `created` is the
+    /// third and can't be edited, so it never needs pinning.
+    struct Key: Equatable {
+        var done: Bool
+        var due: Date?
+    }
+
+    private var keys: [UUID: Key] = [:]
+
+    /// Records the task's current place, unless it is already pinned — setting a
+    /// date and *then* ticking the task must keep the slot it had before either.
+    mutating func pin(_ task: TaskItem) {
+        if keys[task.id] == nil { keys[task.id] = Key(done: task.done, due: task.due) }
+    }
+
+    /// The `done` / `due` this task sorts by: its pinned pair, or the live one.
+    func key(for task: TaskItem) -> Key {
+        keys[task.id] ?? Key(done: task.done, due: task.due)
     }
 }
 

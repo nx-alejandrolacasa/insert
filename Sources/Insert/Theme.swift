@@ -212,6 +212,60 @@ enum Stone {
     static let line = base.opacity(0.18)
 }
 
+// MARK: - The reading typeface
+
+/// The typeface note and task **cards** read and write in: the system font in
+/// its **rounded** design (SF Pro Rounded), whose lowercase `a` is the
+/// single-storey round one — the shape Apple Notes uses, and the reason this
+/// exists.
+///
+/// It is a *system design*, not a bundled face — `Font.system(_:design:)` and
+/// `NSFontDescriptor.withDesign(.rounded)` — so it costs no resource, tracks the
+/// system's own weights and sizes, and keeps the "no third-party dependencies"
+/// rule intact.
+///
+/// Scope is deliberate: the **content** of a card, meaning its title and its
+/// body, in both the rendered and the source view. The window's chrome — panel
+/// headers, chips, pills, the due badge, the metadata footer — stays on the
+/// default design, so the rounded face reads as "this is the writing" rather
+/// than as a restyle of the app.
+///
+/// Both halves matter and must agree. `Card.font` is what SwiftUI draws with;
+/// `Card.nsFont` is the same face as AppKit, which is what `MarkdownText`
+/// measures its spacing from and what the cards' hidden sizing proxies are laid
+/// out in. Take one and not the other and the card's height stops matching its
+/// text.
+enum Card {
+    /// `Alternative Stylistic Sets` → `One storey a`, read off the font's own
+    /// feature table (`CTFontCopyFeatures`) rather than guessed. SF ships the
+    /// round single-storey `a` as an alternate glyph, so it costs nothing but
+    /// asking — and the rounded *design* alone doesn't give it, which is the
+    /// thing that's easy to get wrong here: SF Pro Rounded softens the terminals
+    /// and keeps the two-storey `a`.
+    private static let oneStoreyA: [NSFontDescriptor.FeatureKey: Int] = [
+        .typeIdentifier: 35,     // kStylisticAlternativesType
+        .selectorIdentifier: 14, // stylistic set 7 "on" — "One storey a"
+    ]
+
+    /// Text styles are `NSFont.TextStyle` throughout, not SwiftUI's, because the
+    /// alternate can only be asked for through a font descriptor — so the AppKit
+    /// font is the real one and the SwiftUI `Font` is derived from it. Weight is
+    /// baked in for the same reason: `.weight()`/`.fontWeight()` applied *after*
+    /// a descriptor-built font is a different font, and would drop the alternate.
+    static func nsFont(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> NSFont {
+        let base = NSFont.preferredFont(forTextStyle: style)
+        let sized = weight.map { NSFont.systemFont(ofSize: base.pointSize, weight: $0) } ?? base
+        var descriptor = sized.fontDescriptor
+        if let rounded = descriptor.withDesign(.rounded) { descriptor = rounded }
+        descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
+        return NSFont(descriptor: descriptor, size: sized.pointSize) ?? sized
+    }
+
+    static func font(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> Font {
+        Font(nsFont(style, weight: weight))
+    }
+}
+
 // MARK: - Design tokens
 
 /// Shared spacing / radius constants so panels feel like one system.

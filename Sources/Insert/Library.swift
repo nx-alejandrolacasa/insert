@@ -489,7 +489,8 @@ final class Library {
         persistProjects()
     }
 
-    /// Bumps `lastUsed` to now (drives the "Latest used" sort).
+    /// Bumps `lastUsed` to now. Recorded only: the sidebar's order is the manual
+    /// one (see `moveProject(_:before:)`), so nothing sorts by this.
     func touchProject(id: UUID) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].lastUsed = Date()
@@ -673,7 +674,15 @@ final class Library {
     }
 
     /// Tasks for a project (`nil` = all), filtered by state + search.
-    func tasks(forProject projectID: UUID?, filter: TaskFilter, search: String) -> [TaskItem] {
+    /// Tasks for a project (`nil` = all), filtered and sorted. `pinned` holds the
+    /// place of rows whose due date or done state changed while you were looking
+    /// at them — see `TaskPins`.
+    func tasks(
+        forProject projectID: UUID?,
+        filter: TaskFilter,
+        search: String,
+        pinned: TaskPins = TaskPins()
+    ) -> [TaskItem] {
         var result = tasks
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
         switch filter {
@@ -688,20 +697,47 @@ final class Library {
             }
         }
         // Pending first, then by due date (soonest, undated last), then newest.
-        return result.sorted { taskOrder($0) < taskOrder($1) }
+        // The filtering above reads the *live* `done`; only the order below is
+        // pinned. See `TaskPins`.
+        return result.sorted { taskOrder($0, pinned: pinned) < taskOrder($1, pinned: pinned) }
     }
 
-    private func taskOrder(_ t: TaskItem) -> (Int, TimeInterval, TimeInterval) {
-        let donePenalty = t.done ? 1 : 0
-        let dueKey = t.due?.timeIntervalSince1970 ?? Date.distantFuture.timeIntervalSince1970
+    private func taskOrder(_ t: TaskItem, pinned: TaskPins) -> (Int, TimeInterval, TimeInterval) {
+        let key = pinned.key(for: t)
+        let donePenalty = key.done ? 1 : 0
+        let dueKey = key.due?.timeIntervalSince1970 ?? Date.distantFuture.timeIntervalSince1970
         return (donePenalty, dueKey, -t.created.timeIntervalSince1970)
     }
 
-    /// Reorders projects (drag-and-drop in the sidebar). The array order is the
-    /// canonical order and is persisted straight to `Projects.md`.
-    func moveProjects(fromOffsets source: IndexSet, toOffset destination: Int) {
-        projects.move(fromOffsets: source, toOffset: destination)
+    /// Reorders projects (drag-and-drop in the sidebar): `id` moves into the gap
+    /// immediately *before* `beforeID`, or to the end of the list when that is nil.
+    /// The array order is the canonical order and is persisted straight to
+    /// `Projects.md`, whose line order it is.
+    ///
+    /// Ids rather than offsets, because what the sidebar has to hand are two rows —
+    /// the one being dragged and the one it was dropped on — and a filtered list
+    /// makes a visible offset a different number from the one this array wants.
+    /// Translating a pair of rows into `move(fromOffsets:toOffset:)` also keeps
+    /// that API's off-by-one (a destination past the source counts the source
+    /// itself, so "stay put" is `from + 1`, not `from`) in one place.
+    ///
+    /// Returns whether anything moved, so a drop that changes nothing can be
+    /// reported as refused rather than as a write.
+    @discardableResult
+    func moveProject(_ id: UUID, before beforeID: UUID?) -> Bool {
+        guard let from = projects.firstIndex(where: { $0.id == id }) else { return false }
+        let destination: Int
+        if let beforeID {
+            guard let target = projects.firstIndex(where: { $0.id == beforeID }) else { return false }
+            destination = target
+        } else {
+            destination = projects.count
+        }
+        // Onto itself, or into the gap it already fills.
+        guard destination != from, destination != from + 1 else { return false }
+        projects.move(fromOffsets: IndexSet(integer: from), toOffset: destination)
         persistProjects()
+        return true
     }
 
     // MARK: - Global search

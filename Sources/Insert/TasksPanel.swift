@@ -21,6 +21,11 @@ struct TasksPanel: View {
     @Environment(AppState.self) private var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// A row whose due date or done state you change keeps the place it had, so it
+    /// doesn't leave under the cursor. Held until the list is rebuilt for another
+    /// reason. See `TaskPins`.
+    @State private var pins = TaskPins()
+
     var body: some View {
         // Two-way binding for the segmented state filter.
         @Bindable var appState = appState
@@ -28,7 +33,8 @@ struct TasksPanel: View {
         let tasks = library.tasks(
             forProject: appState.selectedProjectID,
             filter: appState.taskFilter,
-            search: appState.searchText
+            search: appState.searchText,
+            pinned: pins
         )
 
         ScrollViewReader { proxy in
@@ -54,7 +60,8 @@ struct TasksPanel: View {
                             ForEach(tasks) { task in
                                 TaskCardView(
                                     task: task,
-                                    showsProjectChips: appState.selectedProjectID == nil
+                                    showsProjectChips: appState.selectedProjectID == nil,
+                                    pins: $pins
                                 )
                                 .id(task.id)
                             }
@@ -69,6 +76,14 @@ struct TasksPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The list re-sorts when you change what it's showing, and only then — the
+        // same rule the notes column follows: on those frames it is being rebuilt
+        // from scratch anyway, so a task taking its new place is invisible rather
+        // than a row leaving under your cursor. There is no task sort setting, so
+        // these three are the whole list.
+        .onChange(of: appState.selectedProjectID) { pins = TaskPins() }
+        .onChange(of: appState.taskFilter) { pins = TaskPins() }
+        .onChange(of: appState.searchText) { pins = TaskPins() }
     }
 
     /// Creates a task in the current project, then scrolls to and opens it —
@@ -201,6 +216,9 @@ private struct TaskCardView: View {
     let task: TaskItem
     /// Only the aggregate view shows which project(s) a task belongs to.
     let showsProjectChips: Bool
+    /// The column's sort pins, written to before this row changes its own due date
+    /// or done state so it keeps the place it is being looked at in.
+    @Binding var pins: TaskPins
 
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
@@ -226,9 +244,10 @@ private struct TaskCardView: View {
     /// place it; the editor writes the user's own selection back through it.
     @State private var bodySelection: TextSelection?
 
-    init(task: TaskItem, showsProjectChips: Bool) {
+    init(task: TaskItem, showsProjectChips: Bool, pins: Binding<TaskPins>) {
         self.task = task
         self.showsProjectChips = showsProjectChips
+        _pins = pins
         _draft = State(initialValue: task)
     }
 
@@ -354,7 +373,7 @@ private struct TaskCardView: View {
                     placeholder: "Task  (type # to tag a project)",
                     text: $draft.title,
                     assigned: $draft.projectIDs,
-                    font: .body.weight(.medium),
+                    font: Card.font(.body, weight: .medium),
                     // Return commits the quick-capture flow: type, Return, done.
                     onSubmit: { exitEdit() },
                     onEscape: { exitEdit() },
@@ -368,7 +387,7 @@ private struct TaskCardView: View {
                     .controlSize(.small)
             } else {
                 Text(draft.title.isEmpty ? "Untitled" : draft.title)
-                    .font(.body.weight(.medium))
+                    .font(Card.font(.body, weight: .medium))
                     .foregroundStyle(draft.done ? Color.secondary : Color.primary)
                     .strikethrough(draft.done)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -404,6 +423,8 @@ private struct TaskCardView: View {
     /// and the debounce cancelled first, so a stale snapshot can't later revert
     /// the toggle; `draft` is kept in sync immediately to avoid a flash.
     private func toggleDone() {
+        // Before the flip, so the pin records the place the row is in now.
+        pins.pin(task)
         flushSave()
         library.toggleTask(id: draft.id)
         draft.done.toggle()
@@ -517,13 +538,12 @@ private struct TaskCardView: View {
             MonthCalendar(
                 selection: Binding(
                     get: { draft.due ?? Calendar.current.startOfDay(for: Date()) },
-                    set: { draft.due = $0; persistNow() }
+                    set: { setDue($0) }
                 )
             )
 
             Button(role: .destructive) {
-                draft.due = nil
-                persistNow()
+                setDue(nil)
                 showDuePopover = false
             } label: {
                 Label("Clear due date", systemImage: "xmark.circle")
@@ -541,10 +561,23 @@ private struct TaskCardView: View {
 
     private func presetPill(_ preset: DuePreset) -> some View {
         DuePill(label: preset.label, selected: firstMatchingPreset == preset) {
-            draft.due = preset.date(now: Date(), weekStyle: settings.weekStyle)
-            persistNow()
+            setDue(preset.date(now: Date(), weekStyle: settings.weekStyle))
             showDuePopover = false
         }
+    }
+
+    /// Sets (or clears) the due date and writes it straight through.
+    ///
+    /// The pin comes first, and it is what makes the preset pills usable: due date
+    /// is the list's main sort key, so an undated task given a date used to leave
+    /// the tail of the list on the same click that dismissed the popover. The row
+    /// that then sat under the cursor was a *different* task, still undated, so the
+    /// pills read as setting the wrong date — or none — where the month grid, which
+    /// leaves the popover open, looked fine. See `TaskPins`.
+    private func setDue(_ date: Date?) {
+        pins.pin(task)
+        draft.due = date
+        persistNow()
     }
 
     /// Presets can collide — on a Thursday in work-week mode, "Tomorrow" and
@@ -607,7 +640,10 @@ private struct TaskCardView: View {
         if hasBody {
             HStack(alignment: .top, spacing: 6) {
                 if expanded {
-                    MarkdownText(markdown: draft.body)
+                    // `.callout`, matching this card's editor — the note card's
+                    // is `.body`, and a preview that changes size on the way in
+                    // is the thing `textStyle` exists to prevent.
+                    MarkdownText(markdown: draft.body, textStyle: .callout)
                         .padding(.horizontal, 5)
                 } else {
                     bodyPreview
@@ -633,7 +669,7 @@ private struct TaskCardView: View {
 
     private var bodyPreview: some View {
         Text(draft.body)
-            .font(.callout)
+            .font(Card.font(.callout))
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -644,7 +680,7 @@ private struct TaskCardView: View {
                 // The same text laid out unbounded: taller means the preview is
                 // truncating, which is what the chevron is for.
                 Text(draft.body)
-                    .font(.callout)
+                    .font(Card.font(.callout))
                     .fixedSize(horizontal: false, vertical: true)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullBodyHeight = $0 }
@@ -664,7 +700,7 @@ private struct TaskCardView: View {
             // what the empty space is for.
             if draft.body.isEmpty {
                 Text("Notes…")
-                    .font(.callout)
+                    .font(Card.font(.callout))
                     .foregroundStyle(.tertiary)
                     // (5, 0): the editor's first line starts at the very top of
                     // its frame, 5pt in — the placeholder sits on the caret.
@@ -674,7 +710,7 @@ private struct TaskCardView: View {
 
             MarkdownEditor(
                 text: $draft.body,
-                font: .callout,
+                font: Card.font(.callout),
                 focused: $bodyFocused,
                 selection: $bodySelection
             )
@@ -699,7 +735,7 @@ private struct TaskCardView: View {
     /// would report the animated height back to itself.
     private var bodySizingProxy: some View {
         Text(draft.body.isEmpty ? " " : draft.body)
-            .font(.callout)
+            .font(Card.font(.callout))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
             .padding(.horizontal, 5)

@@ -13,6 +13,14 @@ import SwiftUI
 /// the focused text view sees the event, and gating them on focus means two
 /// editors on screen never compete for ⌘B. Placeholders and sizing proxies
 /// stay with the callers, which each have their own.
+///
+/// Return is different, and needs the **local `NSEvent` monitor** below rather
+/// than a fifth button or an `onKeyPress`: an unmodified Return carries no key
+/// equivalent, and the text view consumes it as `insertNewline(_:)` before
+/// SwiftUI's key-press handlers get a look — the same wall `ProjectHashField`
+/// hit with Tab and Return, and solved the same way. The monitor sees the event
+/// before the window dispatches it, and swallows it only when the caret really
+/// is in a list item, so Return keeps its ordinary meaning everywhere else.
 struct MarkdownEditor: View {
     @Binding var text: String
     var font: Font = .body
@@ -78,6 +86,101 @@ struct MarkdownEditor: View {
     }
 }
 
+// MARK: - Return in a list
+
+/// Continues a Markdown list when Return is pressed in a note or task body.
+///
+/// **One app-wide key-down monitor**, driven by the **first responder** — not one
+/// monitor per editor reading SwiftUI's `@FocusState` and `TextSelection`
+/// bindings, which is how it was written first (copying `ProjectHashField`).
+/// Whether that version worked was never actually established: it was replaced
+/// while chasing a report of "nothing happens", which turned out to be Return
+/// pressed on lines that weren't list items. So treat "the bindings can't be
+/// read from an `NSEvent` monitor" as *unproven* rather than as the reason this
+/// looks the way it does.
+///
+/// It is still the better of the two, on grounds that don't depend on that: the
+/// text view holds the text and the caret, so there's no asking SwiftUI for
+/// state outside a view update, and nothing to gate on focus — the first
+/// responder *is* the focused editor, so two editors can't both answer.
+///
+/// The edit goes **through the text view** rather than through the `text`
+/// binding, which is what earns it native undo and leaves the caret placed by
+/// the same code that places it when you type; `didChangeText()` is what tells
+/// SwiftUI to pull the new string back into the binding.
+///
+/// **Field editors are skipped**, and that's the line between a multiline
+/// Markdown body and a single-line field where Return means submit — the note
+/// title and the `#project` field are the latter and keep their own behaviour
+/// (`ProjectHashField` has its own monitor for exactly that).
+@MainActor
+enum MarkdownReturn {
+    private static var monitor: Any?
+
+    /// Installed once, for the app's lifetime, from `AppDelegate`.
+    static func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Monitors fire on the main thread, but the closure isn't annotated;
+            // `assumeIsolated` can't *return* the non-Sendable event, so it
+            // answers "swallow?" instead.
+            let swallow = MainActor.assumeIsolated { handle(event) }
+            return swallow ? nil : event
+        }
+    }
+
+    /// Returns `true` to swallow the event, `false` to let it through.
+    private static func handle(_ event: NSEvent) -> Bool {
+        guard event.keyCode == 36 || event.keyCode == 76 else { return false } // Return / ⌤
+        // ⇧Return is the plain newline that leaves a list without ending it; the
+        // modified presses keep their usual meaning too.
+        guard event.modifierFlags
+            .intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+
+        // SwiftUI's `TextEditor` is backed by an `NSTextView` subclass
+        // (`PlatformTextView`), which is the first responder while it has focus.
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+              textView.isEditable, !textView.isFieldEditor else { return false }
+        // Only a caret continues a list. With text selected Return replaces the
+        // selection, which is the text view's job, not ours.
+        let selected = textView.selectedRange()
+        guard selected.length == 0 else { return false }
+
+        let text = textView.string
+        guard let caret = characterOffset(in: text, utf16Offset: selected.location),
+              let edit = MarkdownFormatting.listReturn(text, caret: caret),
+              let range = nsRange(of: edit.range, in: text),
+              textView.shouldChangeText(in: range, replacementString: edit.replacement)
+        else { return false }
+
+        textView.textStorage?.replaceCharacters(in: range, with: edit.replacement)
+        textView.didChangeText()
+        // Both edits — inserting a marker, and clearing an empty item — leave the
+        // caret at the end of what was written, so one sum covers each.
+        let caretUTF16 = range.location + (edit.replacement as NSString).length
+        textView.setSelectedRange(NSRange(location: caretUTF16, length: 0))
+        return true
+    }
+
+    /// The text view counts in UTF-16 and `MarkdownFormatting` counts in
+    /// `Character`s, so every offset crosses this pair. `nil` when the caret
+    /// isn't on a character boundary — mid-emoji, where there's no sensible
+    /// answer and Return may as well behave normally.
+    private static func characterOffset(in text: String, utf16Offset: Int) -> Int? {
+        let clamped = max(0, min(utf16Offset, text.utf16.count))
+        guard let index = String.Index(utf16Offset: clamped, in: text).samePosition(in: text)
+        else { return nil }
+        return text.distance(from: text.startIndex, to: index)
+    }
+
+    private static func nsRange(of range: Range<Int>, in text: String) -> NSRange? {
+        guard range.lowerBound >= 0, range.upperBound <= text.count else { return nil }
+        let lower = text.index(text.startIndex, offsetBy: range.lowerBound)
+        let upper = text.index(text.startIndex, offsetBy: range.upperBound)
+        return NSRange(lower..<upper, in: text)
+    }
+}
+
 /// Pure selection-wrapping logic for the formatting shortcuts. Offsets are in
 /// `Character`s so the maths survives emoji and combining marks.
 enum MarkdownFormatting {
@@ -136,6 +239,128 @@ enum MarkdownFormatting {
         out.insert(contentsOf: close, at: hi)
         out.insert(contentsOf: open, at: lo)
         return Change(text: String(out), selection: (lo + open.count)..<(hi + open.count))
+    }
+
+    // MARK: Lists
+
+    /// What a line opens with, when it opens a list item.
+    private struct ListMarker {
+        /// The line's leading whitespace, reproduced verbatim on the next line so
+        /// a nested item stays at its level.
+        var indent: [Character]
+        /// The marker to write after the indent — `- `, `- [ ] `, `3. `.
+        var lead: [Character]
+        /// Offset within the line where the item's own text starts.
+        var contentStart: Int
+    }
+
+    /// One text replacement: what to swap out, what for, and where the caret
+    /// lands afterwards. Offsets are `Character`s, as everywhere else here.
+    ///
+    /// A *range* rather than a whole new string, because the edit is applied to
+    /// the live `NSTextView` — which wants exactly this shape, and gives back
+    /// native undo for it.
+    struct Edit: Equatable {
+        var range: Range<Int>
+        var replacement: String
+        var caret: Int
+    }
+
+    /// Return inside a list item, as an edit to apply. `nil` when the caret
+    /// isn't in a list item — the caller then lets Return through and the
+    /// editor inserts an ordinary newline.
+    ///
+    /// See `continueList` for the rules.
+    static func listReturn(_ text: String, caret: Int) -> Edit? {
+        let chars = Array(text)
+        let caret = max(0, min(caret, chars.count))
+
+        var lineStart = caret
+        while lineStart > 0, chars[lineStart - 1] != "\n" { lineStart -= 1 }
+        var lineEnd = caret
+        while lineEnd < chars.count, chars[lineEnd] != "\n" { lineEnd += 1 }
+
+        let line = Array(chars[lineStart..<lineEnd])
+        guard let marker = listMarker(line) else { return nil }
+        // A caret inside the marker itself isn't editing the item's text, so
+        // Return there means what it usually means.
+        let caretInLine = caret - lineStart
+        guard caretInLine >= marker.contentStart else { return nil }
+
+        if line[marker.contentStart...].allSatisfy(\.isWhitespace) {
+            return Edit(range: lineStart..<lineEnd, replacement: "", caret: lineStart)
+        }
+
+        let inserted = String(["\n"] + marker.indent + marker.lead)
+        return Edit(
+            range: caret..<caret,
+            replacement: inserted,
+            caret: caret + inserted.count
+        )
+    }
+
+    /// Return inside a list item: continue the list on the next line.
+    ///
+    /// The whole-text form of `listReturn`, which is how the rules are pinned by
+    /// `MarkdownFormattingTests`.
+    ///
+    /// The rules are Obsidian's, because that's the app these files open in:
+    /// indentation is preserved, ordered items increment, and a checked `- [x]`
+    /// continues as an *unchecked* `- [ ]` rather than copying the tick. Text to
+    /// the right of the caret comes down with the new marker, so Return in the
+    /// middle of an item splits it into two.
+    ///
+    /// Return on an item with **no content** ends the list instead of adding an
+    /// empty item to it, which is the behaviour that stops a list being a trap.
+    /// It clears the line outright rather than outdenting one level at a time:
+    /// nesting can only be reached by typing the spaces by hand until Tab
+    /// indents too, so there is rarely a level to step back through.
+    static func continueList(_ text: String, caret: Int) -> Change? {
+        guard let edit = listReturn(text, caret: caret) else { return nil }
+        var chars = Array(text)
+        chars.replaceSubrange(edit.range, with: Array(edit.replacement))
+        return Change(text: String(chars), selection: edit.caret..<edit.caret)
+    }
+
+    /// Parse a line's list marker, or `nil` when it doesn't open an item.
+    private static func listMarker(_ line: [Character]) -> ListMarker? {
+        var i = 0
+        while i < line.count, line[i] == " " || line[i] == "\t" { i += 1 }
+        let indent = Array(line[0..<i])
+
+        // Bullets: "- ", "* ", "+ ", optionally followed by a "[ ]" checkbox.
+        if i + 1 < line.count, "-*+".contains(line[i]), line[i + 1] == " " {
+            let bullet = line[i]
+            let afterBullet = i + 2
+            if afterBullet + 3 < line.count,
+               line[afterBullet] == "[", line[afterBullet + 2] == "]",
+               line[afterBullet + 3] == " " {
+                return ListMarker(
+                    indent: indent,
+                    lead: [bullet, " ", "[", " ", "]", " "],
+                    contentStart: afterBullet + 4
+                )
+            }
+            return ListMarker(indent: indent, lead: [bullet, " "], contentStart: afterBullet)
+        }
+
+        // Ordered: "1. " or "1) ", continuing with the next number. The rest of
+        // the list isn't renumbered — Markdown doesn't care, and rewriting lines
+        // the caret isn't on is how an editor loses someone's text.
+        var digitsEnd = i
+        while digitsEnd < line.count, line[digitsEnd].isNumber { digitsEnd += 1 }
+        if digitsEnd > i, digitsEnd + 1 < line.count,
+           line[digitsEnd] == "." || line[digitsEnd] == ")",
+           line[digitsEnd + 1] == " ",
+           let number = Int(String(line[i..<digitsEnd])) {
+            return ListMarker(
+                indent: indent,
+                lead: Array("\(number + 1)\(line[digitsEnd]) "),
+                contentStart: digitsEnd + 2
+            )
+        }
+
+        return nil
     }
 
     /// Bold and italic share a character, so they're toggled by *run length*

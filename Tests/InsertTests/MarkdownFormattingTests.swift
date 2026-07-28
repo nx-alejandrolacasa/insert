@@ -165,4 +165,116 @@ final class MarkdownFormattingTests: XCTestCase {
         let change = MarkdownFormatting.toggleWrap("hi", selection: 0..<99, delimiter: "**")
         XCTAssertEqual(change?.text, "**hi**")
     }
+
+    // MARK: Continuing a list on Return
+
+    /// Presses Return with the caret written into the text as `|`, and gives the
+    /// result back the same way, so each case reads as the keystroke it is.
+    /// `nil` means "not a list item" — the editor lets Return through.
+    private func pressReturn(_ marked: String) -> String? {
+        let caret = marked.distance(from: marked.startIndex, to: marked.firstIndex(of: "|")!)
+        let text = marked.replacingOccurrences(of: "|", with: "")
+        guard let change = MarkdownFormatting.continueList(text, caret: caret) else { return nil }
+        var out = Array(change.text)
+        out.insert("|", at: change.selection.lowerBound)
+        return String(out)
+    }
+
+    func testContinuesBullet() {
+        XCTAssertEqual(pressReturn("- one|"), "- one\n- |")
+    }
+
+    func testContinuesStarAndPlusBullets() {
+        XCTAssertEqual(pressReturn("* one|"), "* one\n* |")
+        XCTAssertEqual(pressReturn("+ one|"), "+ one\n+ |")
+    }
+
+    func testContinuesOrderedAndIncrements() {
+        XCTAssertEqual(pressReturn("1. one|"), "1. one\n2. |")
+        XCTAssertEqual(pressReturn("9. nine|"), "9. nine\n10. |")
+    }
+
+    func testOrderedKeepsItsDelimiter() {
+        XCTAssertEqual(pressReturn("3) three|"), "3) three\n4) |")
+    }
+
+    func testFollowingItemsAreNotRenumbered() {
+        // Rewriting lines the caret isn't on is how an editor loses text, and
+        // Markdown renders the list right either way.
+        XCTAssertEqual(pressReturn("1. one|\n2. two"), "1. one\n2. |\n2. two")
+    }
+
+    func testCheckedTaskContinuesUnchecked() {
+        XCTAssertEqual(pressReturn("- [x] done|"), "- [x] done\n- [ ] |")
+        XCTAssertEqual(pressReturn("- [ ] todo|"), "- [ ] todo\n- [ ] |")
+    }
+
+    func testIndentIsPreserved() {
+        XCTAssertEqual(pressReturn("    - deep|"), "    - deep\n    - |")
+        XCTAssertEqual(pressReturn("  1. deep|"), "  1. deep\n  2. |")
+    }
+
+    func testEmptyItemEndsTheList() {
+        XCTAssertEqual(pressReturn("- one\n- |"), "- one\n|")
+        XCTAssertEqual(pressReturn("1. one\n2. |"), "1. one\n|")
+        XCTAssertEqual(pressReturn("- [ ] |"), "|")
+    }
+
+    func testEmptyIndentedItemClearsTheWholeLine() {
+        XCTAssertEqual(pressReturn("  - |"), "|")
+    }
+
+    func testWhitespaceOnlyItemCountsAsEmpty() {
+        XCTAssertEqual(pressReturn("- one\n-  |"), "- one\n|")
+    }
+
+    func testReturnMidItemSplitsIt() {
+        XCTAssertEqual(pressReturn("- one| two"), "- one\n- | two")
+    }
+
+    func testContinuesFromTheMiddleOfADocument() {
+        XCTAssertEqual(pressReturn("- a\n- b|\n- c"), "- a\n- b\n- |\n- c")
+    }
+
+    func testCaretInsideTheMarkerDoesNothing() {
+        XCTAssertNil(pressReturn("-| one"))
+        XCTAssertNil(pressReturn("  |- one"))
+    }
+
+    func testNonListLinesDoNothing() {
+        XCTAssertNil(pressReturn("just text|"))
+        XCTAssertNil(pressReturn("# Heading|"))
+        XCTAssertNil(pressReturn("-no space|"))
+        XCTAssertNil(pressReturn("1.no space|"))
+        XCTAssertNil(pressReturn("|"))
+    }
+
+    func testEmojiInAnItemKeepsTheCaretRight() {
+        XCTAssertEqual(pressReturn("- 🚀 ship|"), "- 🚀 ship\n- |")
+    }
+
+    /// The welcome note, which is the first list most people will meet: bullets
+    /// carrying `**bold**` and em dashes, in the middle of a longer document.
+    func testTheWelcomeNotesList() {
+        let body = """
+            **Insert** keeps your projects, notes and tasks in one calm place.
+
+            - The left column is your **projects** — add, rename, sort and filter them.|
+            - The middle column is **notes** — pick a type.
+
+            Everything is saved as plain Markdown you can open anywhere.
+            """
+        XCTAssertEqual(
+            pressReturn(body)?.contains("filter them.\n- |\n- The middle column"),
+            true
+        )
+    }
+
+    /// The lines the trace was actually taken on — none of them lists, so Return
+    /// has to stay an ordinary newline.
+    func testProseLinesStayOrdinary() {
+        XCTAssertNil(pressReturn("**hi**|"))
+        XCTAssertNil(pressReturn("howdy!|"))
+        XCTAssertNil(pressReturn("**nope...**|"))
+    }
 }

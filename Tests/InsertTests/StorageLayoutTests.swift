@@ -281,4 +281,121 @@ final class StorageLayoutTests: XCTestCase {
         // re-sorts on the frame it was being rebuilt on anyway.
         XCTAssertEqual(order(), ["Third", "Second", "First"])
     }
+
+    /// `TaskPins` is the same guarantee over the tasks column's sort key, where
+    /// *both* mutable halves — the due date and the done flag — are things a row
+    /// changes about itself. The due date is the one that was reported: it is the
+    /// list's main key, and the popover that sets it dismisses on the same click,
+    /// so the row left at the instant the popover did.
+    @MainActor
+    func testDueAndDonePinsHoldTasksPlaces() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-taskpin-\(UUID().uuidString)", isDirectory: true)
+        let tasks = root.appendingPathComponent("Tasks", isDirectory: true)
+        try fm.createDirectory(at: tasks, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        // Three pending, undated tasks an hour apart. Undated sorts last and by
+        // newest-created, so "First" leads and "Third" trails.
+        let now = Date()
+        let titles = ["First", "Second", "Third"]
+        for (i, title) in titles.enumerated() {
+            let stamp = now.addingTimeInterval(TimeInterval(-3_600 * i))
+            let task = TaskItem(title: title, created: stamp, updated: stamp)
+            try MarkdownFiles.encode(task).write(
+                to: tasks.appendingPathComponent(MarkdownFiles.taskFilename(task)),
+                atomically: true, encoding: .utf8)
+        }
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        let library = Library.shared
+        library.setRoot(root)
+
+        func order(filter: TaskFilter = .all, pinned: TaskPins = TaskPins()) -> [String] {
+            library.tasks(forProject: nil, filter: filter, search: "", pinned: pinned)
+                .map(\.title)
+        }
+
+        XCTAssertEqual(order(), titles)
+
+        // Dating the last task would send it to the front. Pinned first, it stays
+        // where it is being looked at.
+        let today = Calendar.current.startOfDay(for: now)
+        var third = try XCTUnwrap(library.tasks.first { $0.title == "Third" })
+        var pins = TaskPins()
+        pins.pin(third)
+        third.due = today
+        library.updateTask(third)
+        XCTAssertEqual(order(pinned: pins), titles, "the pinned task moved when it was dated")
+
+        // Changing the date again in the same view must not re-pin it at the place
+        // the first change would have given it.
+        third = try XCTUnwrap(library.tasks.first { $0.id == third.id })
+        third.due = Calendar.current.date(byAdding: .day, value: -1, to: today)
+        library.updateTask(third)
+        pins.pin(third)
+        XCTAssertEqual(order(pinned: pins), titles, "a re-pin moved the task")
+
+        // Ticking a task is the other half of the key, and is held the same way.
+        var second = try XCTUnwrap(library.tasks.first { $0.title == "Second" })
+        pins.pin(second)
+        second.done = true
+        library.updateTask(second)
+        XCTAssertEqual(order(pinned: pins), titles, "the ticked task moved")
+
+        // The *filter* is never pinned: a task you tick leaves the Pending view,
+        // because it is no longer one of the things that view is showing — while the
+        // rows that stay keep their held order.
+        XCTAssertEqual(order(filter: .pending, pinned: pins), ["First", "Third"])
+
+        // Dropping the pins re-sorts on the frame the list is rebuilt on: the dated
+        // task leads, the done one sinks.
+        XCTAssertEqual(order(), ["Third", "First", "Second"])
+    }
+
+    /// The projects sidebar is ordered by hand, and `Projects.md`'s line order *is*
+    /// that order — so a drag has to come back the same after a reload. This also
+    /// pins the two ends of `moveProject`'s insert-*before* rule, which is where a
+    /// reorder gets its off-by-one: dropping a project into the gap it already fills
+    /// must change nothing, and "before nobody" means last.
+    @MainActor
+    func testProjectsReorderByDragAndPersist() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-order-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let ids = (0..<4).map { _ in UUID() }
+        let names = ["Alpha", "Beta", "Gamma", "Delta"]
+        try MarkdownFiles.encodeProjects(zip(ids, names).map { Project(id: $0, name: $1) })
+            .write(to: root.appendingPathComponent("Projects.md"), atomically: true, encoding: .utf8)
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        let library = Library.shared
+        library.setRoot(root)
+        func order() -> [String] { library.projects.map(\.name) }
+        XCTAssertEqual(order(), names, "the file's line order is not the list's order")
+
+        // Gamma dragged onto Alpha's row: it takes the gap above it.
+        XCTAssertTrue(library.moveProject(ids[2], before: ids[0]))
+        XCTAssertEqual(order(), ["Gamma", "Alpha", "Beta", "Delta"])
+
+        // Dropped past the last row, which is the only way to reach the end.
+        XCTAssertTrue(library.moveProject(ids[2], before: nil))
+        XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"])
+
+        // The no-ops, both of which must be refused rather than written: a project
+        // dropped on itself, and one dropped into the gap it is already in — the
+        // row *below* it, since a gap is named by the row under it.
+        XCTAssertFalse(library.moveProject(ids[0], before: ids[0]))
+        XCTAssertFalse(library.moveProject(ids[0], before: ids[1]))
+        XCTAssertFalse(library.moveProject(ids[2], before: nil), "the last project moved to last")
+        XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"])
+
+        // And the whole thing survives a round trip through the Markdown.
+        library.reloadAll()
+        XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"], "the order did not persist")
+    }
 }

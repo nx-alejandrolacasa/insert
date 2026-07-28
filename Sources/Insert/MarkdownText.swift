@@ -7,10 +7,30 @@ import SwiftUI
 /// look at home in a Liquid Glass UI.
 struct MarkdownText: View {
     let markdown: String
+    /// The text style the body reads at, so a card's preview and its editor are
+    /// the same size — note cards are `.body`, task cards `.callout`. Taken as an
+    /// `NSFont.TextStyle` rather than a `Font` because the spacing below is
+    /// measured off the very same font.
+    var textStyle: NSFont.TextStyle = .body
+
+    private var nsFont: NSFont { Card.nsFont(textStyle) }
+    private var font: Font { Font(nsFont) }
+
+    /// **One blank source line.**
+    ///
+    /// Two paragraphs are separated in Markdown by a blank line, which the editor
+    /// shows at its full height; the preview has to leave the same gap or the
+    /// card changes shape when it flips between the two, which is the one moment
+    /// both are compared. It was a flat 8pt, half a line, so every paragraph
+    /// break tightened on entering view mode. Measured off `nsFont` rather than
+    /// written down, so the two modes can't drift apart if the style changes.
+    private var blankLine: CGFloat {
+        (nsFont.ascender - nsFont.descender + nsFont.leading).rounded()
+    }
 
     var body: some View {
         let blocks = MarkdownParser.parse(markdown)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: blankLine) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
@@ -24,33 +44,38 @@ struct MarkdownText: View {
         case .heading(let level, let text):
             inline(text)
                 .font(headingFont(level))
-                .fontWeight(.semibold)
                 .padding(.top, level <= 2 ? 2 : 0)
         case .paragraph(let text):
             inline(text)
-                .font(.body)
+                .font(font)
+        // Items sit on consecutive lines in the source with nothing between them,
+        // so they get nothing here either — the 4pt this used to add was the list
+        // loosening on the way *into* view mode while every paragraph tightened.
         case .bullet(let items):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         bulletDot
-                        inline(item).font(.body)
+                        inline(item).font(font)
                     }
                 }
             }
         case .ordered(let items):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(idx + 1).").foregroundStyle(.secondary).monospacedDigit()
-                        inline(item).font(.body)
+                        Text("\(idx + 1).")
+                            .font(font)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        inline(item).font(font)
                     }
                 }
             }
         case .quote(let text):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary.opacity(0.4)).frame(width: 3)
-                inline(text).font(.body).foregroundStyle(.secondary)
+                inline(text).font(font).foregroundStyle(.secondary)
             }
         case .code(let text):
             Text(text)
@@ -75,11 +100,13 @@ struct MarkdownText: View {
     /// x-height — where the glyph's own centre sat, and read off the font so it
     /// tracks the text rather than pinning a number.
     private var bulletDot: some View {
-        Circle()
+        // Read outside the guide: its closure is `Sendable` and `nsFont` isn't.
+        let xHeight = nsFont.xHeight
+        return Circle()
             .fill(.secondary)
             .frame(width: 5, height: 5)
             .alignmentGuide(.firstTextBaseline) { d in
-                d.height / 2 + NSFont.preferredFont(forTextStyle: .body).xHeight / 2
+                d.height / 2 + xHeight / 2
             }
     }
 
@@ -110,12 +137,18 @@ struct MarkdownText: View {
         return Text(text)
     }
 
+    /// Headings take the card face too — a heading is body copy, not chrome.
+    /// Fenced code doesn't: it stays monospaced, which is the whole point of it.
+    ///
+    /// The weight is baked in rather than added with `.fontWeight(.semibold)`
+    /// afterwards, because that resolves to a different font and takes the
+    /// one-storey `a` with it.
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: .title2
-        case 2: .title3
-        case 3: .headline
-        default: .subheadline
+        case 1: Card.font(.title2, weight: .semibold)
+        case 2: Card.font(.title3, weight: .semibold)
+        case 3: Card.font(.headline, weight: .semibold)
+        default: Card.font(.subheadline, weight: .semibold)
         }
     }
 }

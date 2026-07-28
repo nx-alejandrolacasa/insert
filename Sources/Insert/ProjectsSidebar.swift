@@ -5,14 +5,17 @@ import SwiftUI
 /// project, plus a pinned "Everything" entry that clears the filter.
 ///
 /// Selection here is the single source of truth for *what the notes and tasks
-/// panels show* — it drives `AppState.selectedProjectID` (nil = All). Because a
-/// project's `lastUsed` powers the "Latest used" sort, selecting a project also
-/// `touch`es it so the thing you just opened floats to the top next time.
+/// panels show* — it drives `AppState.selectedProjectID` (nil = All).
+///
+/// The order of the rows is the user's own: rows are dragged into place and the
+/// array order *is* `Projects.md`'s line order, so there is no sort to pick. See
+/// `reorderable` for how the drag is done, and why it is neither `.onMove` nor
+/// `.draggable`.
 ///
 /// The header carries the affordances the plan calls "paths the user can take":
-/// sorting, adding, and (via row context menus) renaming / deleting. Add and
-/// rename share one editor popover so the symbol-picker experience is identical
-/// wherever a project is created or changed.
+/// adding, and (via row context menus) renaming / deleting. Add and rename share
+/// one editor popover so the symbol-picker experience is identical wherever a
+/// project is created or changed.
 struct ProjectsSidebar: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
@@ -26,6 +29,17 @@ struct ProjectsSidebar: View {
     @State private var editing: Project?
     /// The project queued for deletion, surfaced through a confirmation dialog.
     @State private var deletionCandidate: Project?
+    /// The project being dragged to a new position, if any.
+    @State private var dragging: UUID?
+    /// Where it would land — the gap under the pointer. One value for the whole
+    /// list, so exactly one insertion line is ever drawn.
+    @State private var dropGap: DropGap?
+    /// Every project row's frame in `.global`, which is what turns the pointer's y
+    /// into a gap (`gap(at:)`). Measured rather than assumed: a row's height is two
+    /// lines of text at whatever size the system is set to, and a rule written in
+    /// points would be wrong on the first person to enlarge it. `.global`
+    /// specifically — see the note at the foot of this file.
+    @State private var rowFrames: [UUID: CGRect] = [:]
     /// Top of the header's title-bar band in window coordinates (see `header`).
     @State private var bandTop: CGFloat = 0
 
@@ -47,14 +61,9 @@ struct ProjectsSidebar: View {
                 if visibleProjects.isEmpty {
                     emptyState
                 } else {
+                    // Manual ordering — see `reorderable`.
                     ForEach(visibleProjects) { project in
-                        projectRow(project)
-                    }
-                    // Manual drag-and-drop ordering. Disabled while searching,
-                    // where the visible rows don't line up with the full list.
-                    .onMove { offsets, destination in
-                        guard !appState.isSearching else { return }
-                        library.moveProjects(fromOffsets: offsets, toOffset: destination)
+                        reorderable(projectRow(project), project)
                     }
                 }
             }
@@ -350,6 +359,123 @@ struct ProjectsSidebar: View {
         .accessibilityAction(named: "Delete") { deletionCandidate = project }
     }
 
+    // MARK: - Reordering
+
+    /// Lets a project row be dragged into a new position: it reports its frame,
+    /// carries the gesture, fades while it's in flight, and draws the insertion
+    /// line for the gap above it — plus, if it's the last row, the gap below it,
+    /// which is the one no row owns.
+    ///
+    /// **The drag is a `DragGesture`, and the two obvious ways were both seen not
+    /// to work.** With `ForEach.onMove` a row couldn't be picked up at all, and
+    /// `.draggable` plus `.dropDestination` per gap — the modern spelling of the
+    /// same thing — didn't lift one either. That pair of observations is the
+    /// finding. The explanation offered at the time, that both begin a native drag
+    /// session from the row's mouse-down and the row is a `Button` (the selection
+    /// pill is ours rather than the system's — see `selectableRow`), so the button
+    /// answers that mouse-down and no session starts, fits but was never tested:
+    /// this was rewritten rather than instrumented. One throwaway non-`Button` row
+    /// with `.draggable` on it would settle it.
+    /// What stands on its own is that a gesture *does* reach these rows — this file
+    /// already documents the opposite complaint, that an `onTapGesture` on a row
+    /// swallows the click the list needs — so the reorder is done by hand: where
+    /// the pointer is against the rows' measured frames, and one `moveProject` at
+    /// the end.
+    /// `simultaneousGesture` rather than `gesture`, and `minimumDistance` rather
+    /// than 0, so the click that selects a project still gets through: below the
+    /// threshold this never recognises, and above it the two aren't competing for
+    /// the same events.
+    private func reorderable(_ row: some View, _ project: Project) -> some View {
+        row
+            // Dimmed rather than lifted out of the list. An `.offset` row reads
+            // more like a drag, but a list row's overflow is the table cell's to
+            // clip, and a card half-hidden behind the next one would be worse
+            // than a still row with the insertion line doing the talking.
+            .opacity(dragging == project.id ? 0.5 : 1)
+            .overlay(alignment: .top) {
+                insertionLine(showing: dropGap == .before(project.id))
+            }
+            // The gap after the last row: no row sits below it to own it.
+            .overlay(alignment: .bottom) {
+                if project.id == visibleProjects.last?.id {
+                    insertionLine(showing: dropGap == .end)
+                }
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                rowFrames[project.id] = frame
+            }
+            .simultaneousGesture(reorderGesture(project))
+    }
+
+    /// Drags one project into another position. Nothing is written until the drag
+    /// ends, and nothing at all while searching, where the rows on screen are a
+    /// subset: "above this row" would jump the project over rows the search is
+    /// hiding, and the end of the list isn't visible to aim at.
+    private func reorderGesture(_ project: Project) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            .onChanged { value in
+                guard !appState.isSearching else { return }
+                dragging = project.id
+                dropGap = gap(at: value.location.y, moving: project.id)
+            }
+            .onEnded { value in
+                let landing = appState.isSearching
+                    ? nil
+                    : gap(at: value.location.y, moving: project.id)
+                dragging = nil
+                dropGap = nil
+                // Animated because this one *is* a move: the same rows in a new
+                // order, unlike the notes column's re-sort, where the whole list
+                // is replaced on the frame it happens and there is nothing left
+                // to animate.
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    switch landing {
+                    case let .before(id): library.moveProject(project.id, before: id)
+                    case .end: library.moveProject(project.id, before: nil)
+                    case nil: break
+                    }
+                }
+            }
+    }
+
+    /// The gap the pointer at `y` is in: above the first row it hasn't passed the
+    /// middle of, or the end of the list. Midpoints, so a row is displaced only
+    /// once the pointer is past halfway through it — the rule every reorderable
+    /// list on the platform uses.
+    ///
+    /// `nil` when the answer is where `moving` already is (the gap above it, or the
+    /// gap below it), so no insertion line is drawn and no write is made for a drag
+    /// that changes nothing.
+    private func gap(at y: CGFloat, moving id: UUID) -> DropGap? {
+        // Nothing measured at all means the pointer can't be placed among the
+        // rows, and the fallback below would read as "past the last one" — i.e. a
+        // drag anywhere would send the project to the end of the list. Sit it out.
+        guard visibleProjects.contains(where: { rowFrames[$0.id] != nil }) else { return nil }
+        // A row that has never reported a frame is one the list hasn't laid out;
+        // skipping it is right either way, since the pointer can't be over it.
+        let landing = visibleProjects.first { rowFrames[$0.id].map { y < $0.midY } ?? false }
+        let gap: DropGap = landing.map { .before($0.id) } ?? .end
+        guard let from = visibleProjects.firstIndex(where: { $0.id == id }) else { return gap }
+        switch gap {
+        case let .before(target):
+            guard let to = visibleProjects.firstIndex(where: { $0.id == target }) else { return gap }
+            return to == from || to == from + 1 ? nil : gap
+        case .end:
+            return from == visibleProjects.count - 1 ? nil : gap
+        }
+    }
+
+    /// Where a dropped project would land. Drawn inside the row's own frame rather
+    /// than offset up into the 2pt between rows: an overlay that leaves its row is
+    /// the table cell's to clip, and half an insertion line is worse than none.
+    private func insertionLine(showing: Bool) -> some View {
+        Capsule()
+            .fill(.primary.opacity(0.6))
+            .frame(height: 2)
+            .opacity(showing ? 1 : 0)
+            .animation(.easeOut(duration: 0.1), value: showing)
+    }
+
     /// Shared row scaffold: a leading glyph, the name, and a dimmed subtitle.
     private func rowLabel(
         @ViewBuilder leading: () -> some View,
@@ -421,10 +547,10 @@ struct ProjectsSidebar: View {
 
     // MARK: - Bindings
 
-    /// Maps the enum-tagged List selection onto `AppState.selectedProjectID`,
-    /// touching a project as it becomes selected so "Latest used" stays honest.
-    /// Select a project (or "Everything" with `nil`). Selecting a project also
-    /// `touch`es it, so "Latest used" sorting floats what you just opened.
+    /// Select a project (or "Everything" with `nil`), recording that it was used.
+    /// Nothing sorts by `lastUsed` any more — the rows are in the order the user
+    /// dragged them into — but it stays written, so it's there for whatever wants
+    /// to know what you were last in.
     private func select(_ projectID: UUID?) {
         appState.selectedProjectID = projectID
         if let projectID { library.touchProject(id: projectID) }
@@ -477,6 +603,29 @@ struct ProjectsSidebar: View {
         deletionCandidate = nil
     }
 }
+
+// MARK: - Reordering
+
+/// Where a dragged project would land: in the gap immediately above the row it
+/// names, or at the very end of the list. See `ProjectsSidebar.reorderable`.
+private enum DropGap: Hashable {
+    case before(UUID)
+    case end
+}
+
+// The reorder measures rows and reports the pointer in `.global`, and a **named**
+// coordinate space measurably isn't a substitute. With `.coordinateSpace(.named(…))`
+// on the `List` and both the row frames and the gesture asking for that name, the
+// only position a project could be dragged to was the **top of the list** — which
+// is what you get if both sides are in fact measuring *row-local* coordinates,
+// since every row's local frame is then the same rectangle and the pointer is
+// always above the first midpoint. Moving both to `.global` fixed it.
+//
+// That the name fails to reach the rows because a list hosts each one separately
+// is the likely reason, and it is not something anyone here has verified — the
+// symptom is what's known. `.global` needs no registration and does resolve inside
+// a row, which `header`'s own measurement above already relies on; that's reason
+// enough to use it without settling the rest.
 
 // MARK: - Right-click menu
 

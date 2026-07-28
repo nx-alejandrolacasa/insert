@@ -384,7 +384,7 @@ private struct NoteCardView: View {
                         placeholder: "Title  (type # to tag a project)",
                         text: $draft.title,
                         assigned: $draft.projectIDs,
-                        font: .title3.weight(.bold),
+                        font: Card.font(.title3, weight: .bold),
                         onEscape: { exitEdit() },
                         focused: $titleFocused
                     )
@@ -397,7 +397,7 @@ private struct NoteCardView: View {
                         // decoration on top of the title beside it.
                         .accessibilityHidden(true)
                     Text(draft.displayTitle)
-                        .font(.title3.weight(.bold))
+                        .font(Card.font(.title3, weight: .bold))
                         .lineLimit(2)
                 }
             }
@@ -574,16 +574,23 @@ private struct NoteCardView: View {
     // MARK: Body — view mode
 
     /// Rendered Markdown shown when the note isn't being edited.
+    ///
+    /// The 5pt is the editor's own text-container inset, which the preview has to
+    /// repeat or the first character shifts sideways as the card opens — the same
+    /// 5 the placeholder and the sizing proxy carry, and the same one the task
+    /// card already put on its `MarkdownText`.
     @ViewBuilder
     private var bodyView: some View {
         if draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // "Click", not "tap": this is a pointer-driven Mac.
             Text("Empty note — click to write")
-                .font(.body)
+                .font(Card.font(.body))
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 5)
         } else {
             MarkdownText(markdown: draft.body)
+                .padding(.horizontal, 5)
         }
     }
 
@@ -597,7 +604,7 @@ private struct NoteCardView: View {
             // in the layout so the ZStack height tracks the wrapped text; the
             // editor is then pinned to that height rather than growing greedily.
             Text(draft.body.isEmpty ? " " : draft.body)
-                .font(.body)
+                .font(Card.font(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
                 .padding(.horizontal, 5)
@@ -608,7 +615,7 @@ private struct NoteCardView: View {
 
             if draft.body.isEmpty && !bodyFocused {
                 Text("Write in Markdown…")
-                    .font(.body)
+                    .font(Card.font(.body))
                     .foregroundStyle(.tertiary)
                     // (5, 0): the editor's first line starts at the very top of
                     // its frame, 5pt in — the placeholder sits on the caret.
@@ -616,7 +623,12 @@ private struct NoteCardView: View {
                     .allowsHitTesting(false)
             }
 
-            MarkdownEditor(text: $draft.body, focused: $bodyFocused, selection: $bodySelection)
+            MarkdownEditor(
+                text: $draft.body,
+                font: Card.font(.body),
+                focused: $bodyFocused,
+                selection: $bodySelection
+            )
                 .frame(height: max(34, measuredBodyHeight))
                 // Esc leaves the Markdown editor, matching the title field.
                 .onKeyPress(.escape) {

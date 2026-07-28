@@ -205,6 +205,33 @@ private struct TasksSettingsTab: View {
             }
 
             Section {
+                Toggle("Daily reminder", isOn: $settings.dailyReminder)
+                    .onChange(of: settings.dailyReminder) { _, on in
+                        // Ask for permission on the way in, not at launch — see
+                        // `TaskReminder.requestAuthorization()`.
+                        if on { TaskReminder.shared.requestAuthorization() }
+                        TaskReminder.shared.reschedule()
+                    }
+
+                if settings.dailyReminder {
+                    DatePicker(
+                        "Time",
+                        selection: $settings.reminderTime,
+                        displayedComponents: .hourAndMinute
+                    )
+                    // The one place in Settings that shows a time, so it takes the
+                    // same locale as every other date in the app — 24-hour, in
+                    // English — rather than the system's. See `Formatting`.
+                    .environment(\.locale, Formatting.locale)
+                    // No `onChange` here: the reminder's clock re-reads the time on
+                    // every tick, so a new one needs nothing re-aimed. Only the
+                    // toggle above starts and stops anything.
+                }
+            } footer: {
+                Text("One notification a day, counting the tasks due that day — “You have 3 tasks for today”. Nothing is sent on a day with nothing due, and it never names a task. Insert has to be running to send it.")
+            }
+
+            Section {
                 Toggle("Color tasks by due date", isOn: $settings.dueTintedTasks)
             } footer: {
                 Text("Task backgrounds take their due badge's color — orange when overdue, green due today, purple upcoming. Undated tasks keep the neutral background.")

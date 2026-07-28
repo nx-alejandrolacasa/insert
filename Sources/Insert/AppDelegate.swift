@@ -40,6 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        MarkdownReturn.install()
+        TaskReminder.shared.start()
         Self.runHousekeeping()
         Self.normalizeSidebarWidth()
 
