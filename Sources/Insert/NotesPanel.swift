@@ -389,10 +389,7 @@ private struct NoteCardView: View {
                         focused: $titleFocused
                     )
                 } else {
-                    Image(systemName: draft.symbol)
-                        .font(.title3)
-                        .foregroundStyle(type.tint.ink)
-                        .frame(width: 26, height: 26)
+                    typeSymbol
                         // The type pills below name the category; this glyph is
                         // decoration on top of the title beside it.
                         .accessibilityHidden(true)
@@ -419,14 +416,21 @@ private struct NoteCardView: View {
         }
     }
 
+    /// The note's type glyph. One definition for both modes — edit mode is the same
+    /// glyph with the well drawn behind it, so the two can't fall out of step (see
+    /// `Metrics.noteSymbolWell`).
+    private var typeSymbol: some View {
+        Image(systemName: draft.symbol)
+            .font(.system(size: Metrics.noteSymbolSize))
+            .foregroundStyle(type.tint.ink)
+            .frame(width: Metrics.noteSymbolWell, height: Metrics.noteSymbolWell)
+    }
+
     private var symbolButton: some View {
         Button {
             showingSymbolPicker = true
         } label: {
-            Image(systemName: draft.symbol)
-                .font(.title3)
-                .foregroundStyle(type.tint.ink)
-                .frame(width: 26, height: 26)
+            typeSymbol
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Stone.surface)

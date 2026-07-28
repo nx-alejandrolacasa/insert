@@ -277,4 +277,53 @@ final class MarkdownFormattingTests: XCTestCase {
         XCTAssertNil(pressReturn("howdy!|"))
         XCTAssertNil(pressReturn("**nope...**|"))
     }
+
+    // MARK: Continuing a block quote on Return
+
+    func testContinuesQuote() {
+        XCTAssertEqual(pressReturn("> This is the quote|"), "> This is the quote\n> |")
+    }
+
+    /// The shape this is for: the quotation, then Return, then the attribution.
+    func testQuoteThenAttribution() {
+        XCTAssertEqual(
+            pressReturn("> This is the quote\n> *Author*|"),
+            "> This is the quote\n> *Author*\n> |"
+        )
+    }
+
+    /// A nested quote keeps its whole run of markers rather than stepping out a
+    /// level.
+    func testContinuesNestedQuote() {
+        XCTAssertEqual(pressReturn(">> deeper|"), ">> deeper\n>> |")
+    }
+
+    /// `>quoted` is a quote to the renderer, which strips the marker and trims —
+    /// so the line being opened gets the space regardless.
+    func testQuoteWithoutASpaceIsNormalised() {
+        XCTAssertEqual(pressReturn(">quoted|"), ">quoted\n> |")
+    }
+
+    func testEmptyQuoteLineEndsTheQuote() {
+        XCTAssertEqual(pressReturn("> one\n> |"), "> one\n|")
+        XCTAssertEqual(pressReturn(">|"), "|")
+    }
+
+    func testQuoteIndentIsPreserved() {
+        XCTAssertEqual(pressReturn("  > indented|"), "  > indented\n  > |")
+    }
+
+    func testReturnMidQuoteSplitsIt() {
+        XCTAssertEqual(pressReturn("> one| two"), "> one\n> | two")
+    }
+
+    /// A bullet inside a quote is still read as the quote it's in — the marker at
+    /// the head of the line is the one Return carries.
+    func testQuotedBulletContinuesAsAQuote() {
+        XCTAssertEqual(pressReturn("> - item|"), "> - item\n> |")
+    }
+
+    func testCaretInsideTheQuoteMarkerDoesNothing() {
+        XCTAssertNil(pressReturn("|> quoted"))
+    }
 }

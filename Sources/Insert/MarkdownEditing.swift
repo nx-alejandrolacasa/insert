@@ -241,14 +241,15 @@ enum MarkdownFormatting {
         return Change(text: String(out), selection: (lo + open.count)..<(hi + open.count))
     }
 
-    // MARK: Lists
+    // MARK: Lists and quotes
 
-    /// What a line opens with, when it opens a list item.
-    private struct ListMarker {
+    /// What a line opens with, when it opens a list item or a block quote — the
+    /// two shapes Return carries onto the next line.
+    private struct LineMarker {
         /// The line's leading whitespace, reproduced verbatim on the next line so
         /// a nested item stays at its level.
         var indent: [Character]
-        /// The marker to write after the indent — `- `, `- [ ] `, `3. `.
+        /// The marker to write after the indent — `- `, `- [ ] `, `3. `, `> `.
         var lead: [Character]
         /// Offset within the line where the item's own text starts.
         var contentStart: Int
@@ -266,8 +267,8 @@ enum MarkdownFormatting {
         var caret: Int
     }
 
-    /// Return inside a list item, as an edit to apply. `nil` when the caret
-    /// isn't in a list item — the caller then lets Return through and the
+    /// Return inside a list item or a block quote, as an edit to apply. `nil` when
+    /// the caret is in neither — the caller then lets Return through and the
     /// editor inserts an ordinary newline.
     ///
     /// See `continueList` for the rules.
@@ -281,7 +282,7 @@ enum MarkdownFormatting {
         while lineEnd < chars.count, chars[lineEnd] != "\n" { lineEnd += 1 }
 
         let line = Array(chars[lineStart..<lineEnd])
-        guard let marker = listMarker(line) else { return nil }
+        guard let marker = lineMarker(line) else { return nil }
         // A caret inside the marker itself isn't editing the item's text, so
         // Return there means what it usually means.
         let caretInLine = caret - lineStart
@@ -315,6 +316,12 @@ enum MarkdownFormatting {
     /// It clears the line outright rather than outdenting one level at a time:
     /// nesting can only be reached by typing the spaces by hand until Tab
     /// indents too, so there is rarely a level to step back through.
+    ///
+    /// A **block quote** continues the same way, and for the same reason a list
+    /// does: a quote is a run of `> ` lines, so writing the next one by hand is
+    /// exactly the friction this removes. It carries the whole run of `>`s, so a
+    /// nested quote stays nested, and an empty `> ` ends the quote — everything a
+    /// list item does, read off a different marker.
     static func continueList(_ text: String, caret: Int) -> Change? {
         guard let edit = listReturn(text, caret: caret) else { return nil }
         var chars = Array(text)
@@ -323,7 +330,7 @@ enum MarkdownFormatting {
     }
 
     /// Parse a line's list marker, or `nil` when it doesn't open an item.
-    private static func listMarker(_ line: [Character]) -> ListMarker? {
+    private static func lineMarker(_ line: [Character]) -> LineMarker? {
         var i = 0
         while i < line.count, line[i] == " " || line[i] == "\t" { i += 1 }
         let indent = Array(line[0..<i])
@@ -335,13 +342,13 @@ enum MarkdownFormatting {
             if afterBullet + 3 < line.count,
                line[afterBullet] == "[", line[afterBullet + 2] == "]",
                line[afterBullet + 3] == " " {
-                return ListMarker(
+                return LineMarker(
                     indent: indent,
                     lead: [bullet, " ", "[", " ", "]", " "],
                     contentStart: afterBullet + 4
                 )
             }
-            return ListMarker(indent: indent, lead: [bullet, " "], contentStart: afterBullet)
+            return LineMarker(indent: indent, lead: [bullet, " "], contentStart: afterBullet)
         }
 
         // Ordered: "1. " or "1) ", continuing with the next number. The rest of
@@ -353,10 +360,25 @@ enum MarkdownFormatting {
            line[digitsEnd] == "." || line[digitsEnd] == ")",
            line[digitsEnd + 1] == " ",
            let number = Int(String(line[i..<digitsEnd])) {
-            return ListMarker(
+            return LineMarker(
                 indent: indent,
                 lead: Array("\(number + 1)\(line[digitsEnd]) "),
                 contentStart: digitsEnd + 2
+            )
+        }
+
+        // Block quote: the same run of `>`s again, so a nested `>> ` stays nested.
+        // The space is **normalised in** — `>quoted` is a quote to the renderer
+        // (which strips the marker and trims), and the line being opened wants the
+        // space regardless of how the one above it was typed.
+        var quoteEnd = i
+        while quoteEnd < line.count, line[quoteEnd] == ">" { quoteEnd += 1 }
+        if quoteEnd > i {
+            let hasSpace = quoteEnd < line.count && line[quoteEnd] == " "
+            return LineMarker(
+                indent: indent,
+                lead: Array(line[i..<quoteEnd]) + [" "],
+                contentStart: hasSpace ? quoteEnd + 1 : quoteEnd
             )
         }
 

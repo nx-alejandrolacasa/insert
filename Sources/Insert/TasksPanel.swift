@@ -235,6 +235,10 @@ private struct TaskCardView: View {
     /// the only case that earns an expand chevron.
     @State private var previewHeight: CGFloat = 0
     @State private var fullBodyHeight: CGFloat = 0
+    /// The ⋯ menu's box, which the expand chevron takes as its own so the two line
+    /// up. Seeded with what a borderless `Menu` was measured at, so the first layout
+    /// is already right and nothing slides when the real value lands.
+    @State private var actionsSize = CGSize(width: 20, height: 14)
     /// Height of the notes editor's sizing proxy, so it grows with its content.
     @State private var measuredBodyHeight: CGFloat = 28
 
@@ -357,6 +361,14 @@ private struct TaskCardView: View {
             reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: isEditing
         )
+        // Expanding the notes is the same kind of change as opening the card — the
+        // row grows, the rows below travel — so it eases the same way and for the
+        // same duration. Value-scoped, so this and the mode change can't drive each
+        // other: a card opened while expanded resizes once, not twice.
+        .animation(
+            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            value: expanded
+        )
     }
 
     // MARK: Title row
@@ -394,7 +406,15 @@ private struct TaskCardView: View {
             }
 
             actionsMenu
+                // The chevron below wears this control's box, and a borderless
+                // `Menu` sizes itself — so it's measured rather than assumed (see
+                // `bodySection`).
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { actionsSize = $0 }
         }
+        // Floored so the row is the same height whether or not Done is in it —
+        // otherwise the title and the body both drop as a card opens. See
+        // `Metrics.cardTitleRowHeight`.
+        .frame(minHeight: Metrics.cardTitleRowHeight)
     }
 
     // MARK: Checkbox
@@ -618,6 +638,23 @@ private struct TaskCardView: View {
             // a long task grew twice, once to the 28pt floor and again when the
             // real height arrived, and the text swapped in mid-way through.
             .background(alignment: .topLeading) { bodySizingProxy }
+            // Matches the gap the body has *above* it, so the two read as one
+            // margin. See `titleRowSlack`.
+            .padding(.bottom, titleRowSlack)
+    }
+
+    /// The slack the floored title row carries below its title, which the body's gap
+    /// upward is made of — that slack plus the stack's spacing — and which is
+    /// therefore what the gap *downward* is missing.
+    ///
+    /// Derived from the two numbers that create it rather than written down, because
+    /// one of them moves: the title's line height is read off the card face, and a
+    /// serif or monospaced card measures differently from a rounded one. `max(0, …)`
+    /// because a face taller than the floor has no slack to repeat.
+    private var titleRowSlack: CGFloat {
+        let title = Card.nsFont(.body, weight: .medium)
+        let line = title.ascender - title.descender + title.leading
+        return max(0, (Metrics.cardTitleRowHeight - line) / 2)
     }
 
     @ViewBuilder
@@ -638,15 +675,28 @@ private struct TaskCardView: View {
     @ViewBuilder
     private var bodySection: some View {
         if hasBody {
-            HStack(alignment: .top, spacing: 6) {
+            // Baseline, not `.top`: the chevron is a caption glyph in a 28pt target,
+            // so top-aligning the boxes sat it 8pt below the line of text it belongs
+            // to. Same rule as the checkbox and the ⋯ a row above —
+            // `centredOnTextCap()`, at `.callout` because that is what the notes are
+            // set in.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // `.transition(.identity)` on both, for the reason the mode swap
+                // above documents: SwiftUI's default is a cross-fade, and these two
+                // are the same first line with and without the rest of the body
+                // under it, so fading them through each other shows the same words
+                // twice at half opacity while the row is still resizing. The row's
+                // height is what animates; the text is legible because of it.
                 if expanded {
                     // `.callout`, matching this card's editor — the note card's
                     // is `.body`, and a preview that changes size on the way in
                     // is the thing `textStyle` exists to prevent.
                     MarkdownText(markdown: draft.body, textStyle: .callout)
                         .padding(.horizontal, 5)
+                        .transition(.identity)
                 } else {
                     bodyPreview
+                        .transition(.identity)
                 }
 
                 if showsChevron {
@@ -656,10 +706,28 @@ private struct TaskCardView: View {
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
+                            // The glyph turns over rather than cutting: the same
+                            // symbol in two directions is exactly what `.replace`
+                            // is for, and it reads as the row's own movement.
+                            .contentTransition(.symbolEffect(.replace))
+                            // **The ⋯'s box, both dimensions.** The width is what
+                            // puts the two on one vertical axis: both are flush to
+                            // the same trailing edge, so equal widths is all it
+                            // takes, and this was 28 against the borderless menu's
+                            // own 20 — 4pt to its left. The *height* matters for a
+                            // different reason: a 28pt box centred on a 15pt line
+                            // sticks out above it, and since the row is
+                            // baseline-aligned that raised the row's top and pushed
+                            // the preview 5pt *below* the editor's first line —
+                            // trading one misalignment for its mirror image. At the
+                            // menu's own 14pt the box sits inside the line box and
+                            // pushes nothing. Both measured, because those numbers
+                            // are AppKit's rather than ours.
+                            .frame(width: actionsSize.width, height: actionsSize.height)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .centredOnTextCap(.callout)
                     .help(expanded ? "Collapse notes" : "Expand notes")
                     .accessibilityLabel(expanded ? "Collapse notes" : "Expand notes")
                 }
@@ -667,8 +735,15 @@ private struct TaskCardView: View {
         }
     }
 
+    /// The teaser is **rendered**, not source. A task's notes are Markdown exactly
+    /// as a note's body is, and this row printed them raw — so `**Ship it**` read
+    /// as asterisks, and because the chevron only appears when there's more than
+    /// one line to reveal, a short body had no way to ever be seen rendered at all.
+    /// `MarkdownParser.lead(_:)` drops the block marker and
+    /// `MarkdownText.inline(_:)` draws the rest, which is the same pair of steps
+    /// the expanded view takes per block.
     private var bodyPreview: some View {
-        Text(draft.body)
+        MarkdownText.inline(MarkdownParser.lead(draft.body), in: Card.nsFont(.callout))
             .font(Card.font(.callout))
             .foregroundStyle(.secondary)
             .lineLimit(1)
@@ -677,10 +752,13 @@ private struct TaskCardView: View {
             .padding(.horizontal, 5)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { previewHeight = $0 }
             .background(alignment: .topLeading) {
-                // The same text laid out unbounded: taller means the preview is
-                // truncating, which is what the chevron is for.
-                Text(draft.body)
-                    .font(Card.font(.callout))
+                // What expanding would actually show, laid out unbounded: taller
+                // than the one line on show means there's something to reveal.
+                // Measured as the *render* rather than as the source, because that
+                // is what the chevron promises — the parser joins hard-wrapped
+                // lines into one paragraph, so a two-line source can render as one
+                // line and used to earn a chevron that revealed nothing.
+                MarkdownText(markdown: draft.body, textStyle: .callout)
                     .fixedSize(horizontal: false, vertical: true)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullBodyHeight = $0 }

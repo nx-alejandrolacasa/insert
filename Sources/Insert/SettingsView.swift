@@ -176,6 +176,14 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
+                TypefacePicker(selection: settings.typeface) { settings.typeface = $0 }
+            } header: {
+                Text("Typeface")
+            } footer: {
+                Text("The face notes and tasks are written in — titles and bodies, both while reading and while editing. The rest of the window keeps the system font, and code blocks stay monospaced.")
+            }
+
+            Section {
                 Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
             } footer: {
                 Text("The menu-bar item summarizes tasks that are past due, due today, and coming up.")

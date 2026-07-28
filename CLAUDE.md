@@ -106,6 +106,7 @@ Sources/Insert/
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
   Appearance.swift            Auto / Light / Dark preference
   Backdrop.swift              the five window gradients + their Settings picker
+  Typeface.swift              the four card faces + their Settings picker
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)
 Resources/AppIcon.icon/       generated layered icon (icon.json + SVG layers)
 Resources/AppIcon.icns        generated flat icon, the fallback
@@ -125,13 +126,19 @@ data loss rather than a wrong pixel; between them they caught three real bugs th
 reading the code had not. `swift build` skips the test target, so neither `build.sh`
 nor CI is affected.
 
-Two more suites cover the pure functions the UI is built on, for the reason given
+Four more suites cover the pure functions the UI is built on, for the reason given
 under "Return continues a list": the interesting logic there is arithmetic over
-offsets or dates, and arithmetic can be tested without a view.
-`MarkdownFormattingTests` pins the ⌘B/⌘I wrapping and the list-continuation rules;
-`ReminderScheduleTests` pins when the daily reminder is owed — the minute either
-side of the time itself, the grace window, and the once-a-day rule — since the
-alternative is waiting until tomorrow morning to find out.
+offsets, dates or font descriptors, and none of that needs a view.
+`MarkdownFormattingTests` pins the ⌘B/⌘I wrapping and the rules for continuing a
+list or a quote on Return; `MarkdownParserTests` pins the two parser outputs that
+decide what a card *shows* — a quote's line breaks, and the one line a collapsed
+task row teases; `ReminderScheduleTests` pins when the daily reminder is owed — the
+minute either side of the time itself, the grace window, and the once-a-day rule —
+since the alternative is waiting until tomorrow morning to find out. And
+`TypefaceTests` pins which face each typeface resolves to and that its italic
+really slants, because both fail *silently*: a system font asked for by name is
+substituted (New York becomes Times), and a missing italic face falls back to the
+upright one, so "it renders" and "it renders right" are different claims.
 
 ## Design intent
 
@@ -246,12 +253,34 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   which is space the note being written should have. A `Menu` styled by hand
   rather than a `Picker`, because a `Picker` redraws the label in system chrome
   and the colour is the point.
+  The note's **type glyph is one definition for both modes** (`typeSymbol`), since
+  the well behind it is only drawn while editing and a card that resized its icon
+  as it opened would be the same fault as one that resized its text. 12pt in a 26pt
+  well, and the pair is the point: **a frame doesn't clip a glyph**, so a symbol
+  wider than its frame spills straight out of the fill behind it. That's what
+  `.title3` did — `person.3` measures **33pt** wide at 15pt, and `person.2.wave.2`
+  27pt, against a 26pt well. At 12pt they are 25 and 21, so 12 is the largest size
+  at which the widest *default* type symbol still fits, pinned to that worst case
+  for the reason `chipHeight` is pinned to its tallest one. A custom symbol wider
+  still wants the well widened, not the glyph shrunk again: below about 11pt these
+  stop reading.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
   task can be assigned to several projects. Typing `#` opens a project
   autocomplete; Tab picks the first match; the `#word` is *not* kept in the
   task text, it only adds the assignment. Assignments appear as chips below and
   are removed by double-clicking them (or via the chip's context menu — the
   double-click is deliberately hard to trigger, so it can't be the only route).
+  **A task's notes are Markdown, exactly as a note's body is** — including the
+  collapsed one-line teaser, which used to print the *source*. So `**Ship it**` read
+  as asterisks, and since the expand chevron only appears when there is more than
+  one line to reveal, a short body had no route to ever being seen rendered.
+  `MarkdownParser.lead(_:)` takes the first line and drops its *block* marker (a
+  heading reads as its words, a bullet as its item) while leaving the inline markers
+  for `MarkdownText.inline(_:in:)` to draw — the same two steps the expanded view
+  takes per block. The chevron is now measured off the **render** rather than the
+  source, because that is what it promises: the parser joins hard-wrapped lines into
+  one paragraph, so a two-line source can render as one line and used to earn a
+  chevron that revealed nothing. Pinned by `MarkdownParserTests`.
   **A task doesn't move while you're looking at it either**, the notes column's
   rule read off a different sort key. Tasks sort pending-first, then by due date,
   then newest — and *both* mutable halves of that are things a row changes about
@@ -312,11 +341,20 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   refused authorization or a rejected `add` is logged and the app is otherwise
   unaffected — but if the reminder never appears, the signature is the first thing to
   rule out, ahead of the schedule.
-- **Return continues a list** — in any Markdown body (note card, task card),
+- **Return continues a list — and a quote** — in any Markdown body (note card,
+  task card),
   Return on `- `, `* `, `+ `, `1. `/`1) ` or `- [ ] ` opens the next item with the
   same marker and indent, incrementing ordered numbers and continuing a ticked
   `- [x]` as an unchecked `- [ ]`. Return on an item with **no content** ends the
-  list instead of adding an empty one to it. The rest of the list is never
+  list instead of adding an empty one to it.
+  A **block quote** does all of the same, read off a different marker: `> ` carries
+  onto the next line, the whole run of `>`s comes with it so a nested quote stays
+  nested, and an empty `> ` ends the quote. The space is *normalised in* — `>quoted`
+  is a quote to the renderer, which strips the marker and trims, so the line being
+  opened wants the space however the one above it was typed. The marker at the head
+  of the line is the one that continues, so `> - item` continues as `> `, not as a
+  bullet. (`LineMarker` is named for that: it is no longer only lists. The API is
+  still `listReturn`/`continueList`.) The rest of the list is never
   renumbered — Markdown renders it right either way, and rewriting lines the
   caret isn't on is how an editor loses text. ⇧Return is the plain newline that
   leaves a list without ending it.
@@ -346,9 +384,46 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   single-line field where Return submits — the note title and the `#project`
   field keep their own behaviour. The event is swallowed *only* when `listReturn`
   returns an edit, so Return is ordinary everywhere else.
-- **Cards read in SF Pro Rounded with the one-storey `a`** (`Card` in
-  `Theme.swift`). Two separate things, and it takes both — this is the bit that
-  was got wrong first. The **rounded design**
+- **Cards read in one of four faces, Rounded by default** — Settings → General
+  offers Standard / Rounded / Serif / Monospace (`Typeface.swift`, resolved by
+  `Card` and nowhere else). All four are *system designs*, so nothing is bundled;
+  the serif is **New York**, which ships with macOS at
+  `/System/Library/Fonts/NewYork.ttf` but is a hidden system font reachable
+  **only** through `withDesign(.serif)`. Asking for it by name is a trap worth
+  knowing: `NSFont(name: ".NewYork-Regular")` is nil and the PostScript name hands
+  back *Times New Roman* as a silent substitution, which CoreText logs. The
+  "New York" families that show up in Font Book on a developer's Mac are Apple's
+  optional download in `/Library/Fonts` and are absent on a clean install.
+  `TypefaceTests` pins the resolution, including that the serif isn't a fallback.
+  Two things come free with the serif: CoreText tracks its optical-size axis to the
+  point size (`opsz` 12/15/20/34 at those sizes), and it has a real italic.
+  `Card` reads the setting itself, inside a view update, so an `@Observable` read
+  registers as a dependency and every card re-renders on a change — there is no
+  notification and nothing to thread through the dozen call sites. The
+  `typeface:`-taking overloads exist for `TypefacePicker`, whose specimens each
+  draw in their own face; its swatch is **"Aa"**, which is not filler — the
+  lowercase `a` is exactly what separates Standard from Rounded.
+  The **one-storey `a` is Rounded's alone.** SF's default design offers the
+  alternate too (verified: shaping swaps glyph ids), but Standard's job is to match
+  the chrome beside it, which a stylistic alternate would break; the serif and the
+  monospaced face don't list the selector, and asking anyway is a true no-op there.
+  **Italic needs synthesising, and only under Rounded** (`Card.italic(_:)`).
+  Standard, Serif and Monospace each ship a real italic; **SF Rounded ships none**,
+  and asking a rounded descriptor for `.italic` returns the *upright* face without
+  erroring — so `*emphasis*` drew as plain text under the app's default face, which
+  a quote's italic attribution is where you notice. A face with no italic is
+  sheared through the **font matrix** instead, at the angle SF's own italic slants
+  at (`italicAngle`, 12.5°), read off that face rather than picked. Two traps, both
+  hit: the trait must be **added** to the font's existing traits, never set on its
+  own (`withSymbolicTraits(.italic)` replaces the set, dropping a bold base's
+  weight — and then the "is this a real italic?" name check believes the different
+  name, which is how `***bold italic***` came out neither), and `MarkdownText` must
+  **give up the emphasis intent** on any run it has fonted by hand, or SwiftUI
+  re-resolves the emphasis on top through the very trait lookup that has no rounded
+  italic to find, throwing the oblique away. `strikethrough` stays: it was never
+  ours to draw. All of it is pinned by `TypefaceTests`.
+- **The one-storey `a` costs two separate things, and it takes both** — this is the
+  bit that was got wrong first. The **rounded design**
   (`NSFontDescriptor.withDesign(.rounded)`) softens the terminals but **keeps the
   two-storey `a`**; the round single-storey `a` is a *stylistic alternate*,
   `Alternative Stylistic Sets` → `One storey a`, applied through
@@ -384,6 +459,14 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   read the other way — they sit on consecutive source lines with nothing between
   them, so the 4pt they used to add had lists loosening while paragraphs
   tightened.
+  **A quote keeps its line breaks**, and gets 0 between its lines for the list's
+  reason. Every `>` line used to be joined into one paragraph, which ran the shape
+  quotes are actually written in — the quotation, then its attribution on the next
+  line — into a single sentence. So `.quote` carries `[String]`, one entry per line.
+  A `>` on its own is a paragraph break *inside* the quote and survives as an empty
+  line, drawn as a space so it keeps the font's full line height, which is what the
+  editor shows for the same source; empty lines at either **end** are trimmed,
+  because they'd draw the bar past the text it marks.
 - **Cards opening and closing** — a card's **height** animates
   (`Metrics.cardModeDuration`), and its **content does not**. Both matter, and
   each took a wrong turn first.
@@ -411,6 +494,19 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   number — and it keeps measuring in view mode, without which the first open of a
   long task grew twice, once to the floor and again when the real height arrived.
   Note cards still snap while typing; only the mode change is animated there.
+  **Expanding a task's notes eases the same way**, at the same
+  `Metrics.cardModeDuration`: it is the same kind of change — the row grows, the rows
+  below travel — so it should not be a different gesture. Two things carry it, and
+  both are this bullet's own lessons applied a second time. The `.animation` is
+  **value-scoped** to `expanded`, alongside the one scoped to `isEditing`, so the two
+  can't drive each other and a card opened while expanded resizes once rather than
+  twice. And both branches of the expanded/collapsed conditional take
+  `.transition(.identity)`, because they are the same first line with and without the
+  rest of the body under it — a cross-fade showed those words twice at half opacity
+  while the row was still resizing. The chevron itself turns over with
+  `.contentTransition(.symbolEffect(.replace))`: one symbol in two directions is what
+  `.replace` is for, and with Reduce Motion the whole thing drops to no animation, so
+  the glyph cuts rather than turning.
 - **Focus on entry is deferred by a turn, and has to be.** The click that opens a
   card is also the update that creates the editor, so `focusForEntry()` writing
   `@FocusState` straight from `onChange(of: isEditing)` named a field SwiftUI had
@@ -447,6 +543,38 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   declares where its own centre sits relative to that baseline, off the font's cap
   height. The guide reads the *measured* height, so a control that brings its own
   chrome (a borderless `Menu`) needs no allowance made for it.
+  The task row's **expand chevron wears the ⋯ menu's box**, measured off it rather
+  than written down (`actionsSize`), and both dimensions earn their place. The
+  *width* is what puts the two on one vertical axis: they are flush to the same
+  trailing edge, so equal widths is all it takes, and the chevron's 28pt against a
+  borderless `Menu`'s own 20pt had it sitting 4pt to the menu's left. The *height*
+  is the subtler half — a 28pt box centred on a 15pt line sticks out above it, and
+  because the row is baseline-aligned that raised the row's top and pushed the
+  preview text **below** the editor's first line, trading one misalignment for its
+  mirror image. At the menu's 14pt the box sits inside the line box and pushes
+  nothing.
+  **A card's title row is floored at `Metrics.cardTitleRowHeight`** (26pt) in *both*
+  modes, because **Done** exists in only one of them. The capsule is 26pt at
+  `.actionCapsule`/`.controlSize(.small)` against a 16pt title line, and the row is
+  baseline-aligned, so the extra 10pt landed 5pt above the title and 5pt below: a
+  task card opening slid its title down 5pt and its body down 10pt, out from under
+  the cursor that had just clicked it. Measured, both before and after — the
+  title-to-body gap is now 29pt collapsed against 30pt open, and the 1pt left over
+  is `ProjectHashField` sitting a point above centre where a `Text` is centred
+  exactly. The note card never had the fault and needed no fix: its 26pt symbol well
+  already sets that height in both modes, which is the same number reached from the
+  other side. The cost is 10pt on every collapsed task row, which is the deliberate
+  trade — the alternative is taking Done out of the row's height and letting a 26pt
+  capsule overhang a 16pt row.
+  That floor is also why the body carries a **bottom padding of `titleRowSlack`**.
+  A row floored taller than its text keeps the difference as slack at both ends, so
+  the body's gap *upward* is that slack plus the stack's 8pt spacing while its gap
+  *downward* was the spacing alone — 13pt above against 8pt below, which reads as
+  the chips crowding the text. Repeating the slack underneath makes the two one
+  margin; measured at 13.00 above and 13.34 below. It's derived from the two numbers
+  that create it rather than written down, because one of them moves: the title's
+  line height comes off the **card face**, so a serif or monospaced card measures
+  differently from a rounded one.
   A `•` is the same kind of trap: the glyph is **2.6pt** across at body size, and
   the font is no lever on it (still under 4pt at 20pt, by which point the taller
   line has loosened the list). `MarkdownText` draws a 5pt `Circle` instead and

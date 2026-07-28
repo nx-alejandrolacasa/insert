@@ -46,6 +46,13 @@ final class SettingsStore {
         didSet { defaults.set(backdrop.rawValue, forKey: Keys.backdrop) }
     }
 
+    /// The face note and task cards are written in. Read by `Card` during every
+    /// view update, so a change re-renders the cards on its own — nothing to
+    /// re-apply here.
+    var typeface: Typeface {
+        didSet { defaults.set(typeface.rawValue, forKey: Keys.typeface) }
+    }
+
     /// Whether the menu-bar extra is shown.
     var showMenuBar: Bool {
         didSet { defaults.set(showMenuBar, forKey: Keys.showMenuBar) }
@@ -101,6 +108,7 @@ final class SettingsStore {
     private enum Keys {
         static let appearance = "appearance"
         static let backdrop = "backdrop"
+        static let typeface = "typeface"
         static let noteTypes = "noteTypes"
         static let noteSort = "noteSort"
         static let weekStyle = "weekStyle"
@@ -129,6 +137,8 @@ final class SettingsStore {
         // Plain window background unless asked otherwise, so an install that
         // never opens Settings looks exactly as it did before backdrops existed.
         backdrop = Backdrop(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? .plain
+        // Rounded, which is the only face the cards had before this was a choice.
+        typeface = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") ?? .rounded
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
         dailyReminder = defaults.object(forKey: Keys.dailyReminder) as? Bool ?? false
         // 09:00 — the reminder is a morning one by default, whatever the picker

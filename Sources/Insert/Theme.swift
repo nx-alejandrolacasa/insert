@@ -214,13 +214,13 @@ enum Stone {
 
 // MARK: - The reading typeface
 
-/// The typeface note and task **cards** read and write in: the system font in
-/// its **rounded** design (SF Pro Rounded), whose lowercase `a` is the
-/// single-storey round one — the shape Apple Notes uses, and the reason this
-/// exists.
+/// The typeface note and task **cards** read and write in — one of the four
+/// `Typeface` options, Rounded by default: the system font in its **rounded**
+/// design (SF Pro Rounded), whose lowercase `a` is the single-storey round one —
+/// the shape Apple Notes uses, and the reason this exists.
 ///
-/// It is a *system design*, not a bundled face — `Font.system(_:design:)` and
-/// `NSFontDescriptor.withDesign(.rounded)` — so it costs no resource, tracks the
+/// Every option is a *system design*, not a bundled face — `Font.system(_:design:)`
+/// and `NSFontDescriptor.withDesign(_:)` — so it costs no resource, tracks the
 /// system's own weights and sizes, and keeps the "no third-party dependencies"
 /// rule intact.
 ///
@@ -241,28 +241,109 @@ enum Card {
     /// round single-storey `a` as an alternate glyph, so it costs nothing but
     /// asking — and the rounded *design* alone doesn't give it, which is the
     /// thing that's easy to get wrong here: SF Pro Rounded softens the terminals
-    /// and keeps the two-storey `a`.
+    /// and keeps the two-storey `a`. Asked for only by the designs that have it
+    /// (`Typeface.prefersOneStoreyA`).
     private static let oneStoreyA: [NSFontDescriptor.FeatureKey: Int] = [
         .typeIdentifier: 35,     // kStylisticAlternativesType
         .selectorIdentifier: 14, // stylistic set 7 "on" — "One storey a"
     ]
+
+    /// The face the cards are currently set in.
+    ///
+    /// Reading the setting *here* rather than passing it down is what keeps the
+    /// call sites honest: there are a dozen of them across the two panels, they
+    /// all sit in a view body, and an `@Observable` read during a body evaluation
+    /// registers as a dependency — so changing the option in Settings re-renders
+    /// every card with no notification, no re-apply step and nothing to remember
+    /// to thread through. `@MainActor` for the same reason: this is only ever
+    /// called during a view update.
+    @MainActor
+    static func nsFont(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> NSFont {
+        nsFont(style, weight: weight, typeface: SettingsStore.shared.typeface)
+    }
 
     /// Text styles are `NSFont.TextStyle` throughout, not SwiftUI's, because the
     /// alternate can only be asked for through a font descriptor — so the AppKit
     /// font is the real one and the SwiftUI `Font` is derived from it. Weight is
     /// baked in for the same reason: `.weight()`/`.fontWeight()` applied *after*
     /// a descriptor-built font is a different font, and would drop the alternate.
-    static func nsFont(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> NSFont {
+    ///
+    /// The explicit `typeface:` is for `TypefacePicker`, whose specimens each have
+    /// to draw in their own face rather than in the selected one.
+    static func nsFont(
+        _ style: NSFont.TextStyle,
+        weight: NSFont.Weight? = nil,
+        typeface: Typeface
+    ) -> NSFont {
         let base = NSFont.preferredFont(forTextStyle: style)
         let sized = weight.map { NSFont.systemFont(ofSize: base.pointSize, weight: $0) } ?? base
         var descriptor = sized.fontDescriptor
-        if let rounded = descriptor.withDesign(.rounded) { descriptor = rounded }
-        descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
+        if let design = typeface.design, let styled = descriptor.withDesign(design) {
+            descriptor = styled
+        }
+        if typeface.prefersOneStoreyA {
+            descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
+        }
         return NSFont(descriptor: descriptor, size: sized.pointSize) ?? sized
     }
 
+    /// The italic partner of a card font: the design's real italic face where it
+    /// has one, and a **synthesised oblique** where it doesn't.
+    ///
+    /// The synthesis is not a nicety. Standard, Serif and Monospace each ship a
+    /// true italic (`.SFNS-RegularItalic`, `.NewYork-RegularItalic`,
+    /// `.SFNSMono-RegularItalic`), but **SF Rounded has none** — asking a rounded
+    /// descriptor for `.italic` hands back the upright face, silently, so
+    /// `*emphasis*` in a body drew as plain text under the app's *default*
+    /// typeface. A quote and its attribution is where that shows: the attribution
+    /// is the italic line, and it wasn't one.
+    ///
+    /// So a face with no italic gets sheared instead, at the angle SF's own italic
+    /// slants at — read off that face (`italicAngle`, 12.5°) rather than picked, so
+    /// a synthesised oblique leans exactly as far as a real one beside it. The
+    /// shear is applied through the *font matrix*, which is the only way to ask for
+    /// it: `withSymbolicTraits(.italic)` can only select a face that exists.
+    /// Because it goes through `font`'s own descriptor, the one-storey `a` and the
+    /// weight come along with it.
+    /// The trait is **added** to whatever the font already carries, never set on its
+    /// own: `withSymbolicTraits(.italic)` replaces the whole set, so on a bold base
+    /// it quietly dropped the weight — and then the "did we get a real italic?"
+    /// check below saw a differently-named face and believed it, which is how
+    /// `***bold italic***` came out neither bold nor italic. Unioning also makes
+    /// that check honest, since both names then come from the same descriptor and
+    /// differ only if an italic face was really found.
+    static func italic(_ font: NSFont) -> NSFont {
+        let traits = font.fontDescriptor.symbolicTraits
+        let italicised = font.fontDescriptor.withSymbolicTraits(traits.union(.italic))
+        if let real = NSFont(descriptor: italicised, size: font.pointSize),
+           real.fontName != font.fontName {
+            return real
+        }
+        var skew = CGAffineTransform(a: 1, b: 0, c: obliqueSkew, d: 1, tx: 0, ty: 0)
+        let sheared = CTFontCreateWithFontDescriptor(
+            font.fontDescriptor as CTFontDescriptor, font.pointSize, &skew
+        )
+        return sheared as NSFont
+    }
+
+    /// `tan` of the system italic's own angle, so the shear matches it.
+    private static let obliqueSkew: CGFloat = {
+        let system = NSFont.systemFont(ofSize: 13)
+        let italic = NSFont(descriptor: system.fontDescriptor.withSymbolicTraits(.italic), size: 13)
+        return CGFloat(tan((italic?.italicAngle ?? 12.5) * .pi / 180))
+    }()
+
+    @MainActor
     static func font(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> Font {
         Font(nsFont(style, weight: weight))
+    }
+
+    static func font(
+        _ style: NSFont.TextStyle,
+        weight: NSFont.Weight? = nil,
+        typeface: Typeface
+    ) -> Font {
+        Font(nsFont(style, weight: weight, typeface: typeface))
     }
 }
 
@@ -290,6 +371,35 @@ enum Metrics {
     /// chip's 8pt of horizontal padding is right where a pill's 11pt is right,
     /// and this way a chip's height stops depending on which glyph it carries.
     static let chipHeight: CGFloat = 24
+    /// The note card's type glyph: the well it sits in, and the size it is drawn
+    /// at. Both modes take these from here, because the well is only *drawn* while
+    /// editing and the glyph has to be the same size either side of that — a card
+    /// changing the size of its icon as it opens is the same fault as one changing
+    /// the size of its text.
+    ///
+    /// 12pt in a 26pt well, and the pair is what matters: **a frame doesn't clip a
+    /// glyph**, so an SF Symbol wider than its frame simply spills out of the fill
+    /// behind it, which is what `.title3` did — `person.3` measures **33pt** wide at
+    /// 15pt against a 26pt well, and `person.2.wave.2` 27pt. Widths at 12pt are
+    /// 25pt and 21pt, so 12 is the largest size at which the widest *default* type
+    /// symbol still fits. Pinned to that worst case for the reason `chipHeight` is
+    /// pinned to its tallest one: otherwise whether the icon fits depends on which
+    /// symbol the user picked. A custom symbol wider still would need the well
+    /// widened, not the glyph shrunk again — below about 11pt these stop reading.
+    static let noteSymbolWell: CGFloat = 26
+    static let noteSymbolSize: CGFloat = 12
+    /// A card's title row, floored at the height of the tallest thing it can carry:
+    /// the **Done** capsule, 26pt at `.actionCapsule` / `.controlSize(.small)`,
+    /// against a 16pt title line. Measured, not chosen.
+    ///
+    /// Applied in **both** modes, because Done only exists in one of them. Without
+    /// it the task row's title row was 16pt collapsed and 26pt open, and since the
+    /// row is baseline-aligned the extra 10pt landed 5pt above the title and 5pt
+    /// below it — so opening a card slid the title down 5pt and the body down 10pt,
+    /// out from under the cursor that had just clicked it. The note card never had
+    /// the fault and needs no fix: its 26pt symbol well already sets this height in
+    /// both modes, which is the same number arrived at from the other side.
+    static let cardTitleRowHeight: CGFloat = 26
     /// The narrowest either the notes or the tasks column may be dragged —
     /// generous on purpose, so a stray drag can't leave a 90pt sliver where
     /// every card truncates to nothing.
@@ -336,9 +446,12 @@ extension View {
     /// to the *baseline*, which is the one line both share, and the row aligns on
     /// that. `d.height` is measured, so a control that brings its own chrome (a
     /// `Menu`, say) needs no allowance made for it.
-    func centredOnTextCap() -> some View {
+    /// `style` is the text the control sits beside — `.body` for a card's title
+    /// row, `.callout` for a task's notes, since the cap height it centres on comes
+    /// from that font.
+    func centredOnTextCap(_ style: NSFont.TextStyle = .body) -> some View {
         alignmentGuide(.firstTextBaseline) { d in
-            d.height / 2 + NSFont.preferredFont(forTextStyle: .body).capHeight / 2
+            d.height / 2 + NSFont.preferredFont(forTextStyle: style).capHeight / 2
         }
     }
 }
