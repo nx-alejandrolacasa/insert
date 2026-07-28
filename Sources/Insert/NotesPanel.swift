@@ -245,6 +245,7 @@ private struct NoteCardView: View {
     @Environment(Library.self) private var library
     @Environment(SettingsStore.self) private var settings
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The live, editable copy. Seeded from `note` and re-synced when the
     /// upstream note meaningfully changes.
@@ -301,27 +302,24 @@ private struct NoteCardView: View {
     }
 
     /// The card island. In view mode the whole island is a tap target that opens
-    /// edit mode; in edit mode no container gesture is attached, so taps reach
-    /// the title / body fields normally.
-    @ViewBuilder
+    /// edit mode; while editing the gesture is switched off, so taps reach the
+    /// title / body fields normally.
+    ///
+    /// One view for both modes, not `if isEditing { island } else { island.… }`:
+    /// see `TaskCardView.tappableCard` for why that conditional had to go —
+    /// two branches are two identities, so entering edit mode replaced the card
+    /// instead of resizing it and its height could not be animated.
     private var tappableIsland: some View {
-        let island = VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             titleRow
                 // The title's `#project` dropdown drops over the body editor
                 // below; without this the editor — a later sibling — would sit
                 // on top of it and take its clicks.
                 .zIndex(1)
-            if isEditing {
-                // Pills sit *under* the editor: between title and body they cut
-                // the note in half and pushed the text you're writing down the
-                // card.
-                bodyEditor
-                typePills
-                projectRow
-            } else {
-                bodyView
-                if showsProjectChips { projectRow }
-            }
+            // The chips row sits *under* the body: between title and body it cut
+            // the note in half and pushed the text you're writing down the card.
+            bodyArea
+            if isEditing || showsProjectChips { projectRow }
             footer
         }
         .padding(12)
@@ -332,19 +330,38 @@ private struct NoteCardView: View {
                     .strokeBorder(type.tint.accent.opacity(0.55), lineWidth: 1.5)
             }
         }
+        .contentShape(RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous))
+        .gesture(TapGesture().onEnded { enterEdit() }, isEnabled: !isEditing)
+        // A bare tap gesture is invisible to VoiceOver, Switch Control and Voice
+        // Control, so opening a note was pointer-only. The card becomes a
+        // container carrying the same command as an action; the ⋯ menu's "Edit"
+        // covers the keyboard. In a builder so it can go while editing without
+        // splitting the card into two views.
+        .accessibilityElement(children: .contain)
+        .accessibilityActions {
+            if !isEditing {
+                Button("Edit note") { enterEdit() }
+            }
+        }
+        // Same curve as a task row's: opening a card swaps rendered Markdown for
+        // the editor and adds a row of chips, and the cards below it move by that
+        // difference.
+        .animation(
+            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            value: isEditing
+        )
+    }
 
+    /// The body: the editor while editing, rendered Markdown otherwise, changed
+    /// over in one frame with only the card's height animating. See
+    /// `TaskCardView.bodyArea` for what `.transition(.identity)` is keeping out
+    /// and what was tried in its place.
+    @ViewBuilder
+    private var bodyArea: some View {
         if isEditing {
-            island
+            bodyEditor.transition(.identity)
         } else {
-            island
-                .contentShape(RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous))
-                .onTapGesture { enterEdit() }
-                // A bare tap gesture is invisible to VoiceOver, Switch Control
-                // and Voice Control, so opening a note was pointer-only. The card
-                // becomes a container carrying the same command as an action; the
-                // ⋯ menu's "Edit" covers the keyboard.
-                .accessibilityElement(children: .contain)
-                .accessibilityAction(named: "Edit note") { enterEdit() }
+            bodyView.transition(.identity)
         }
     }
 
@@ -384,9 +401,13 @@ private struct NoteCardView: View {
             Spacer(minLength: 8)
 
             if isEditing {
+                // Flat, like "New Note" above it: glass drew its own drop
+                // shadow, and one lifted button inside a flat card was the only
+                // thing in the window casting light. `.small` keeps the size it
+                // had — `.actionCapsule` pads off `.controlSize`, and the
+                // capsule is the style's own shape, so no `buttonBorderShape`.
                 Button("Done") { exitEdit() }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
+                    .buttonStyle(.actionCapsule)
                     .controlSize(.small)
             }
 
@@ -442,6 +463,11 @@ private struct NoteCardView: View {
                     draft.projectIDs.append($0)
                 }
                 Spacer(minLength: 0)
+                // Trailing, the way a task row hangs its due badge off the end
+                // of the same chips row: the type is one value, so it belongs
+                // on the fixed edge rather than drifting rightwards as chips
+                // are added.
+                typeMenu
             }
         } else {
             HStack(spacing: 6) {
@@ -472,37 +498,62 @@ private struct NoteCardView: View {
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
+            .chipHeight()
             .background(Capsule().fill(tint.chip))
     }
 
-    // MARK: Type pills
+    // MARK: Type menu
 
-    /// One pill per configured type; the selected one is filled with its `deep`.
-    /// Doubles as the "pick a type" affordance for a freshly created note and as
-    /// a way to re-categorize an existing one later.
+    /// The note's type as a pill-shaped dropdown, wearing that type's `deep` fill
+    /// with a chevron — a pop-up button drawn as one of the app's own pills, not
+    /// a `Picker`, which would redraw it in system chrome and lose the colour.
     ///
-    /// This was a hand-rolled copy of `FilterPill` differing only by a point of
-    /// padding. Now that selection is a fill rather than a border, both had to
-    /// change the same way — so they share the one view instead, which is what
-    /// "the notes and tasks columns read as one system" wanted in the first place.
-    private var typePills: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(settings.noteTypes) { pillType in
-                    let selected = pillType.id == draft.typeID
-                    FilterPill(
-                        label: pillType.name,
-                        symbol: pillType.symbol,
-                        tint: pillType.tint,
-                        selected: selected
-                    ) {
-                        selectType(pillType)
-                    }
-                    .help(selected ? "\(pillType.name) (current type)" : "Mark as \(pillType.name)")
+    /// It replaced a row of one `FilterPill` per type, which is what the tint's
+    /// `deep`-and-white here is borrowed from: the *selected* state of that row,
+    /// since this control shows exactly one type and it is always the current
+    /// one. The row cost a whole line of the card and grew with every type added
+    /// in Settings, where the note being edited is what should have the space;
+    /// the dropdown costs a badge. Nothing is lost but the second glance —
+    /// which type is set is still on show, only the alternatives moved behind a
+    /// click.
+    private var typeMenu: some View {
+        Menu {
+            // Plain buttons rather than a `Picker`: the pill itself says which
+            // type is current, so a menu carrying checkmarks would only mean
+            // giving up each type's own symbol to show it.
+            ForEach(settings.noteTypes) { menuType in
+                Button {
+                    selectType(menuType)
+                } label: {
+                    Label(menuType.name, systemImage: menuType.symbol)
                 }
             }
-            .padding(.vertical, 1)
+        } label: {
+            HStack(spacing: 4) {
+                if !type.symbol.isEmpty { Image(systemName: type.symbol) }
+                Text(type.name)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            // The same padding a `FilterPill` uses, so the dropdown and the
+            // filter row above it are the same pill at the same size.
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .chipHeight()
+            .background(Capsule().fill(type.tint.deep))
+            .contentShape(Capsule())
         }
+        // See `AddProjectMenu`: `.button` + plain keeps the label as drawn,
+        // where `.borderlessButton` would drop the capsule.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Change note type")
+        .accessibilityLabel("Note type: \(type.name)")
     }
 
     /// Switching type also swaps the symbol when the note still uses the previous

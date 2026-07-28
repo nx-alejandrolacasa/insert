@@ -223,6 +223,19 @@ enum Metrics {
     static let islandRadius: CGFloat = 16
     static let rowRadius: CGFloat = 10
     static let cardSpacing: CGFloat = 12
+    /// How long a card takes to grow into edit mode, or shrink out of it. Shared
+    /// by the notes and tasks cards.
+    static let cardModeDuration: Double = 0.22
+    /// The height every capsule in the content layer settles at — filter pills,
+    /// the note type dropdown, project chips, the due badge. They used to be
+    /// three heights: a caption line is 13pt, so 5pt of padding gave 23 and 3pt
+    /// gave 19, and a pill whose SF Symbol is a two-person glyph (Meeting,
+    /// Staffing) measures 14pt rather than 13 and so came out 24 while the
+    /// text-only "All" beside it stayed 23. 24 is that tallest case, pinned:
+    /// applied as a **floor** rather than by equalising the paddings, because a
+    /// chip's 8pt of horizontal padding is right where a pill's 11pt is right,
+    /// and this way a chip's height stops depending on which glyph it carries.
+    static let chipHeight: CGFloat = 24
     /// The narrowest either the notes or the tasks column may be dragged —
     /// generous on purpose, so a stray drag can't leave a 90pt sliver where
     /// every card truncates to nothing.
@@ -251,6 +264,40 @@ enum Metrics {
     static let minSidebarWidth: CGFloat = 200
     static let idealSidebarWidth: CGFloat = 200
     static let maxSidebarWidth: CGFloat = 460
+}
+
+// MARK: - Aligning controls with text
+
+extension View {
+    /// Centres a fixed-size control on the **cap height** of the body text it
+    /// sits beside, in a row aligned `.firstTextBaseline`.
+    ///
+    /// `.center` is the obvious alignment and it's wrong here, twice over. A
+    /// glyph padded out to a comfortable click target — a 17pt circle in a 28pt
+    /// box — centres the *box*, which drops the glyph 14pt from the row's top
+    /// while a 13pt title's capitals start 4.6pt from theirs: on the task row
+    /// that put the checkbox 7pt below the title it belongs to. And text is not
+    /// centred on its own frame either, since the frame carries a descender the
+    /// title may not use. So the control declares where its centre sits relative
+    /// to the *baseline*, which is the one line both share, and the row aligns on
+    /// that. `d.height` is measured, so a control that brings its own chrome (a
+    /// `Menu`, say) needs no allowance made for it.
+    func centredOnTextCap() -> some View {
+        alignmentGuide(.firstTextBaseline) { d in
+            d.height / 2 + NSFont.preferredFont(forTextStyle: .body).capHeight / 2
+        }
+    }
+}
+
+// MARK: - Chips
+
+extension View {
+    /// Floors a chip's height at `Metrics.chipHeight`. Goes on the *padded
+    /// label*, before the capsule is drawn behind it, so the capsule grows with
+    /// it and the padding still sets the width.
+    func chipHeight() -> some View {
+        frame(minHeight: Metrics.chipHeight)
+    }
 }
 
 // MARK: - Filter pill
@@ -284,6 +331,7 @@ struct FilterPill: View {
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
+            .chipHeight()
             .background(Capsule().fill(selected ? AnyShapeStyle(tint.deep) : AnyShapeStyle(tint.chip)))
             // The hairline is decoration on an unselected pill; a filled one
             // needs no outline at all.

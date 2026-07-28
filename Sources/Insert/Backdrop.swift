@@ -70,10 +70,16 @@ enum Backdrop: String, CaseIterable, Identifiable {
     /// Faithful to the source, that came out at a ~12% swing in luminance, and
     /// **12% is not a gradient** — it read as a flat colour in the window and as
     /// nothing whatsoever in a 52pt swatch, which is the one job the Settings
-    /// preview has. So the outer stop is deepened well past `#ECE2DF`, to about a
-    /// 30% swing. The centre is still the resolved blend; only the edge moved. If a
+    /// preview has. So the outer stop is deepened past `#ECE2DF`, to about a 19%
+    /// swing. The centre is still the resolved blend; only the edge moved. If a
     /// borrowed gradient's own stops are 1% apart, copying them exactly is the
     /// wrong kind of faithful.
+    ///
+    /// That edge sat at ~30% first, and 30% overshot in the other direction: a
+    /// near-white centre falling to a visibly sandy rim reads as a vignette, which
+    /// is a heavier thing than the lit off-white this is meant to be. So the two
+    /// numbers bracket it — 12% is invisible, 30% is a frame — and the useful range
+    /// for a near-white radial is the ~20% between them.
     ///
     /// Unrelated to the `Stone` palette in `Theme.swift`, which is the app's
     /// neutral for chips and hairlines. Same word, different job — no call site
@@ -207,12 +213,16 @@ enum Backdrop: String, CaseIterable, Identifiable {
         // the CSS's own two stops are `#EADFDF → #ECE2DF`, a 1% step, and even with
         // the white bloom screened over it the whole thing came to a ~12% swing in
         // luminance — which reads as a flat colour, not a gradient, and reads as
-        // *nothing at all* in a 52pt swatch. This edge takes it to ~30%, enough to
+        // *nothing at all* in a 52pt swatch. This edge takes it to ~19%, enough to
         // see the falloff while keeping the character: still a warm off-white lit
-        // from the middle, and the palest member of the set after `cloud`.
+        // from the middle, and the palest member of the set after `cloud`. It was
+        // briefly ~30%, which was past subtle — the bloom read as a vignette rather
+        // than as light. Both halves moved the same distance in component space, so
+        // Dark keeps step with Light, and each end keeps red leading: the falloff
+        // is warm off-white into warmer, never into grey.
         case .stone: .elliptical([
             DynamicRGB(light: RGB(r: 0.959, g: 0.937, b: 0.937), dark: RGB(r: 0.185, g: 0.170, b: 0.168)),
-            DynamicRGB(light: RGB(r: 0.872, g: 0.828, b: 0.815), dark: RGB(r: 0.108, g: 0.100, b: 0.098))])
+            DynamicRGB(light: RGB(r: 0.902, g: 0.866, b: 0.858), dark: RGB(r: 0.135, g: 0.125, b: 0.123))])
         // Both of these were toned down: they were the two most saturated members
         // and sat oddly beside the near-white borrowed ones. Every stop keeps its
         // hue and its *lead* channel — the identity of each is which channel wins,

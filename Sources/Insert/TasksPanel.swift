@@ -205,6 +205,7 @@ private struct TaskCardView: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
     @Environment(SettingsStore.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var draft: TaskItem
     /// The in-flight debounced save, cancelled and restarted on every edit.
@@ -272,11 +273,21 @@ private struct TaskCardView: View {
     }
 
     /// The row island. In view mode the whole island is a tap target that opens
-    /// edit mode; in edit mode no container gesture is attached, so taps reach
-    /// the title / notes fields normally.
-    @ViewBuilder
+    /// edit mode; while editing the gesture is switched off, so taps reach the
+    /// title / notes fields normally.
+    ///
+    /// **One view, both modes**, and that matters for more than tidiness: this
+    /// was `if isEditing { card } else { card.onTapGesture… }`, which is a
+    /// `_ConditionalContent` — two branches, two identities. Entering edit mode
+    /// was therefore a teardown and a rebuild, not a resize, so there was no
+    /// height *change* for an `.animation` to interpolate and the row snapped to
+    /// its new size however it was animated. Switching the gesture off with
+    /// `isEnabled:` keeps the one identity, and the height then eases.
     private var tappableCard: some View {
-        let card = HStack(alignment: .top, spacing: 10) {
+        // Baseline, not `.top`: the checkbox is a 17pt glyph in a 28pt target, so
+        // top-aligning the two boxes sat it 7pt below the title's capitals. See
+        // `centredOnTextCap()`.
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             checkbox
 
             VStack(alignment: .leading, spacing: 8) {
@@ -289,11 +300,7 @@ private struct TaskCardView: View {
 
                 // Body, then the chips / due row — same order as a note card,
                 // where the pills sit under the text you're writing.
-                if isEditing {
-                    bodyEditor
-                } else {
-                    bodySection
-                }
+                bodyArea
 
                 metaRow
 
@@ -307,25 +314,36 @@ private struct TaskCardView: View {
         // leaves those on plain white paper (see `island`).
         .island(radius: Metrics.rowRadius, tint: settings.dueTintedTasks ? dueTint : nil)
         .opacity(draft.done ? 0.7 : 1)
-
-        if isEditing {
-            card
-        } else {
-            card
-                .contentShape(RoundedRectangle(cornerRadius: Metrics.rowRadius, style: .continuous))
-                .onTapGesture { enterEdit() }
-                // A bare tap gesture is pointer-only; the container action and
-                // the ⋯ menu's "Edit" cover assistive tech and the keyboard.
-                .accessibilityElement(children: .contain)
-                .accessibilityAction(named: "Edit task") { enterEdit() }
+        .contentShape(RoundedRectangle(cornerRadius: Metrics.rowRadius, style: .continuous))
+        .gesture(TapGesture().onEnded { enterEdit() }, isEnabled: !isEditing)
+        // A bare tap gesture is pointer-only; the container action and the ⋯
+        // menu's "Edit" cover assistive tech and the keyboard. The action is
+        // declared in a builder so it can be dropped while editing without the
+        // card itself becoming a different view.
+        .accessibilityElement(children: .contain)
+        .accessibilityActions {
+            if !isEditing {
+                Button("Edit task") { enterEdit() }
+            }
         }
+        // Opening and closing a row changes its height — the editor replaces the
+        // one-line preview, Done appears, the chips row grows a ＋. Ease that the
+        // same way typing into the editor eases, only a touch slower: this is a
+        // mode change rather than a line appearing, and the rows below travel
+        // further.
+        .animation(
+            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            value: isEditing
+        )
     }
 
     // MARK: Title row
 
     @ViewBuilder
     private var titleRow: some View {
-        HStack(alignment: .center, spacing: 8) {
+        // Baseline again, so the ⋯ — and Done, and the title — sit on one line
+        // whatever box each of them brings.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             if isEditing {
                 // `#project` tags a project and is stripped from the title,
                 // same as in the composer.
@@ -340,9 +358,10 @@ private struct TaskCardView: View {
                     focused: $titleFocused
                 )
 
+                // Twin of the note card's Done — same reasons, and these two
+                // change together or not at all.
                 Button("Done") { exitEdit() }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
+                    .buttonStyle(.actionCapsule)
                     .controlSize(.small)
             } else {
                 Text(draft.title.isEmpty ? "Untitled" : draft.title)
@@ -367,6 +386,7 @@ private struct TaskCardView: View {
                 .foregroundStyle(draft.done ? Color.accentColor : Color.secondary)
                 .contentShape(Rectangle())
         }
+        .centredOnTextCap()
         .buttonStyle(.plain)
         .help(draft.done ? "Mark as not done" : "Mark as done")
         // Done-ness was conveyed by glyph and colour only. Announce it as a
@@ -431,6 +451,7 @@ private struct TaskCardView: View {
             .foregroundStyle(dueForeground)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
+            .chipHeight()
             .background(Capsule().fill(dueBackground))
         }
         .buttonStyle(.plain)
@@ -482,16 +503,12 @@ private struct TaskCardView: View {
     private var duePopover: some View {
         VStack(alignment: .leading, spacing: 14) {
             // The quick presets the composer used to offer, so the common
-            // cases stay one click away of the badge.
-            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
-                GridRow {
-                    presetPill(.today)
-                    presetPill(.tomorrow)
-                }
-                GridRow {
-                    presetPill(.endOfWeek)
-                    presetPill(.nextWeek)
-                }
+            // cases stay one click away of the badge. One row at the same 6pt
+            // as every other pill row: a `Grid` sized both columns to the
+            // widest label, so "Today" carried "End of week"'s width and the
+            // four pills read as a sparse table rather than a pill row.
+            HStack(spacing: 6) {
+                ForEach(DuePreset.allCases) { presetPill($0) }
             }
 
             MonthCalendar(
@@ -513,8 +530,10 @@ private struct TaskCardView: View {
         }
         .padding(14)
         // Wide enough that the month grid gets room to breathe — the calendar
-        // stretches to fill it.
-        .frame(width: 300)
+        // stretches to fill it — and that the four presets fit on one line:
+        // they measure 299pt with the selected one bold, so anything under
+        // ~330 puts a label back on a second row or truncates it.
+        .frame(width: 332)
     }
 
     private func presetPill(_ preset: DuePreset) -> some View {
@@ -532,6 +551,45 @@ private struct TaskCardView: View {
         guard let due = draft.due else { return nil }
         return DuePreset.allCases.first {
             Calendar.current.isDate(due, inSameDayAs: $0.date(now: Date(), weekStyle: settings.weekStyle))
+        }
+    }
+
+    // MARK: Body — the swap between modes
+
+    /// The notes: the editor while editing, the read-only preview otherwise —
+    /// changed over in **one frame**, never cross-faded.
+    ///
+    /// The text changes over in **one frame**, both ways; the row's height is the
+    /// only thing that animates. `.transition(.identity)` is what says so — the
+    /// default for replacing one view with another is a **cross**-fade, and that
+    /// was the same paragraph in two forms, each half-transparent, sliding through
+    /// the other mid-resize.
+    ///
+    /// Two attempts at softening it are worth not repeating, both variations on
+    /// fading the preview out and the editor in as separate steps so that no frame
+    /// holds both. Run alongside the resize it flashes; run *after* it, with the
+    /// preview held on show until the row has finished growing, it stops being a
+    /// transition and becomes a wait. Nothing needs to bridge this: the swap is
+    /// legible because the row around it is already moving.
+    private var bodyArea: some View {
+        modeSwappedBody
+            // The editor's sizing proxy lives here, outside both modes, for two
+            // reasons. It doesn't size its host — a background never does — which
+            // is what lets the editor's height be one animatable number instead
+            // of a stack that resizes in a single frame. And measuring in *view*
+            // mode too means the row already knows how tall the editor will be
+            // when it opens: with the proxy inside `bodyEditor` the first open of
+            // a long task grew twice, once to the 28pt floor and again when the
+            // real height arrived, and the text swapped in mid-way through.
+            .background(alignment: .topLeading) { bodySizingProxy }
+    }
+
+    @ViewBuilder
+    private var modeSwappedBody: some View {
+        if isEditing {
+            bodyEditor.transition(.identity)
+        } else {
+            bodySection.transition(.identity)
         }
     }
 
@@ -598,19 +656,6 @@ private struct TaskCardView: View {
     /// row expands to fit rather than scrolling internally.
     private var bodyEditor: some View {
         ZStack(alignment: .topLeading) {
-            // Invisible sizing proxy (same font/insets as the editor). It stays
-            // in the layout so the ZStack height tracks the wrapped text; the
-            // editor is then pinned to that height rather than growing greedily.
-            Text(draft.body.isEmpty ? " " : draft.body)
-                .font(.callout)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 5)
-                .hidden()
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                    measuredBodyHeight = $0
-                }
-
             // Shown whenever the notes are empty — the field takes focus on
             // entry, and hiding the placeholder then would leave nothing saying
             // what the empty space is for.
@@ -625,13 +670,36 @@ private struct TaskCardView: View {
             }
 
             MarkdownEditor(text: $draft.body, font: .callout, focused: $bodyFocused)
-                .frame(height: max(28, measuredBodyHeight))
                 // Esc leaves the editor, matching the title field.
                 .onKeyPress(.escape) {
                     exitEdit()
                     return .handled
                 }
         }
+        // One number is the row's height, and it eases. Wrapping a line used to
+        // resize the card in a single frame, which — because the rows below move
+        // with it — read as the list flinching every time a sentence got long
+        // enough to wrap.
+        .frame(height: max(28, measuredBodyHeight))
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: measuredBodyHeight)
+    }
+
+    /// The editor's text laid out at the row's width with the editor's own font
+    /// and insets, hidden — how tall the notes *want* to be. `fixedSize`
+    /// vertically because a background is proposed its host's height, and the
+    /// host's height is precisely what this is measuring: without it the proxy
+    /// would report the animated height back to itself.
+    private var bodySizingProxy: some View {
+        Text(draft.body.isEmpty ? " " : draft.body)
+            .font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 5)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                measuredBodyHeight = $0
+            }
     }
 
     // MARK: Footer
@@ -662,6 +730,10 @@ private struct TaskCardView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // A borderless `Menu` adds insets of its own around the label, so what
+        // the row has to align is the height it ends up with, not the 28pt frame
+        // above — which is exactly what the guide measures.
+        .centredOnTextCap()
         .help("Task actions")
         .accessibilityLabel("Task actions")
     }
@@ -807,8 +879,10 @@ private struct DuePill: View {
     let selected: Bool
     let action: () -> Void
 
-    /// Green for a set date, echoing the due badge's own "today" colour.
-    private static let tint = Tint.green
+    /// The same blue the month grid below fills its selected day with — a pill
+    /// and a day cell in one popover both mean "this is the due date", so they
+    /// can't be two different colours. `MonthCalendar`'s default `tint`.
+    private static let tint = Tint.blue
 
     var body: some View {
         Button(action: action) {
@@ -820,6 +894,7 @@ private struct DuePill: View {
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
+            .chipHeight()
             .background(
                 Capsule().fill(selected ? AnyShapeStyle(Self.tint.deep) : AnyShapeStyle(Stone.chip))
             )

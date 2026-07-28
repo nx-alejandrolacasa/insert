@@ -275,6 +275,7 @@ struct ProjectChip: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
+            .chipHeight()
             .background(Capsule().fill(project.tint.chip))
             .overlay(Capsule().strokeBorder(project.tint.accent.opacity(0.35), lineWidth: 0.5))
             .overlay(alignment: .trailing) {
@@ -314,9 +315,10 @@ struct ProjectChip: View {
 /// not already assigned. Dressed exactly like a task's "Add due" badge — grey
 /// caption on a grey wash — so the two affordances read as one family.
 ///
-/// `compact` drops the text and leaves the bare ＋: that's the form used next
-/// to existing chips, where "add another of these" needs no spelling out. The
-/// full wording is for the unassigned case, where the pill stands alone.
+/// `compact` drops the text and leaves a bare bold ＋ in a circle: that's the
+/// form used next to existing chips, where "add another of these" needs no
+/// spelling out. The full wording is for the unassigned case, where the pill
+/// stands alone, and it stays a capsule.
 struct AddProjectMenu: View {
     let assigned: [UUID]
     var compact = false
@@ -339,19 +341,32 @@ struct AddProjectMenu: View {
                 }
             }
         } label: {
-            // The empty Text stays in the compact form: it's zero-width but
-            // still carries the caption line height, so the ＋ pill matches
-            // its text-bearing neighbours instead of shrinking to the glyph.
-            HStack(spacing: compact ? 0 : 4) {
+            if compact {
+                // A **circle**, not a short capsule: with the text gone there's
+                // one glyph in there, so a capsule was a circle with slack at the
+                // sides. Square at `chipHeight`, which is what makes it round and
+                // keeps it the height of the chips it sits beside. The ＋ is bold
+                // because at caption size a regular one is two hairlines — the
+                // one glyph carrying the whole affordance has to be legible.
                 Image(systemName: "plus")
-                Text(compact ? "" : "Add project")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: Metrics.chipHeight, height: Metrics.chipHeight)
+                    .background(Circle().fill(Color.secondary.opacity(0.14)))
+                    .contentShape(Circle())
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                    Text("Add project")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .chipHeight()
+                .background(Capsule().fill(Color.secondary.opacity(0.14)))
+                .contentShape(Capsule())
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(Color.secondary.opacity(0.14)))
-            .contentShape(Capsule())
         }
         // `.button` + plain, not `.borderlessButton`: the borderless style
         // redraws the label in its own type and drops the capsule, and this

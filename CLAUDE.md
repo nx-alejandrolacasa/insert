@@ -174,12 +174,70 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `pin(_:)` is a no-op on an already-pinned note — re-pinning on a second edit
   would hand back exactly the jump this prevents. Covered by
   `StorageLayoutTests`.
+  A note's **type** is a pill-shaped dropdown in that type's colour, sitting at
+  the trailing end of the chips row while editing. It replaced a row of one
+  `FilterPill` per type, whose selected state is where the `deep`-and-white comes
+  from: the control shows exactly one type and it is always the current one. The
+  row cost a line of every open card and grew with every type added in Settings,
+  which is space the note being written should have. A `Menu` styled by hand
+  rather than a `Picker`, because a `Picker` redraws the label in system chrome
+  and the colour is the point.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
   task can be assigned to several projects. Typing `#` opens a project
   autocomplete; Tab picks the first match; the `#word` is *not* kept in the
   task text, it only adds the assignment. Assignments appear as chips below and
   are removed by double-clicking them (or via the chip's context menu — the
   double-click is deliberately hard to trigger, so it can't be the only route).
+- **Cards opening and closing** — a card's **height** animates
+  (`Metrics.cardModeDuration`), and its **content does not**. Both matter, and
+  each took a wrong turn first.
+  Nothing animated at all until the cards stopped being written as
+  `if isEditing { card } else { card.onTapGesture… }`. That is a
+  `_ConditionalContent`: two branches, two identities, so entering edit mode was a
+  teardown and a rebuild rather than a resize, and no `.animation` anywhere could
+  have fired. Both cards are now one view with the gesture switched off by
+  `.gesture(_:isEnabled:)` and the "Edit" accessibility action moved into an
+  `.accessibilityActions { }` builder — keep it that way; re-introducing a
+  conditional around either card silently kills the animation.
+  The body text then **swaps in one frame**, which is what `.transition(.identity)`
+  on both branches is for: SwiftUI's default is a cross-fade, and the two halves
+  are the same paragraph with and without its `**` and `#`, so a cross-fade showed
+  both at once, half-transparent, while the card was still resizing. Two ways of
+  softening that were tried and both are worse. A sequenced fade (preview out,
+  editor in) *alongside* the resize flashes. The same fade *after* the resize,
+  holding the preview until the card has finished growing, stops being a
+  transition and becomes a wait. The swap is legible because the card around it is
+  moving; it needs nothing else.
+  Typing inside a task's editor eases too, and that one needed the sizing proxy
+  moved **out of the layout** into a `.background` on the body container: in the
+  stack the proxy *was* the height, so the row jumped the instant text wrapped.
+  In the background it doesn't size its host, so the height is one animatable
+  number — and it keeps measuring in view mode, without which the first open of a
+  long task grew twice, once to the floor and again when the real height arrived.
+  Note cards still snap while typing; only the mode change is animated there.
+- **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
+  `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
+  horizontal padding is right where a pill's 11pt is right. There were three
+  heights before: a caption line is 13pt, so 5pt of padding gave 23 and 3pt gave
+  19, and a pill whose SF Symbol is a two-person glyph (Meeting, Staffing)
+  measures 14pt rather than 13 and came out 24 beside a text-only "All" at 23. 24
+  is that tallest case, pinned, so a chip's height no longer depends on which
+  glyph it carries. The compact "add project" ＋ is the exception in shape only:
+  square at `chipHeight`, so it's a **circle**, since with the text gone a capsule
+  was a circle with slack at the sides.
+- **Align on the baseline, not the box** (`centredOnTextCap()`). A glyph padded
+  out to a comfortable click target centres the *box*: a 17pt circle in a 28pt
+  target sits 14pt from the row's top while a 13pt title's capitals start 4.6pt
+  from theirs, which had the task row's checkbox 7.5pt below the title it belongs
+  to. Text isn't centred on its own frame either — the frame carries a descender
+  the title may not use. So the row aligns `.firstTextBaseline` and each control
+  declares where its own centre sits relative to that baseline, off the font's cap
+  height. The guide reads the *measured* height, so a control that brings its own
+  chrome (a borderless `Menu`) needs no allowance made for it.
+  A `•` is the same kind of trap: the glyph is **2.6pt** across at body size, and
+  the font is no lever on it (still under 4pt at 20pt, by which point the taller
+  line has loosened the list). `MarkdownText` draws a 5pt `Circle` instead and
+  declares the baseline guide itself, because a shape has none.
 - **Loading — read it all, and don't get clever.** `reloadAll` parses every note and
   every task, every time. That is the design, not a placeholder: it's what makes
   each list complete, each count exact and search honest, with no thresholds to
@@ -259,9 +317,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   halfway to white. Its **outer stop is deepened past the source** on purpose: the
   CSS's own two stops are 1% apart and even with the bloom screened over them the
   result was a ~12% swing in luminance, which reads as a flat colour in the window
-  and as nothing at all in a 52pt swatch. It's now ~30%. If a borrowed gradient's
+  and as nothing at all in a 52pt swatch. It's now ~19%. If a borrowed gradient's
   stops are that close together, copying them exactly is the wrong kind of
-  faithful. Note Stone also *inherited* its name from a cut linear
+  faithful. That edge was first taken to ~30%, which overshot the other way — a
+  near-white centre falling to a visibly sandy rim reads as a vignette, not as a
+  lit off-white — so the two numbers bracket it: 12% is invisible, 30% is a frame,
+  and a near-white radial wants the ~20% in between. Note Stone also *inherited* its name from a cut linear
   near-white-into-sand, so a saved `"stone"` from before now selects the radial.
   **Seven** others were tried and cut, and between them they are the brief for a
   sixth: a Honey and a Dune too close to Dawn's pale warm end, an Orchid that

@@ -33,7 +33,7 @@ struct MarkdownText: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("•").foregroundStyle(.secondary)
+                        bulletDot
                         inline(item).font(.body)
                     }
                 }
@@ -61,6 +61,26 @@ struct MarkdownText: View {
         case .rule:
             Divider().padding(.vertical, 2)
         }
+    }
+
+    /// A bullet list's marker, drawn rather than typed. `Text("•")` is what this
+    /// was, and that glyph measures **2.6pt** across at body size — a speck
+    /// beside 13pt text, and the font is no lever on it: at 20pt the dot is still
+    /// under 4pt, by which point the taller line has loosened the whole list. A
+    /// circle's size is ours to pick, so it's 5pt.
+    ///
+    /// A shape has no baseline, so the row's `.firstTextBaseline` alignment would
+    /// fall back to the dot's bottom edge and hang it below the text; the guide
+    /// is declared here instead, putting the dot's centre on the body font's
+    /// x-height — where the glyph's own centre sat, and read off the font so it
+    /// tracks the text rather than pinning a number.
+    private var bulletDot: some View {
+        Circle()
+            .fill(.secondary)
+            .frame(width: 5, height: 5)
+            .alignmentGuide(.firstTextBaseline) { d in
+                d.height / 2 + NSFont.preferredFont(forTextStyle: .body).xHeight / 2
+            }
     }
 
     private func inline(_ text: String) -> Text {
