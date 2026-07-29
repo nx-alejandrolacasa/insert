@@ -301,21 +301,34 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   under "Pending" a task you tick still leaves the list, because it is no longer one
   of the things that view is showing — the same line `NotePins` draws against the
   notes column's type filter. Covered by `StorageLayoutTests`.
-  The filter row carries **two groups of pills**: the state trio (All / Pending /
-  Done) and a date trio (Overdue / Today / Tomorrow). The date filters show only
-  **pending, dated** work — the same rule as the menu bar's buckets
-  (`DateSections`), so a ticked task due today is nobody's "today" — and they wear
-  the due badge's own colours (orange overdue, green today, purple upcoming), so a
-  pill and the rows it selects tell the same story, even though that repeats
-  Pending's orange and Done's green within the row. The logic is
-  `TaskFilter.matches(_:now:)`, a pure function with `now` injectable, pinned by
-  `TaskFilterTests` at the day boundaries (yesterday / today / tomorrow / later,
-  undated, done). Layout is a `ViewThatFits`: state pills anchored left and date
-  pills anchored right while the column fits both groups plus a 16pt gap; when it
-  doesn't, all six join **one line that scrolls sideways together**, the notes
-  column's arrangement — never two rows, never a crushed gap. And a new task is
-  pending and undated, so `createTask` resets any filter but All and Pending
-  before creating, or the task would be born hidden.
+  The filter row carries **two axes that combine**: the state trio (All /
+  Pending / Done), pills and a radio — exactly one always lit — and a date
+  **dropdown** (All time / Overdue / Today / Tomorrow, "All time" the default).
+  ANDed together, so Pending + Today is the day's remaining work and
+  Done + Overdue is what got finished late. The date axis was briefly a second
+  trio of pills that *toggled* — clicking the lit one cleared it — and was
+  redone as a dropdown on the grounds that two chip rows behaving differently
+  is worse than a second control: the dropdown is the note card's type menu
+  worn by a filter, always showing exactly the current value in that value's
+  colour, with the off state an ordinary entry instead of a behaviour. "All
+  time" wears the same grey as the state row's "All" and means the same thing;
+  in the model it is `nil`, not a fourth case, so every `TaskDateFilter` case
+  is a real window and `matches` has no always-true branch. The date axis reads
+  the **due date alone** — done-ness belongs to the state axis, or the
+  combinations would mean nothing — so its "Overdue" is "due before today",
+  *not* the menu bar's pending-only rule, which `DateSections` keeps for its
+  buckets. The windows wear the due badge's own colours (orange overdue, green
+  today, purple upcoming), so the control and the rows it selects tell the same
+  story. The logic is `TaskFilter.matches(_:)` and
+  `TaskDateFilter.matches(_:now:)`, pure functions with `now` injectable,
+  pinned by `TaskFilterTests` at the day boundaries (yesterday / today /
+  tomorrow / later, undated, done). Layout is a `ViewThatFits`: state pills
+  anchored left and the dropdown anchored right while the column fits both plus
+  a 16pt gap; when it doesn't, they join **one line that scrolls sideways
+  together**, the notes column's arrangement — never two rows, never a crushed
+  gap. And a new task is pending and undated, so `createTask` resets a Done
+  state pill and any date window before creating, or the task would be born
+  hidden.
 - **The daily reminder counts, and says nothing else.** Settings → Tasks can post
   one notification a day — "You have 3 tasks for today" — off by default, at a time
   the user picks from a **fixed list of half hours, 06:00 to 12:00**, 09:00 to begin

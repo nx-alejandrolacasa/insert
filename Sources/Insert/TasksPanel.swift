@@ -33,6 +33,7 @@ struct TasksPanel: View {
         let tasks = library.tasks(
             forProject: appState.selectedProjectID,
             filter: appState.taskFilter,
+            dateFilter: appState.taskDateFilter,
             search: appState.searchText,
             pinned: pins
         )
@@ -46,7 +47,7 @@ struct TasksPanel: View {
 
                 // A pill row mirroring the notes column's type filter, so both
                 // columns present their filters identically.
-                stateFilterPills
+                filterPills
                     .padding(.horizontal, Metrics.panelPadding)
                     // Same gap as the notes column, so both headers sit at an
                     // identical distance from their first row of content.
@@ -80,9 +81,10 @@ struct TasksPanel: View {
         // same rule the notes column follows: on those frames it is being rebuilt
         // from scratch anyway, so a task taking its new place is invisible rather
         // than a row leaving under your cursor. There is no task sort setting, so
-        // these three are the whole list.
+        // these four are the whole list.
         .onChange(of: appState.selectedProjectID) { pins = TaskPins() }
         .onChange(of: appState.taskFilter) { pins = TaskPins() }
+        .onChange(of: appState.taskDateFilter) { pins = TaskPins() }
         .onChange(of: appState.searchText) { pins = TaskPins() }
     }
 
@@ -91,10 +93,9 @@ struct TasksPanel: View {
     /// below the dated ones, so the scroll matters.
     private func createTask(proxy: ScrollViewProxy) {
         // Anything that would hide the new task gets out of the way first — it
-        // starts pending and undated, so every filter but All and Pending would.
-        if appState.taskFilter != .all && appState.taskFilter != .pending {
-            appState.taskFilter = .all
-        }
+        // starts pending and undated, so Done and every date window would.
+        if appState.taskFilter == .done { appState.taskFilter = .all }
+        appState.taskDateFilter = nil
         appState.searchText = ""
 
         let task = library.addTask(
@@ -138,34 +139,41 @@ struct TasksPanel: View {
         }
     }
 
-    // MARK: - State filter pills
+    // MARK: - Filter pills
 
-    /// The state pills (All / Pending / Done) anchored left and the date pills
-    /// (Overdue / Today / Tomorrow) anchored right, while the column is wide
-    /// enough for both groups plus a gap between them. When it isn't, the six
-    /// pills join into one line that scrolls sideways together, the same way
-    /// the notes column's type pills do — never two rows, and never a gap that
-    /// crushes to nothing. Grey still means "All", matching the notes row.
-    private var stateFilterPills: some View {
+    /// The state pills (All / Pending / Done) anchored left and the date
+    /// dropdown anchored right, while the column is wide enough for both plus a
+    /// gap; when it isn't, they join one line that scrolls sideways together,
+    /// the notes column's arrangement — never two rows, never a crushed gap.
+    /// Grey still means "All", matching the notes row.
+    ///
+    /// The two are independent axes and combine: Pending + Today, Done +
+    /// Overdue. The state pills are a radio — exactly one always lit — and the
+    /// date axis is a dropdown *because* it isn't one: a trio of pills that
+    /// toggled off beside a trio that didn't would be two behaviours in one
+    /// row, and "All time" as a fourth pill wouldn't fit. The dropdown carries
+    /// its off state as an ordinary entry instead.
+    private var filterPills: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                pills(TaskFilter.stateCases)
+                statePills
                 Spacer(minLength: 16)
-                pills(TaskFilter.dateCases)
+                dateMenu
             }
             .padding(.vertical, 1)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    pills(TaskFilter.allCases)
+                    statePills
+                    dateMenu
                 }
                 .padding(.vertical, 1)
             }
         }
     }
 
-    private func pills(_ filters: [TaskFilter]) -> some View {
-        ForEach(filters) { filter in
+    private var statePills: some View {
+        ForEach(TaskFilter.allCases) { filter in
             FilterPill(
                 label: filter.label,
                 tint: filter.tint,
@@ -174,6 +182,46 @@ struct TasksPanel: View {
                 appState.taskFilter = filter
             }
         }
+    }
+
+    /// The date axis as a pill-shaped dropdown — the note card's type menu worn
+    /// by a filter, one control in two columns. Like that menu it always shows
+    /// exactly the current value in that value's colour, so it always wears the
+    /// selected `deep`-and-white; "All time" takes the grey the state row's
+    /// "All" wears, meaning the same thing.
+    private var dateMenu: some View {
+        Menu {
+            // Plain buttons rather than a `Picker`, matching `typeMenu`: the
+            // pill itself says which window is current.
+            Button { appState.taskDateFilter = nil } label: { Text("All time") }
+            ForEach(TaskDateFilter.allCases) { filter in
+                Button { appState.taskDateFilter = filter } label: { Text(filter.label) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(appState.taskDateFilter?.label ?? "All time")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            // The same padding a `FilterPill` uses, so the dropdown and the
+            // pills beside it are the same pill at the same size.
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .chipHeight()
+            .background(Capsule().fill((appState.taskDateFilter?.tint ?? .gray).deep))
+            .contentShape(Capsule())
+        }
+        // See `AddProjectMenu`: `.button` + plain keeps the label as drawn,
+        // where `.borderlessButton` would drop the capsule.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Filter by due date")
+        .accessibilityLabel("Due date filter: \(appState.taskDateFilter?.label ?? "All time")")
     }
 
     // MARK: - Empty state
@@ -191,7 +239,8 @@ struct TasksPanel: View {
             // A blank panel should say what to do next. Only on the unfiltered
             // list: "all clear" and "nothing completed yet" are answers, not
             // dead ends, so they don't need prompting.
-            if !appState.isSearching && appState.taskFilter == .all {
+            if !appState.isSearching && appState.taskFilter == .all
+                && appState.taskDateFilter == nil {
                 Button {
                     NotificationCenter.default.post(name: .newTask, object: nil)
                 } label: {
@@ -206,12 +255,24 @@ struct TasksPanel: View {
 
     private var emptyMessage: String {
         if appState.isSearching { return "No tasks match your search" }
+        // With a date pill lit the message names the whole combination, so an
+        // empty list under Done + Today reads as that filter's answer rather
+        // than as "no tasks".
+        if let dateFilter = appState.taskDateFilter {
+            let noun = switch appState.taskFilter {
+            case .all: "tasks"
+            case .pending: "pending tasks"
+            case .done: "completed tasks"
+            }
+            return switch dateFilter {
+            case .overdue: "No \(noun) overdue"
+            case .today: "No \(noun) due today"
+            case .tomorrow: "No \(noun) due tomorrow"
+            }
+        }
         switch appState.taskFilter {
         case .done: return "Nothing completed yet"
         case .pending: return "No pending tasks — all clear"
-        case .overdue: return "Nothing overdue"
-        case .today: return "Nothing due today"
-        case .tomorrow: return "Nothing due tomorrow"
         case .all: return "No tasks yet"
         }
     }

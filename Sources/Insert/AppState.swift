@@ -31,8 +31,12 @@ final class AppState {
     /// control, so they behave the same way.
     var noteTypeFilter: String?
 
-    /// Live tasks filter.
+    /// Live tasks filter — the state axis (All / Pending / Done).
     var taskFilter: TaskFilter = .pending
+
+    /// The date axis, ANDed with `taskFilter`. `nil` is the dropdown's
+    /// "All time" default — the axis switched off.
+    var taskDateFilter: TaskDateFilter?
 
     /// Measured height of the window's title-bar + toolbar region (see
     /// `WindowConfigurator`). The sidebar header matches it so its title lands

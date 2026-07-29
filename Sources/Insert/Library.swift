@@ -680,12 +680,15 @@ final class Library {
     func tasks(
         forProject projectID: UUID?,
         filter: TaskFilter,
+        dateFilter: TaskDateFilter? = nil,
         search: String,
         pinned: TaskPins = TaskPins()
     ) -> [TaskItem] {
         var result = tasks
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
-        result = result.filter { filter.matches($0) }
+        result = result.filter { task in
+            filter.matches(task) && (dateFilter?.matches(task) ?? true)
+        }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !query.isEmpty {
             result = result.filter {

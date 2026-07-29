@@ -395,64 +395,86 @@ enum TaskFilter: String, CaseIterable, Identifiable {
     case all
     case pending
     case done
-    case overdue
-    case today
-    case tomorrow
     var id: String { rawValue }
-
-    /// The two groups the tasks column lays out — state pills anchored left,
-    /// date pills anchored right. Together they are `allCases` in order, which
-    /// is what the row collapses to when it has to scroll.
-    static let stateCases: [TaskFilter] = [.all, .pending, .done]
-    static let dateCases: [TaskFilter] = [.overdue, .today, .tomorrow]
 
     var label: String {
         switch self {
         case .all: "All"
         case .pending: "Pending"
         case .done: "Done"
+        }
+    }
+
+    /// Grey always means "All" (matching the notes filter row); pending is warm
+    /// and done is green.
+    var tint: Tint {
+        switch self {
+        case .all: .gray
+        case .pending: .orange
+        case .done: .green
+        }
+    }
+
+    /// Whether `task` belongs in this filter's list.
+    func matches(_ task: TaskItem) -> Bool {
+        switch self {
+        case .all: true
+        case .pending: !task.done
+        case .done: task.done
+        }
+    }
+}
+
+/// The second axis of the tasks filter row, combinable with any `TaskFilter`:
+/// Pending + Today is the day's remaining work, Done + Overdue is what got
+/// finished late, All + Today is everything on today's plate. Presented as a
+/// pill dropdown (`TasksPanel.dateMenu`) whose default entry, "All time", is
+/// `nil` here — the axis switched off — rather than a fourth case, so every
+/// case is a real window and `matches` has no always-true branch.
+enum TaskDateFilter: String, CaseIterable, Identifiable {
+    case overdue
+    case today
+    case tomorrow
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
         case .overdue: "Overdue"
         case .today: "Today"
         case .tomorrow: "Tomorrow"
         }
     }
 
-    /// Grey always means "All" (matching the notes filter row); pending is warm
-    /// and done is green. The date filters wear the due badge's own colours —
-    /// orange once overdue, green for today, purple for anything upcoming — so
-    /// a pill and the rows it selects tell the same story.
+    /// The due badge's own colours — orange once overdue, green for today,
+    /// purple for anything upcoming — so a pill and the rows it selects tell
+    /// the same story, even though that repeats Pending's orange and Done's
+    /// green within the row.
     var tint: Tint {
         switch self {
-        case .all: .gray
-        case .pending, .overdue: .orange
-        case .done, .today: .green
+        case .overdue: .orange
+        case .today: .green
         case .tomorrow: .purple
         }
     }
 
-    /// Whether `task` belongs in this filter's list. `now` is injectable so the
-    /// day boundaries are testable; call sites let it default.
+    /// Whether `task`'s due date falls in this filter's window. The due date
+    /// *alone*: done-ness belongs to the state axis, which is what lets the two
+    /// combine — so "Overdue" here means "due before today", not "still owed",
+    /// unlike the menu bar's pending-only buckets (`DateSections`). An undated
+    /// task matches no window. `now` is injectable so the day boundaries are
+    /// testable; call sites let it default.
     func matches(_ task: TaskItem, now: Date = Date()) -> Bool {
-        switch self {
-        case .all: true
-        case .pending: !task.done
-        case .done: task.done
-        case .overdue: (dayOffset(task, now: now) ?? 0) < 0
-        case .today: dayOffset(task, now: now) == 0
-        case .tomorrow: dayOffset(task, now: now) == 1
-        }
-    }
-
-    /// Whole days from today to the task's due date, or `nil` for a done or
-    /// undated task — the date filters show only pending, dated work, the same
-    /// rule as the menu bar's buckets (`DateSections`).
-    private func dayOffset(_ task: TaskItem, now: Date) -> Int? {
-        guard !task.done, let due = task.due else { return nil }
+        guard let due = task.due else { return false }
         let cal = Calendar.current
-        return cal.dateComponents(
+        let days = cal.dateComponents(
             [.day],
             from: cal.startOfDay(for: now),
             to: cal.startOfDay(for: due)
-        ).day
+        ).day ?? 0
+        return switch self {
+        case .overdue: days < 0
+        case .today: days == 0
+        case .tomorrow: days == 1
+        }
     }
 }
