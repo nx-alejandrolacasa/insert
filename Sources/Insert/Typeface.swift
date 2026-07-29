@@ -39,9 +39,9 @@ enum Typeface: String, CaseIterable, Identifiable {
         }
     }
 
-    /// `nil` for Standard — the plain system font, deliberately the very same
-    /// face the window's chrome is drawn in, so choosing it means "don't set the
-    /// writing apart" rather than "set it apart in a fourth way".
+    /// `nil` for Standard — the plain system font, the same face the window's
+    /// chrome is drawn in. (Not quite the same *glyphs*: Standard also asks for
+    /// the one-storey `a` — see `prefersOneStoreyA`.)
     var design: NSFontDescriptor.SystemDesign? {
         switch self {
         case .standard: nil
@@ -53,16 +53,23 @@ enum Typeface: String, CaseIterable, Identifiable {
 
     /// Whether to ask for the round single-storey `a` (see `Card.oneStoreyA`).
     ///
-    /// Rounded only, and each exclusion is a decision rather than a limit. SF's
-    /// *default* design offers the alternate too — verified: the feature swaps
-    /// glyph ids when the string is shaped — but Standard's whole job is to match
-    /// the chrome beside it, which a stylistic alternate would quietly break. The
-    /// serif and the monospaced face don't list the selector at all, and asking
-    /// anyway is a genuine no-op there: shaping the same word with and without it
-    /// produced identical glyph ids, no fallback and no substitution. So this
-    /// could be `self != .standard` and behave the same; it names the one design
-    /// the alternate is actually *for*.
-    var prefersOneStoreyA: Bool { self == .rounded }
+    /// Standard and Rounded — the two SF designs, the two that offer the
+    /// alternate. Standard first shipped *without* it, to keep the cards
+    /// glyph-identical to the chrome beside them, and that was reversed by
+    /// request: Apple Notes sets its plain SF body with the one-storey `a`, and
+    /// that is the look this option is for. So Standard now differs from the
+    /// chrome in exactly one glyph — a decision, not a drift. The serif and the
+    /// monospaced face don't list the selector at all, and asking anyway is a
+    /// genuine no-op there: shaping the same word with and without it produced
+    /// identical glyph ids, no fallback and no substitution. So this could be
+    /// `true` for every case and behave the same; it names the designs the
+    /// alternate actually exists in.
+    var prefersOneStoreyA: Bool {
+        switch self {
+        case .standard, .rounded: true
+        case .serif, .monospaced: false
+        }
+    }
 }
 
 // MARK: - Picker
@@ -74,10 +81,10 @@ enum Typeface: String, CaseIterable, Identifiable {
 /// useful thing about them.
 ///
 /// The specimen is **"Aa"**, which is not a filler string: the capital shows the
-/// terminals and the serifs, and the lowercase `a` is exactly what separates
-/// Standard from Rounded — two-storey against the round single-storey alternate.
-/// Each swatch draws in *its own* face rather than the selected one, which is
-/// what `Card.font(_:weight:typeface:)` exists for.
+/// terminals and the serifs, and the lowercase `a` shows the round single-storey
+/// alternate the two SF designs carry against the serif's and the mono's
+/// two-storey one. Each swatch draws in *its own* face rather than the selected
+/// one, which is what `Card.font(_:weight:typeface:)` exists for.
 ///
 /// Four 62pt columns plus 10pt gaps is 278pt against the pane's ~420, so unlike
 /// the backdrop row this one has room to grow.

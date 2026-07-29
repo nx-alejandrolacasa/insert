@@ -21,6 +21,39 @@ enum ReminderSchedule {
     /// takes `now` rather than firing on a timer aimed at the exact minute.
     static let grace: TimeInterval = 2 * 3600
 
+    /// The times the reminder can be set to: every half hour from 06:00 to 12:00.
+    ///
+    /// A fixed list rather than a free time field, for two reasons that happen to
+    /// agree. A `DatePicker` in Settings' grouped `Form` **froze the Tasks pane for
+    /// seconds** — sampling the hung app showed AppKit re-applying
+    /// `setLocale:`/`setCalendar:`/`setTimeZone:` to the `NSDatePickerCell` on every
+    /// graph update, each of which invalidates the cell's formatter and rebuilds an
+    /// ICU `SimpleDateFormat` and its `DateFormatSymbols`, while
+    /// `GroupedFormRowLayout` queried the control's baselines from five separate
+    /// measurement sites per layout pass. Turning the reminder off (which unmounts
+    /// the picker) made the pane instant again, which is what pinned it. A list of
+    /// `Int` minutes with literal labels touches none of that: no `Date`, no
+    /// formatter, no locale.
+    ///
+    /// And the reminder is a *morning* thing — it counts the day's work before the
+    /// day starts — so offering 03:00 was never useful. Half-hour steps because
+    /// nobody wants to be reminded at 09:07.
+    static let slots: [Int] = Array(stride(from: 6 * 60, through: 12 * 60, by: 30))
+
+    /// The offered slot closest to `minutes`, for a value saved before this was a
+    /// list — the free picker allowed any minute of any hour, so an install can hold
+    /// 07:13 or 21:00, and a `Picker` whose selection matches no tag draws blank.
+    static func nearestSlot(to minutes: Int) -> Int {
+        slots.min { abs($0 - minutes) < abs($1 - minutes) } ?? 9 * 60
+    }
+
+    /// A slot's label, e.g. `9:30`. Written out rather than formatted: these are the
+    /// digits of a fixed 24-hour list, and reaching for a `DateFormatter` here is
+    /// what cost the pane its responsiveness in the first place (see `slots`).
+    static func label(_ minutes: Int) -> String {
+        String(format: "%d:%02d", minutes / 60, minutes % 60)
+    }
+
     /// The reminder's moment on the day `now` falls in.
     ///
     /// Built from explicit components rather than

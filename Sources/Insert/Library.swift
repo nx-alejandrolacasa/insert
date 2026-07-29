@@ -685,11 +685,7 @@ final class Library {
     ) -> [TaskItem] {
         var result = tasks
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
-        switch filter {
-        case .all: break
-        case .pending: result = result.filter { !$0.done }
-        case .done: result = result.filter { $0.done }
-        }
+        result = result.filter { filter.matches($0) }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !query.isEmpty {
             result = result.filter {

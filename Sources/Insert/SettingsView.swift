@@ -213,7 +213,10 @@ private struct TasksSettingsTab: View {
             }
 
             Section {
-                Toggle("Daily reminder", isOn: $settings.dailyReminder)
+                // "morning" is in the label, not just the footer: it's what makes
+                // the times on offer stopping at midday read as the point of the
+                // feature rather than as a missing half of the clock.
+                Toggle("Daily morning reminder", isOn: $settings.dailyReminder)
                     .onChange(of: settings.dailyReminder) { _, on in
                         // Ask for permission on the way in, not at launch — see
                         // `TaskReminder.requestAuthorization()`.
@@ -222,21 +225,23 @@ private struct TasksSettingsTab: View {
                     }
 
                 if settings.dailyReminder {
-                    DatePicker(
-                        "Time",
-                        selection: $settings.reminderTime,
-                        displayedComponents: .hourAndMinute
-                    )
-                    // The one place in Settings that shows a time, so it takes the
-                    // same locale as every other date in the app — 24-hour, in
-                    // English — rather than the system's. See `Formatting`.
-                    .environment(\.locale, Formatting.locale)
+                    // A list of half hours, not a time field: a `DatePicker` here
+                    // froze this pane for seconds, and a morning reminder has no use
+                    // for the rest of the clock anyway. Both reasons, and the
+                    // measurements behind the first, are on `ReminderSchedule.slots`.
+                    // No `.environment(\.locale, …)` either — the labels are literal
+                    // digits, so there is no date being formatted to get wrong.
+                    Picker("Time", selection: $settings.reminderMinutes) {
+                        ForEach(ReminderSchedule.slots, id: \.self) { minutes in
+                            Text(ReminderSchedule.label(minutes)).tag(minutes)
+                        }
+                    }
                     // No `onChange` here: the reminder's clock re-reads the time on
                     // every tick, so a new one needs nothing re-aimed. Only the
                     // toggle above starts and stops anything.
                 }
             } footer: {
-                Text("One notification a day, counting the tasks due that day — “You have 3 tasks for today”. Nothing is sent on a day with nothing due, and it never names a task. Insert has to be running to send it.")
+                Text("One notification each morning, counting the tasks due that day — “You have 3 tasks for today”. The times on offer stop at midday because a count of the day's work is only worth having before the day starts. Nothing is sent on a day with nothing due, and it never names a task. Insert has to be running to send it.")
             }
 
             Section {

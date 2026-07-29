@@ -241,8 +241,8 @@ enum Card {
     /// round single-storey `a` as an alternate glyph, so it costs nothing but
     /// asking — and the rounded *design* alone doesn't give it, which is the
     /// thing that's easy to get wrong here: SF Pro Rounded softens the terminals
-    /// and keeps the two-storey `a`. Asked for only by the designs that have it
-    /// (`Typeface.prefersOneStoreyA`).
+    /// and keeps the two-storey `a`. Asked for by the two SF designs, the ones
+    /// that have it (`Typeface.prefersOneStoreyA`).
     private static let oneStoreyA: [NSFontDescriptor.FeatureKey: Int] = [
         .typeIdentifier: 35,     // kStylisticAlternativesType
         .selectorIdentifier: 14, // stylistic set 7 "on" — "One storey a"

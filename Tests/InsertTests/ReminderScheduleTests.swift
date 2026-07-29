@@ -120,6 +120,53 @@ final class ReminderScheduleTests: XCTestCase {
         XCTAssertFalse(isDue(date(29, 9, 0), lastNotified: date(29, 8, 0)))
     }
 
+    // MARK: The times on offer
+
+    /// The list the Settings picker draws: every half hour from 06:00 to 12:00, and
+    /// nothing outside it. `through:` rather than `to:` is the edge — 12:00 is meant
+    /// to be on the list, and `stride(to:)` would stop at 11:30.
+    func testSlotsRunEveryHalfHourFromSixToTwelve() {
+        XCTAssertEqual(ReminderSchedule.slots.first, 6 * 60)
+        XCTAssertEqual(ReminderSchedule.slots.last, 12 * 60)
+        XCTAssertEqual(ReminderSchedule.slots.count, 13)
+        XCTAssertEqual(Set(zip(ReminderSchedule.slots, ReminderSchedule.slots.dropFirst())
+            .map { $1 - $0 }), [30])
+    }
+
+    /// The default has to be one of them, or a fresh install draws a blank picker.
+    func testTheDefaultIsOnTheList() {
+        XCTAssertTrue(ReminderSchedule.slots.contains(9 * 60))
+    }
+
+    /// An install saved while the picker still allowed any minute of any hour can
+    /// hold a time that is no longer offered, and a `Picker` whose selection matches
+    /// no tag draws blank. Every one of these has to land on the list.
+    func testNearestSlotPullsOffGridTimesOntoTheList() {
+        XCTAssertEqual(ReminderSchedule.nearestSlot(to: 7 * 60 + 13), 7 * 60)
+        XCTAssertEqual(ReminderSchedule.nearestSlot(to: 7 * 60 + 20), 7 * 60 + 30)
+        // Outside the range in both directions: clamped to its nearer end.
+        XCTAssertEqual(ReminderSchedule.nearestSlot(to: 3 * 60), 6 * 60)
+        XCTAssertEqual(ReminderSchedule.nearestSlot(to: 21 * 60), 12 * 60)
+        XCTAssertEqual(ReminderSchedule.nearestSlot(to: 0), 6 * 60)
+    }
+
+    /// Idempotent on a value already offered — otherwise the snap that runs on every
+    /// launch would walk the user's choice somewhere else.
+    func testNearestSlotLeavesAnOfferedTimeAlone() {
+        for slot in ReminderSchedule.slots {
+            XCTAssertEqual(ReminderSchedule.nearestSlot(to: slot), slot)
+        }
+    }
+
+    /// 24-hour, zero-padded minutes, no leading zero on the hour — and, the point of
+    /// writing it out by hand, the same on a machine in any locale. A formatter here
+    /// is what made the pane freeze; see `ReminderSchedule.slots`.
+    func testLabelsAreLiteralDigits() {
+        XCTAssertEqual(ReminderSchedule.label(6 * 60), "6:00")
+        XCTAssertEqual(ReminderSchedule.label(9 * 60 + 30), "9:30")
+        XCTAssertEqual(ReminderSchedule.label(12 * 60), "12:00")
+    }
+
     // MARK: The sentence
 
     func testMessageAgreesWithItsCount() {

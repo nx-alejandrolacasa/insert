@@ -80,19 +80,20 @@ final class TypefaceTests: XCTestCase {
         XCTAssertNotEqual(glyphs(card, "banana"), glyphs(plain, "banana"))
     }
 
-    /// Standard must be the chrome's font exactly — SF *does* offer the alternate,
-    /// so leaving it on here would set the cards apart from every panel header
-    /// beside them, which is the one thing this option is for.
-    func testStandardKeepsTheTwoStoreyA() {
+    /// Standard asks for the alternate too — the Notes look on the plain SF
+    /// design. It first shipped without it, to stay glyph-identical to the
+    /// chrome; that was reversed by request, so Standard now differs from the
+    /// system font in exactly this one glyph.
+    func testStandardUsesTheOneStoreyA() {
         let card = Card.nsFont(.body, typeface: .standard)
         let system = NSFont.preferredFont(forTextStyle: .body)
-        XCTAssertEqual(glyphs(card, "banana"), glyphs(system, "banana"))
+        XCTAssertNotEqual(glyphs(card, "banana"), glyphs(system, "banana"))
     }
 
     /// The serif and the monospaced face don't list the selector, and asking for
     /// it anyway resolves to the same glyphs — no fallback, no substitution. So
-    /// `prefersOneStoreyA` naming Rounded alone is a statement of intent, not a
-    /// workaround for something that would otherwise break.
+    /// `prefersOneStoreyA` naming the two SF designs is a statement of intent,
+    /// not a workaround for something that would otherwise break.
     func testTheAlternateIsInertOnTheOtherDesigns() {
         for typeface in [Typeface.serif, .monospaced] {
             let design = typeface.design!

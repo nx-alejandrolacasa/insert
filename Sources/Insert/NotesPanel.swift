@@ -173,14 +173,6 @@ struct NotesPanel: View {
             Text(emptyMessage)
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            if !appState.isSearching && appState.noteTypeFilter == nil {
-                Button {
-                    NotificationCenter.default.post(name: .newNote, object: nil)
-                } label: {
-                    Label("New Note", systemImage: "plus").fontWeight(.semibold)
-                }
-                .buttonStyle(.actionCapsule)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

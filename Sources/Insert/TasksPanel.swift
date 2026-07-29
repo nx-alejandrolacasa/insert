@@ -90,8 +90,11 @@ struct TasksPanel: View {
     /// the same flow as `NotesPanel.createNote`. An undated pending task sorts
     /// below the dated ones, so the scroll matters.
     private func createTask(proxy: ScrollViewProxy) {
-        // Anything that would hide the new task gets out of the way first.
-        if appState.taskFilter == .done { appState.taskFilter = .all }
+        // Anything that would hide the new task gets out of the way first — it
+        // starts pending and undated, so every filter but All and Pending would.
+        if appState.taskFilter != .all && appState.taskFilter != .pending {
+            appState.taskFilter = .all
+        }
         appState.searchText = ""
 
         let task = library.addTask(
@@ -137,24 +140,40 @@ struct TasksPanel: View {
 
     // MARK: - State filter pills
 
-    /// All / Pending / Done as capsule pills, matching the notes column's type
-    /// filter. Grey means "All" in both rows; pending is warm, done is green.
+    /// The state pills (All / Pending / Done) anchored left and the date pills
+    /// (Overdue / Today / Tomorrow) anchored right, while the column is wide
+    /// enough for both groups plus a gap between them. When it isn't, the six
+    /// pills join into one line that scrolls sideways together, the same way
+    /// the notes column's type pills do — never two rows, and never a gap that
+    /// crushes to nothing. Grey still means "All", matching the notes row.
     private var stateFilterPills: some View {
-        HStack(spacing: 6) {
-            ForEach(TaskFilter.allCases) { filter in
-                FilterPill(
-                    label: filter.label,
-                    tint: filter.tint,
-                    selected: appState.taskFilter == filter
-                ) {
-                    appState.taskFilter = filter
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                pills(TaskFilter.stateCases)
+                Spacer(minLength: 16)
+                pills(TaskFilter.dateCases)
             }
-            Spacer(minLength: 0)
+            .padding(.vertical, 1)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    pills(TaskFilter.allCases)
+                }
+                .padding(.vertical, 1)
+            }
         }
-        // The notes column's pills sit in a scroll view that pads itself by a
-        // point; match it so the two rows share a baseline.
-        .padding(.vertical, 1)
+    }
+
+    private func pills(_ filters: [TaskFilter]) -> some View {
+        ForEach(filters) { filter in
+            FilterPill(
+                label: filter.label,
+                tint: filter.tint,
+                selected: appState.taskFilter == filter
+            ) {
+                appState.taskFilter = filter
+            }
+        }
     }
 
     // MARK: - Empty state
@@ -190,6 +209,9 @@ struct TasksPanel: View {
         switch appState.taskFilter {
         case .done: return "Nothing completed yet"
         case .pending: return "No pending tasks — all clear"
+        case .overdue: return "Nothing overdue"
+        case .today: return "Nothing due today"
+        case .tomorrow: return "Nothing due tomorrow"
         case .all: return "No tasks yet"
         }
     }

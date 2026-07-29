@@ -395,22 +395,64 @@ enum TaskFilter: String, CaseIterable, Identifiable {
     case all
     case pending
     case done
+    case overdue
+    case today
+    case tomorrow
     var id: String { rawValue }
+
+    /// The two groups the tasks column lays out — state pills anchored left,
+    /// date pills anchored right. Together they are `allCases` in order, which
+    /// is what the row collapses to when it has to scroll.
+    static let stateCases: [TaskFilter] = [.all, .pending, .done]
+    static let dateCases: [TaskFilter] = [.overdue, .today, .tomorrow]
+
     var label: String {
         switch self {
         case .all: "All"
         case .pending: "Pending"
         case .done: "Done"
+        case .overdue: "Overdue"
+        case .today: "Today"
+        case .tomorrow: "Tomorrow"
         }
     }
 
     /// Grey always means "All" (matching the notes filter row); pending is warm
-    /// and done is green.
+    /// and done is green. The date filters wear the due badge's own colours —
+    /// orange once overdue, green for today, purple for anything upcoming — so
+    /// a pill and the rows it selects tell the same story.
     var tint: Tint {
         switch self {
         case .all: .gray
-        case .pending: .orange
-        case .done: .green
+        case .pending, .overdue: .orange
+        case .done, .today: .green
+        case .tomorrow: .purple
         }
+    }
+
+    /// Whether `task` belongs in this filter's list. `now` is injectable so the
+    /// day boundaries are testable; call sites let it default.
+    func matches(_ task: TaskItem, now: Date = Date()) -> Bool {
+        switch self {
+        case .all: true
+        case .pending: !task.done
+        case .done: task.done
+        case .overdue: (dayOffset(task, now: now) ?? 0) < 0
+        case .today: dayOffset(task, now: now) == 0
+        case .tomorrow: dayOffset(task, now: now) == 1
+        }
+    }
+
+    /// Whole days from today to the task's due date, or `nil` for a done or
+    /// undated task — the date filters show only pending, dated work, the same
+    /// rule as the menu bar's buckets (`DateSections`).
+    private func dayOffset(_ task: TaskItem, now: Date) -> Int? {
+        guard !task.done, let due = task.due else { return nil }
+        let cal = Calendar.current
+        return cal.dateComponents(
+            [.day],
+            from: cal.startOfDay(for: now),
+            to: cal.startOfDay(for: due)
+        ).day
     }
 }

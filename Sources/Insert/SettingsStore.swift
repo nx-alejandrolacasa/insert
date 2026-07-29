@@ -65,25 +65,15 @@ final class SettingsStore {
         didSet { defaults.set(dailyReminder, forKey: Keys.dailyReminder) }
     }
 
-    /// When that reminder goes out, as minutes since midnight.
+    /// When that reminder goes out, as minutes since midnight — one of
+    /// `ReminderSchedule.slots`, which the Settings picker offers directly.
     ///
     /// Minutes rather than a `Date`: the setting is a time of day, and storing a
     /// date would carry a day and a timezone with it that would then have to be
-    /// ignored on every read. `reminderTime` puts a `DatePicker`'s `Date` back on
-    /// top of it.
+    /// ignored on every read. It is also what lets the picker be a plain list of
+    /// `Int`s — see `ReminderSchedule.slots` for why that matters.
     var reminderMinutes: Int {
         didSet { defaults.set(reminderMinutes, forKey: Keys.reminderMinutes) }
-    }
-
-    /// `reminderMinutes` as a point on today, which is the shape `DatePicker`
-    /// binds to. Reading and writing both go through `reminderMinutes`, so
-    /// observation and persistence come along for free.
-    var reminderTime: Date {
-        get { ReminderSchedule.time(reminderMinutes, on: Date()) ?? Date() }
-        set {
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-            reminderMinutes = (parts.hour ?? 9) * 60 + (parts.minute ?? 0)
-        }
     }
 
     /// Wash each task row in its due badge's colour — orange overdue, green
@@ -141,9 +131,13 @@ final class SettingsStore {
         typeface = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") ?? .rounded
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
         dailyReminder = defaults.object(forKey: Keys.dailyReminder) as? Bool ?? false
-        // 09:00 — the reminder is a morning one by default, whatever the picker
-        // then allows.
-        reminderMinutes = defaults.object(forKey: Keys.reminderMinutes) as? Int ?? 9 * 60
+        // 09:00 by default, and snapped to the offered half hours: the picker used
+        // to allow any minute of any hour, so an install saved before that became a
+        // list can hold a time no longer on it. (`didSet` doesn't fire during init,
+        // so nothing is written back — the snap is idempotent and runs each launch
+        // until the user picks something.)
+        reminderMinutes = ReminderSchedule.nearestSlot(
+            to: defaults.object(forKey: Keys.reminderMinutes) as? Int ?? 9 * 60)
         dueTintedTasks = defaults.object(forKey: Keys.dueTintedTasks) as? Bool ?? false
         // Both seeded from the toggle pair this setting used to be — which also
         // covers the fresh install: absent toggles read as "last edited only",

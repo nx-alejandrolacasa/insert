@@ -301,10 +301,29 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   under "Pending" a task you tick still leaves the list, because it is no longer one
   of the things that view is showing — the same line `NotePins` draws against the
   notes column's type filter. Covered by `StorageLayoutTests`.
+  The filter row carries **two groups of pills**: the state trio (All / Pending /
+  Done) and a date trio (Overdue / Today / Tomorrow). The date filters show only
+  **pending, dated** work — the same rule as the menu bar's buckets
+  (`DateSections`), so a ticked task due today is nobody's "today" — and they wear
+  the due badge's own colours (orange overdue, green today, purple upcoming), so a
+  pill and the rows it selects tell the same story, even though that repeats
+  Pending's orange and Done's green within the row. The logic is
+  `TaskFilter.matches(_:now:)`, a pure function with `now` injectable, pinned by
+  `TaskFilterTests` at the day boundaries (yesterday / today / tomorrow / later,
+  undated, done). Layout is a `ViewThatFits`: state pills anchored left and date
+  pills anchored right while the column fits both groups plus a 16pt gap; when it
+  doesn't, all six join **one line that scrolls sideways together**, the notes
+  column's arrangement — never two rows, never a crushed gap. And a new task is
+  pending and undated, so `createTask` resets any filter but All and Pending
+  before creating, or the task would be born hidden.
 - **The daily reminder counts, and says nothing else.** Settings → Tasks can post
   one notification a day — "You have 3 tasks for today" — off by default, at a time
-  the user picks (09:00 to begin with, and the picker allows any hour rather than
-  policing "morning"). It counts the same bucket the menu bar labels **Today**:
+  the user picks from a **fixed list of half hours, 06:00 to 12:00**, 09:00 to begin
+  with (`ReminderSchedule.slots`). The control is called **"Daily morning
+  reminder"**, and the word is load-bearing: with it, a list that stops at midday
+  reads as the point of the feature; without it, as a missing half of the clock. The
+  footer says why in full, so the constraint is explained where it's met rather than
+  only here. It counts the same bucket the menu bar labels **Today**:
   due today, still pending, with **overdue work deliberately left out**, so the
   sentence means exactly what it says. A day with nothing due sends nothing, and no
   notification ever names a task or a project — a banner is read on a lock screen
@@ -335,6 +354,33 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   rather than `Calendar.date(bySettingHour:minute:second:of:)`, which resolves the
   *next* matching time and answers "tomorrow at 09:00" when asked in the afternoon —
   exactly the case that has to come back "not due".
+  **The time is a list of `Int` minutes, and a `DatePicker` here is a trap.** The
+  setting began as `DatePicker(…, displayedComponents: .hourAndMinute)`, and it
+  **froze Settings → Tasks for seconds** on a real library while merely stuttering on
+  a small one. What pinned it: turning the reminder off — which unmounts the picker
+  and changes nothing else on the pane — made it instant again. A `sample` of the
+  hung app names two costs, both on the AppKit control. SwiftUI re-applies
+  `setLocale:`/`setCalendar:`/`setTimeZone:`/`setDatePickerElements:` to the
+  `NSDatePickerCell` on **every graph update**, and each one invalidates the cell's
+  subfields and formatter, so every update rebuilds an ICU `SimpleDateFormat` and its
+  `DateFormatSymbols` (`_concoctUnholyAbominationOfADatePicker` →
+  `CFDateFormatterCreateDateFormatFromTemplate` → `_regenerateFormatter`). And
+  `GroupedFormRowLayout.Cache.updateAlignment()` asks the control for
+  `_baselineOffsetsAtSize:` from **five separate measurement sites in one layout
+  pass**. It is `DateCoding`'s lesson met from the other side: a throwaway formatter
+  inside something that runs far more often than it looks like it does, except here
+  AppKit is the one allocating it. `.environment(\.locale, Formatting.locale)` was on
+  that picker to keep the app's English-only date rule, which made the mismatch worse
+  and is *why* the list is the better answer rather than merely the faster one:
+  literal digits (`ReminderSchedule.label`) are the same on a machine in any locale,
+  so there is no date being formatted to get wrong. Anything else that wants a time
+  of day in this app should reach for the same shape before a `DatePicker`.
+  `nearestSlot(to:)` exists because the free picker allowed any minute of any hour,
+  so an install can hold 07:13; a `Picker` whose selection matches no tag draws
+  **blank**, and `SettingsStore.init` snaps the saved value onto the list. It is
+  idempotent on a value already offered — it runs every launch, so a snap that
+  drifted would walk the user's choice somewhere else. Pinned by
+  `ReminderScheduleTests`.
   **Not verified: that a self-signed build can post at all.** `build.sh` signs with
   a self-signed certificate and falls back to ad-hoc, and notification authorization
   is one of the things macOS can decline on that basis. Nothing assumes it works — a
@@ -402,11 +448,15 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   notification and nothing to thread through the dozen call sites. The
   `typeface:`-taking overloads exist for `TypefacePicker`, whose specimens each
   draw in their own face; its swatch is **"Aa"**, which is not filler — the
-  lowercase `a` is exactly what separates Standard from Rounded.
-  The **one-storey `a` is Rounded's alone.** SF's default design offers the
-  alternate too (verified: shaping swaps glyph ids), but Standard's job is to match
-  the chrome beside it, which a stylistic alternate would break; the serif and the
-  monospaced face don't list the selector, and asking anyway is a true no-op there.
+  lowercase `a` shows the alternate the two SF designs carry.
+  The **one-storey `a` belongs to both SF designs, Standard included.** Standard
+  first shipped without it, on the grounds that its job is to match the chrome
+  beside it and a stylistic alternate would break that — reversed by request in
+  July 2026, because Apple Notes sets its plain SF body with the one-storey `a`
+  and that look is what the option is for. So the cards under Standard differ
+  from the chrome in exactly that glyph, a decision rather than a drift. The
+  serif and the monospaced face don't list the selector, and asking anyway is a
+  true no-op there (verified: identical glyph ids when shaped).
   **Italic needs synthesising, and only under Rounded** (`Card.italic(_:)`).
   Standard, Serif and Monospace each ship a real italic; **SF Rounded ships none**,
   and asking a rounded descriptor for `.italic` returns the *upright* face without
