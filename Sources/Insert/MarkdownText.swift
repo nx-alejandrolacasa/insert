@@ -396,3 +396,234 @@ enum MarkdownParser {
         return digits + 2
     }
 }
+
+// MARK: - Collapsible body
+
+/// A card body that can read collapsed: `MarkdownText` folded to a preview of
+/// `previewLines` rendered lines, with a chevron beside the first line to reveal
+/// the rest. One implementation for both cards — notes at `.body`, tasks at
+/// `.callout` — driven by each kind's "Preview lines" setting; `nil` lines means
+/// no collapsing and the body simply renders in full. View mode only by
+/// construction: the cards only show this when they aren't editing.
+///
+/// Two collapsed shapes, because one line is not just a smaller ten:
+///
+/// - **One line** is the teaser: the body's lead line (`MarkdownParser.lead`,
+///   block marker dropped, inline markers rendered), laid out at its natural
+///   width and faded out at the trailing edge when the line is cut — never an
+///   ellipsis. Expanding swaps in the full render in one frame
+///   (`.transition(.identity)`: the default cross-fade showed the same words
+///   twice at half opacity while the row was still resizing).
+/// - **Several lines** clamp the full render to that many line heights of the
+///   card face and fade to nothing over the last of them. Collapsed and
+///   expanded are *one view* — only the `frame(maxHeight:)` value switches —
+///   because a conditional branch is two identities and would kill the height
+///   animation the owning card scopes to `expanded`; the mask is applied in
+///   both states for the same reason (expanded it is opaque everywhere, a
+///   no-op).
+///
+/// Whether the chevron appears is measured off the **render**, never the source
+/// — the parser joins hard-wrapped lines, so a long source can render short and
+/// used to earn a chevron that revealed nothing.
+///
+/// The chevron rides the body's **first** line, and the position is
+/// load-bearing: a control under the fold travels with the card's height, so
+/// collapsing an expanded body had it floating down through the contraction with
+/// its `.replace` turn still playing. It wears the ⋯ menu's measured box
+/// (`chevronBox`), both dimensions doing work: equal widths flush to one
+/// trailing edge is what puts the two on one vertical axis, and at the menu's
+/// own height the box sits inside the line box — taller, it pushed a
+/// baseline-aligned row's top up and the preview text below the editor's first
+/// line.
+struct CollapsibleMarkdown: View {
+    let markdown: String
+    var textStyle: NSFont.TextStyle = .body
+    /// How many rendered lines the collapsed preview shows; `nil` folds nothing.
+    let previewLines: Int?
+    /// Owned by the card, whose height animation is value-scoped to it.
+    @Binding var expanded: Bool
+    /// The ⋯ menu's box, measured by the card (a borderless `Menu` sizes itself).
+    let chevronBox: CGSize
+    /// The chevron's two spoken/help names, in the card's own words.
+    let expandLabel: String
+    let collapseLabel: String
+
+    /// The body laid out unbounded — what expanding would show.
+    @State private var fullHeight: CGFloat = 0
+    /// The one-line teaser's rendered height. Compared against `fullHeight`
+    /// rather than one line height of the card face, because the body's first
+    /// block can be taller than a body line (a heading), and that alone mustn't
+    /// earn a chevron.
+    @State private var teaserHeight: CGFloat = 0
+    /// The teaser at its natural single-line width, against the width the row
+    /// actually gives it. Wider means the line is cut, which is the only case
+    /// that earns the trailing fade — a teaser that fits must not dim its last
+    /// characters as if something were hidden there.
+    @State private var teaserWidth: CGFloat = 0
+    @State private var teaserBoxWidth: CGFloat = 0
+
+    private var nsFont: NSFont { Card.nsFont(textStyle) }
+
+    /// One line of the card face, unrounded: the half-line tolerance below rides
+    /// on it, and rounding per line is exactly the drift being tolerated.
+    private var lineHeight: CGFloat {
+        let font = nsFont
+        return font.ascender - font.descender + font.leading
+    }
+
+    /// Long enough to fold. The teaser earns its chevron when the full render is
+    /// taller than the one line on show; a clamp earns it when the render runs
+    /// more than **half a line** past the cap — a body of exactly the preview
+    /// height drifts a fraction of a point per line against `n ×` an unrounded
+    /// line height, and must not earn a chevron that reveals nothing.
+    private var collapsible: Bool {
+        guard let lines = previewLines else { return false }
+        if lines == 1 { return fullHeight > teaserHeight + 1 }
+        return fullHeight > CGFloat(lines) * lineHeight + lineHeight / 2
+    }
+
+    /// Shown when there's something hidden — or when we're expanded and it's
+    /// the way back.
+    private var showsChevron: Bool {
+        previewLines != nil && (expanded || collapsible)
+    }
+
+    /// Whether the clamp is currently applied (several-lines mode only; the
+    /// one-line mode swaps views instead of clamping).
+    private var isClamped: Bool {
+        guard let lines = previewLines, lines > 1 else { return false }
+        return collapsible && !expanded
+    }
+
+    var body: some View {
+        // Baseline, not `.top`: the chevron is a caption glyph in a measured
+        // box, and top-aligning the boxes sat it below the line of text it
+        // belongs to — `centredOnTextCap()` puts its centre on the first line's
+        // cap height instead.
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            content
+            if showsChevron { chevron }
+        }
+    }
+
+    /// `.transition(.identity)` on both branches of the teaser swap, and on the
+    /// clamped body for the frames where the *setting* moves it between
+    /// branches: the two are the same words with and without the rest of the
+    /// body under them, so the default cross-fade showed them twice at half
+    /// opacity mid-resize. The card's height is what animates.
+    @ViewBuilder
+    private var content: some View {
+        if previewLines == 1 && !expanded {
+            teaser.transition(.identity)
+        } else {
+            clamped.transition(.identity)
+        }
+    }
+
+    /// The full render, clamped to the preview height while collapsed. The 5pt
+    /// is the editor's text-container inset, which every body copy repeats so
+    /// the first character doesn't shift sideways as a card opens. `fixedSize`
+    /// because a clamp must *clip* the blocks, not propose them less height —
+    /// squeezed, they truncate themselves into ellipses.
+    private var clamped: some View {
+        MarkdownText(markdown: markdown, textStyle: textStyle)
+            .padding(.horizontal, 5)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                fullHeight = $0
+            }
+            .frame(
+                maxHeight: isClamped ? CGFloat(previewLines ?? 1) * lineHeight : nil,
+                alignment: .topLeading
+            )
+            .clipped()
+            .mask(clampFade)
+    }
+
+    /// The teaser is **rendered**, not source. `MarkdownParser.lead(_:)` drops
+    /// the block marker and `MarkdownText.inline(_:)` draws the rest — the same
+    /// two steps the full render takes per block; printing the raw source read
+    /// `**Ship it**` as asterisks. Laid out at its natural width so a line
+    /// longer than the row overflows into the clip instead of truncating — the
+    /// fade is the truncation mark, never an ellipsis.
+    private var teaser: some View {
+        MarkdownText.inline(MarkdownParser.lead(markdown), in: nsFont)
+            .font(Font(nsFont))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserWidth = $0 }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserBoxWidth = $0 }
+            .clipped()
+            .mask(teaserFade)
+            .padding(.horizontal, 5)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { teaserHeight = $0 }
+            .background(alignment: .topLeading) {
+                // What expanding would actually show, laid out unbounded and
+                // hidden — the clamp measures its own render, but the teaser is
+                // one line whatever the body holds, so it has to ask a proxy.
+                MarkdownText(markdown: markdown, textStyle: textStyle)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        fullHeight = $0
+                    }
+            }
+    }
+
+    /// The clamp's fade: opaque until the last previewed line, then fading to
+    /// nothing across it — "there is more" drawn where the more is, and what
+    /// makes a clamp that lands mid-block read as a fold instead of a crop.
+    /// The fade region is one line of `n`, so the stop is simply `1 - 1/n`.
+    private var clampFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(
+                    color: .black,
+                    location: isClamped ? 1 - 1 / CGFloat(previewLines ?? 1) : 1
+                ),
+                .init(color: isClamped ? .clear : .black, location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    /// The teaser's truncation mark: opaque until one line height from the
+    /// trailing edge, then fading to clear across it — the clamp's gradient
+    /// turned sideways, so the two cuts read as one gesture. Only when the line
+    /// really is cut; a teaser that fits stays fully opaque.
+    private var teaserFade: some View {
+        let cut = teaserBoxWidth > 0 && teaserWidth > teaserBoxWidth + 1
+        return LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: cut ? max(0, 1 - lineHeight / teaserBoxWidth) : 1),
+                .init(color: cut ? .clear : .black, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private var chevron: some View {
+        Button {
+            expanded.toggle()
+        } label: {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                // One symbol in two directions — `.replace` turns it over rather
+                // than cutting, and drops to a cut under Reduce Motion.
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: chevronBox.width, height: chevronBox.height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .centredOnTextCap(textStyle)
+        .help(expanded ? collapseLabel : expandLabel)
+        .accessibilityLabel(expanded ? collapseLabel : expandLabel)
+    }
+}

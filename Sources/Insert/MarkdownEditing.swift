@@ -27,6 +27,12 @@ struct MarkdownEditor: View {
     /// The composer pins its editor to a fixed height, so it scrolls; everywhere
     /// else the editor grows with a sizing proxy and scrolling is the list's job.
     var scrollable = false
+    /// Tab or ⇧Tab — the owner's field traversal (a card hands focus back to
+    /// its title). Without it the text view answers Tab itself, as a literal
+    /// tab character, and there is no key that leaves the body. Intercepted by
+    /// a local monitor for `ProjectHashField`'s reason: the text view consumes
+    /// Tab before `onKeyPress` sees it.
+    var onTab: (() -> Void)? = nil
     /// Owned by the caller, which decides when the editor takes focus.
     @FocusState.Binding var focused: Bool
     /// Owned by the caller as well, so that when it hands the editor focus it
@@ -35,6 +41,10 @@ struct MarkdownEditor: View {
     /// programmatic focus: writing it on every focus change would stamp on the
     /// position a click inside the editor just chose.
     @Binding var selection: TextSelection?
+
+    /// The Tab monitor, installed for the editor's lifetime when the owner
+    /// asked for traversal (its handler no-ops unless this editor is focused).
+    @State private var keyMonitor: Any?
 
     var body: some View {
         TextEditor(text: $text, selection: $selection)
@@ -46,6 +56,36 @@ struct MarkdownEditor: View {
             .background {
                 if focused { formattingShortcuts }
             }
+            .onAppear { installKeyMonitor() }
+            .onDisappear { removeKeyMonitor() }
+    }
+
+    private func installKeyMonitor() {
+        guard onTab != nil, keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Monitors fire on the main thread, but the closure isn't annotated;
+            // `assumeIsolated` can't *return* the non-Sendable event, so it
+            // answers "swallow?" instead.
+            let swallow = MainActor.assumeIsolated { handleKeyDown(event) }
+            return swallow ? nil : event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+
+    /// Tab or ⇧Tab, unmodified otherwise, while this editor is focused. Shift is
+    /// allowed through the guard: with two fields in a card the loop is the same
+    /// in both directions, so both spellings traverse.
+    private func handleKeyDown(_ event: NSEvent) -> Bool {
+        guard let onTab, focused, event.keyCode == 48 else { return false }
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            return false
+        }
+        onTab()
+        return true
     }
 
     private var formattingShortcuts: some View {

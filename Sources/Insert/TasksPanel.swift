@@ -313,11 +313,6 @@ private struct TaskCardView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var expanded = false
     @State private var showDuePopover = false
-    /// Height of the collapsed (one-line) body preview, and of the same text laid
-    /// out in full. When the second is taller the preview is truncated, which is
-    /// the only case that earns an expand chevron.
-    @State private var previewHeight: CGFloat = 0
-    @State private var fullBodyHeight: CGFloat = 0
     /// The ⋯ menu's box, which the expand chevron takes as its own so the two line
     /// up. Seeded with what a borderless `Menu` was measured at, so the first layout
     /// is already right and nothing slides when the real value lands.
@@ -343,12 +338,6 @@ private struct TaskCardView: View {
 
     private var hasBody: Bool {
         !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Only worth a chevron when there's more to reveal than the one line on
-    /// show — or when we're expanded and it's the way back.
-    private var showsChevron: Bool {
-        expanded || (hasBody && fullBodyHeight > previewHeight + 1)
     }
 
     var body: some View {
@@ -472,6 +461,7 @@ private struct TaskCardView: View {
                     // Return commits the quick-capture flow: type, Return, done.
                     onSubmit: { exitEdit() },
                     onEscape: { exitEdit() },
+                    onTab: { focusBody() },
                     focused: $titleFocused
                 )
 
@@ -751,101 +741,26 @@ private struct TaskCardView: View {
 
     // MARK: Body — view mode
 
-    /// Collapsed: the body's first line, ellipsised. Expanded: the notes as
-    /// *rendered* Markdown, read-only — editing happens in edit mode. The
-    /// chevron lives here rather than in the corner, next to the text it
-    /// reveals, and only appears when there's something hidden.
+    /// The notes in view mode — folded to the "Preview lines" choice
+    /// (Settings → Tasks), one line by default: the teaser these rows have
+    /// always shown. The folding, the fades and the chevron all live in
+    /// `CollapsibleMarkdown`, one view shared with the note card. `.callout`,
+    /// matching this card's editor — the note card's is `.body`, and a preview
+    /// that changes size on the way into edit mode is the thing `textStyle`
+    /// exists to prevent.
     @ViewBuilder
     private var bodySection: some View {
         if hasBody {
-            // Baseline, not `.top`: the chevron is a caption glyph in a 28pt target,
-            // so top-aligning the boxes sat it 8pt below the line of text it belongs
-            // to. Same rule as the checkbox and the ⋯ a row above —
-            // `centredOnTextCap()`, at `.callout` because that is what the notes are
-            // set in.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                // `.transition(.identity)` on both, for the reason the mode swap
-                // above documents: SwiftUI's default is a cross-fade, and these two
-                // are the same first line with and without the rest of the body
-                // under it, so fading them through each other shows the same words
-                // twice at half opacity while the row is still resizing. The row's
-                // height is what animates; the text is legible because of it.
-                if expanded {
-                    // `.callout`, matching this card's editor — the note card's
-                    // is `.body`, and a preview that changes size on the way in
-                    // is the thing `textStyle` exists to prevent.
-                    MarkdownText(markdown: draft.body, textStyle: .callout)
-                        .padding(.horizontal, 5)
-                        .transition(.identity)
-                } else {
-                    bodyPreview
-                        .transition(.identity)
-                }
-
-                if showsChevron {
-                    Button {
-                        expanded.toggle()
-                    } label: {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            // The glyph turns over rather than cutting: the same
-                            // symbol in two directions is exactly what `.replace`
-                            // is for, and it reads as the row's own movement.
-                            .contentTransition(.symbolEffect(.replace))
-                            // **The ⋯'s box, both dimensions.** The width is what
-                            // puts the two on one vertical axis: both are flush to
-                            // the same trailing edge, so equal widths is all it
-                            // takes, and this was 28 against the borderless menu's
-                            // own 20 — 4pt to its left. The *height* matters for a
-                            // different reason: a 28pt box centred on a 15pt line
-                            // sticks out above it, and since the row is
-                            // baseline-aligned that raised the row's top and pushed
-                            // the preview 5pt *below* the editor's first line —
-                            // trading one misalignment for its mirror image. At the
-                            // menu's own 14pt the box sits inside the line box and
-                            // pushes nothing. Both measured, because those numbers
-                            // are AppKit's rather than ours.
-                            .frame(width: actionsSize.width, height: actionsSize.height)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .centredOnTextCap(.callout)
-                    .help(expanded ? "Collapse notes" : "Expand notes")
-                    .accessibilityLabel(expanded ? "Collapse notes" : "Expand notes")
-                }
-            }
+            CollapsibleMarkdown(
+                markdown: draft.body,
+                textStyle: .callout,
+                previewLines: settings.taskPreviewLines.lines,
+                expanded: $expanded,
+                chevronBox: actionsSize,
+                expandLabel: "Expand notes",
+                collapseLabel: "Collapse notes"
+            )
         }
-    }
-
-    /// The teaser is **rendered**, not source. A task's notes are Markdown exactly
-    /// as a note's body is, and this row printed them raw — so `**Ship it**` read
-    /// as asterisks, and because the chevron only appears when there's more than
-    /// one line to reveal, a short body had no way to ever be seen rendered at all.
-    /// `MarkdownParser.lead(_:)` drops the block marker and
-    /// `MarkdownText.inline(_:)` draws the rest, which is the same pair of steps
-    /// the expanded view takes per block.
-    private var bodyPreview: some View {
-        MarkdownText.inline(MarkdownParser.lead(draft.body), in: Card.nsFont(.callout))
-            .font(Card.font(.callout))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 5)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { previewHeight = $0 }
-            .background(alignment: .topLeading) {
-                // What expanding would actually show, laid out unbounded: taller
-                // than the one line on show means there's something to reveal.
-                // Measured as the *render* rather than as the source, because that
-                // is what the chevron promises — the parser joins hard-wrapped
-                // lines into one paragraph, so a two-line source can render as one
-                // line and used to earn a chevron that revealed nothing.
-                MarkdownText(markdown: draft.body, textStyle: .callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .hidden()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullBodyHeight = $0 }
-            }
     }
 
     // MARK: Body — edit mode
@@ -872,6 +787,7 @@ private struct TaskCardView: View {
             MarkdownEditor(
                 text: $draft.body,
                 font: Card.font(.callout),
+                onTab: { focusTitle() },
                 focused: $bodyFocused,
                 selection: $bodySelection
             )
@@ -970,6 +886,17 @@ private struct TaskCardView: View {
                 bodyFocused = true
             }
         }
+    }
+
+    /// Tab traversal between the row's two fields — the note card's helpers,
+    /// including why these skip `focusForEntry()`'s one-turn delay.
+    private func focusTitle() { titleFocused = true }
+
+    private func focusBody() {
+        // Alongside a programmatic focus is the one place the selection may be
+        // written; end of the text, same as entry.
+        bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        bodyFocused = true
     }
 
     /// Ending an edit either persists the draft or, when the task was left

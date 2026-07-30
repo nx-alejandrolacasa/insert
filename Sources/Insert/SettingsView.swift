@@ -251,6 +251,16 @@ private struct TasksSettingsTab: View {
             }
 
             Section {
+                Picker("Preview lines", selection: $settings.taskPreviewLines) {
+                    ForEach(PreviewLines.allCases) { lines in
+                        Text(lines.label).tag(lines)
+                    }
+                }
+            } footer: {
+                Text("How much of a task's notes shows before it's folded: so many lines, fading out at the cut, with a chevron to reveal the rest. Editing a task always shows all of it.")
+            }
+
+            Section {
                 Picker("Show dates", selection: $settings.taskCardDates) {
                     ForEach(CardDates.allCases) { dates in
                         Text(dates.label).tag(dates)
@@ -318,6 +328,16 @@ private struct NotesSettingsTab: View {
                 }
             } footer: {
                 Text("Stamped at the foot of each note — a sparkle marks when it was created, a pencil when it was last edited. “Most recent” shows the last edit, or the creation date if it has never been edited.")
+            }
+
+            Section {
+                Picker("Preview lines", selection: $settings.notePreviewLines) {
+                    ForEach(PreviewLines.allCases) { lines in
+                        Text(lines.label).tag(lines)
+                    }
+                }
+            } footer: {
+                Text("How much of a note shows before it's folded: so many lines, fading out at the cut, with a chevron to reveal the rest. Editing a note always shows all of it.")
             }
 
             Section {

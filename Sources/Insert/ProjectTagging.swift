@@ -31,6 +31,10 @@ struct ProjectHashField: View {
     var onSubmit: () -> Void = {}
     /// Esc with the dropdown closed.
     var onEscape: () -> Void = {}
+    /// Tab or ⇧Tab with the dropdown closed — the owner's field traversal (a
+    /// card hands focus to its body). `nil` leaves Tab to AppKit's key-view
+    /// loop; with the dropdown open, Tab still means "first match" either way.
+    var onTab: (() -> Void)? = nil
     /// Owned by the caller, which also decides when the field takes focus.
     @FocusState.Binding var focused: Bool
 
@@ -137,6 +141,10 @@ struct ProjectHashField: View {
 
         if event.keyCode == 53 { // Esc with the dropdown closed is the owner's.
             onEscape()
+            return true
+        }
+        if event.keyCode == 48, let onTab { // Tab/⇧Tab likewise.
+            onTab()
             return true
         }
         return false

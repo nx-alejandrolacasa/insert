@@ -102,7 +102,8 @@ Sources/Insert/
   TaskReminder.swift          the once-a-day "N tasks for today" notification
   Formatting.swift            the locale the UI presents in (English)
   BuildVariant.swift          dev vs release build, and what differs
-  MarkdownText.swift          compact Markdown renderer for bodies
+  MarkdownText.swift          compact Markdown renderer for bodies + the shared
+                              collapsible preview (CollapsibleMarkdown)
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
   Appearance.swift            Auto / Light / Dark preference
   Backdrop.swift              the five window gradients + their Settings picker
@@ -264,6 +265,39 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   for the reason `chipHeight` is pinned to its tallest one. A custom symbol wider
   still wants the well widened, not the glyph shrunk again: below about 11pt these
   stop reading.
+  **A body can read collapsed — "Preview lines", notes and tasks each their own**
+  (Settings → Notes / Tasks): show everything, or a preview of 1 / 3 / 5 / 10
+  rendered lines with a chevron beside the body's *first* line to reveal the
+  rest. Notes default to everything, so an untouched install keeps showing whole
+  notes (an install that had the earlier "Collapse long notes" toggle on is
+  seeded to 10 — that toggle was ten lines or nothing); tasks default to 1 line,
+  the teaser those rows have always shown. View mode only — the editor always
+  shows everything. All of it is **one shared view**, `CollapsibleMarkdown`
+  (`MarkdownText.swift`), and it has two collapsed shapes because one line is
+  not just a smaller ten. **One line** is the teaser (`MarkdownParser.lead`,
+  rendered inline), laid out at its natural width and faded out at the trailing
+  edge when the line is cut — never an ellipsis — with the full render swapped
+  in on expand in one frame (`.transition(.identity)` against the default
+  cross-fade). **Several lines** clamp the full render to that many line heights
+  *of the card face* — not a count of source lines; the body is a stack of
+  blocks no `lineLimit` fits, and a serif or monospaced card should fold at its
+  own rhythm — fading to nothing over the last of them. Whether the chevron
+  appears is measured off the **render** (the parser joins hard-wrapped lines,
+  so a long source can render short), with **half a line of tolerance** on the
+  clamp: a body of exactly the preview height drifts a fraction of a point per
+  line against `n ×` an unrounded line height, and must not earn a chevron that
+  reveals nothing. Two of the cards' own lessons are load-bearing in there. The
+  clamped body is **one view** collapsed and expanded — `fixedSize` vertically
+  so the clamp can't squeeze its blocks into ellipses, with only the
+  `frame(maxHeight:)` value switching — because a conditional branch is two
+  identities and would kill the height animation, which each card value-scopes
+  to `expanded` beside the one scoped to `isEditing`; the masks are applied in
+  *both* states (expanded they are opaque everywhere, a no-op) for the same
+  one-identity reason. And the chevron rides the body's **first** line wearing
+  the ⋯ menu's measured box: a control under the fold travels with the card's
+  height — collapsing an expanded note had it floating down through the
+  contraction with its `.replace` turn still playing — where on the first line
+  it holds still, flush on the ⋯'s own trailing axis.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
   task can be assigned to several projects. Typing `#` opens a project
   autocomplete; Tab picks the first match; the `#word` is *not* kept in the
@@ -281,6 +315,14 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   source, because that is what it promises: the parser joins hard-wrapped lines into
   one paragraph, so a two-line source can render as one line and used to earn a
   chevron that revealed nothing. Pinned by `MarkdownParserTests`.
+  A teaser longer than the row **fades out at its trailing edge instead of
+  truncating to an ellipsis** — the clamp's gradient turned sideways, so the two
+  cuts read as one gesture. The line is laid out at its natural width
+  (`fixedSize`), clipped, and masked; the fade appears only when that width
+  measurably exceeds the box's, because a fade over a line that fits would
+  promise more where there isn't any. How many lines a row previews is the
+  "Preview lines" setting — the folding is `CollapsibleMarkdown`, shared with
+  the note card; see the notes bullet for the whole design.
   **A task doesn't move while you're looking at it either**, the notes column's
   rule read off a different sort key. Tasks sort pending-first, then by due date,
   then newest — and *both* mutable halves of that are things a row changes about
@@ -587,6 +629,20 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `**`/`#`, draws bullets as circles and joins hard-wrapped lines into one
   paragraph, so a point in the preview has no source character to map to.
   Landing in the right *block* would mean `MarkdownParser` carrying source ranges.
+- **Tab walks an open card's fields.** Tab or ⇧Tab moves focus between a card's
+  title and body, both directions the same because two fields make a loop of
+  two. Without it there is no key out of a body: the editor's text view answers
+  Tab itself, as a literal tab character — the `ProjectHashField` wall again
+  (the field editor and the text view both consume Tab before `onKeyPress`
+  sees it), solved its way both times. The title side is a new `onTab` on
+  `ProjectHashField`'s existing monitor, firing only with the dropdown closed —
+  dropdown open, Tab still means "first match", which stays the override. The
+  body side is a focus-gated monitor of the same shape inside `MarkdownEditor`
+  (`onTab`, optional so an owner without a second field leaves Tab alone). The
+  focus writes are direct, *not* `focusForEntry()`'s deferred turn: that delay
+  exists because entry creates the fields in the same update, and here both
+  fields already exist when the key fires, so there is no registration to wait
+  for.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

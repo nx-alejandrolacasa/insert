@@ -83,6 +83,20 @@ final class SettingsStore {
         didSet { defaults.set(dueTintedTasks, forKey: Keys.dueTintedTasks) }
     }
 
+    /// How much of a note shows before it's folded — a preview of so many
+    /// rendered lines with a chevron to reveal the rest, or everything.
+    /// Everything by default, so an install that never opens Settings keeps
+    /// showing whole notes. View mode only; the editor always shows everything.
+    var notePreviewLines: PreviewLines {
+        didSet { defaults.set(notePreviewLines.rawValue, forKey: Keys.notePreviewLines) }
+    }
+
+    /// The same choice for a task's notes — one line by default, the teaser the
+    /// rows have always shown.
+    var taskPreviewLines: PreviewLines {
+        didSet { defaults.set(taskPreviewLines.rawValue, forKey: Keys.taskPreviewLines) }
+    }
+
     /// Which timestamps the card footers carry (✦ created, ✎ last edited) —
     /// notes and tasks each pick their own. See `CardDatesFooter`.
     var noteCardDates: CardDates {
@@ -107,12 +121,17 @@ final class SettingsStore {
         static let dailyReminder = "dailyReminder"
         static let reminderMinutes = "reminderMinutes"
         static let dueTintedTasks = "dueTintedTasks"
+        static let notePreviewLines = "notePreviewLines"
+        static let taskPreviewLines = "taskPreviewLines"
         static let noteCardDates = "noteCardDates"
         static let taskCardDates = "taskCardDates"
         // Superseded by the two per-kind pickers above; still read once to seed
         // them, never written.
         static let showCreatedDate = "showCreatedDate"
         static let showUpdatedDate = "showUpdatedDate"
+        // Superseded by notePreviewLines ("Collapse long notes" was ten lines
+        // or nothing); still read once to seed it, never written.
+        static let collapseLongNotes = "collapseLongNotes"
         static let noteTintMigrated = "noteTintMigrated"
     }
 
@@ -139,6 +158,13 @@ final class SettingsStore {
         reminderMinutes = ReminderSchedule.nearestSlot(
             to: defaults.object(forKey: Keys.reminderMinutes) as? Int ?? 9 * 60)
         dueTintedTasks = defaults.object(forKey: Keys.dueTintedTasks) as? Bool ?? false
+        // Seeded from the "Collapse long notes" toggle this replaced, which was
+        // ten lines or nothing — an install that had it on keeps its fold.
+        let legacyCollapse = defaults.object(forKey: Keys.collapseLongNotes) as? Bool ?? false
+        notePreviewLines = PreviewLines(rawValue: defaults.string(forKey: Keys.notePreviewLines) ?? "")
+            ?? (legacyCollapse ? .ten : .everything)
+        // One line is the teaser task rows have always shown.
+        taskPreviewLines = PreviewLines(rawValue: defaults.string(forKey: Keys.taskPreviewLines) ?? "") ?? .one
         // Both seeded from the toggle pair this setting used to be — which also
         // covers the fresh install: absent toggles read as "last edited only",
         // the stamp the cards have always worn.

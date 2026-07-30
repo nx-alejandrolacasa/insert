@@ -253,6 +253,41 @@ enum DoneTaskRetention: String, CaseIterable, Identifiable {
     }
 }
 
+/// How much of a card's body shows before it is folded behind a chevron — a
+/// preview of so many *rendered* lines, or everything, with no collapsing at
+/// all. Notes and tasks each pick their own (Settings → Notes / Tasks); the
+/// folding itself lives in `CollapsibleMarkdown`.
+enum PreviewLines: String, CaseIterable, Identifiable {
+    case everything
+    case one
+    case three
+    case five
+    case ten
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .everything: "Show everything"
+        case .one: "1 line"
+        case .three: "3 lines"
+        case .five: "5 lines"
+        case .ten: "10 lines"
+        }
+    }
+
+    /// The line count, or `nil` for no collapsing.
+    var lines: Int? {
+        switch self {
+        case .everything: nil
+        case .one: 1
+        case .three: 3
+        case .five: 5
+        case .ten: 10
+        }
+    }
+}
+
 // Note: there is deliberately no note-archiving setting here. Insert briefly moved
 // notes older than a month into `Notes/Archive/` and read them back on demand, to
 // keep a large library off the launch path. Two things were wrong with it. What a

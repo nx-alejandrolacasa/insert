@@ -249,6 +249,15 @@ private struct NoteCardView: View {
     /// Height of the rendered body text, so the editor grows with content
     /// instead of the greedy `TextEditor` filling the whole scroll viewport.
     @State private var measuredBodyHeight: CGFloat = 34
+    /// Whether a collapsible body is currently shown in full. Only meaningful
+    /// with a "Preview lines" choice set and a body taller than its cap; owned
+    /// here rather than by `CollapsibleMarkdown` so the card's height animation
+    /// can be value-scoped to it.
+    @State private var expanded = false
+    /// The ⋯ menu's box, which the expand chevron takes as its own so the two sit
+    /// flush on one trailing axis — the task row's arrangement, seeded with the
+    /// same measured value so the first layout is already right.
+    @State private var actionsSize = CGSize(width: 20, height: 14)
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
     /// The body editor's caret/selection, held here so `focusForEntry()` can
@@ -346,6 +355,14 @@ private struct NoteCardView: View {
             reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: isEditing
         )
+        // Collapsing or expanding the body is the same kind of change as opening
+        // the card — this card grows, the cards below travel — so it eases the
+        // same way, for the same duration. Value-scoped, like the task row's,
+        // so this and the mode change can't drive each other.
+        .animation(
+            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            value: expanded
+        )
     }
 
     /// The body: the editor while editing, rendered Markdown otherwise, changed
@@ -378,6 +395,7 @@ private struct NoteCardView: View {
                         assigned: $draft.projectIDs,
                         font: Card.font(.title3, weight: .bold),
                         onEscape: { exitEdit() },
+                        onTab: { focusBody() },
                         focused: $titleFocused
                     )
                 } else {
@@ -405,6 +423,11 @@ private struct NoteCardView: View {
             }
 
             actionsMenu
+                // The expand chevron under a collapsed body wears this control's
+                // box so the two share a trailing axis — and a borderless `Menu`
+                // sizes itself, so it's measured rather than assumed. Same as
+                // the task row.
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { actionsSize = $0 }
         }
     }
 
@@ -569,12 +592,10 @@ private struct NoteCardView: View {
 
     // MARK: Body — view mode
 
-    /// Rendered Markdown shown when the note isn't being edited.
-    ///
-    /// The 5pt is the editor's own text-container inset, which the preview has to
-    /// repeat or the first character shifts sideways as the card opens — the same
-    /// 5 the placeholder and the sizing proxy carry, and the same one the task
-    /// card already put on its `MarkdownText`.
+    /// Rendered Markdown shown when the note isn't being edited — folded to the
+    /// "Preview lines" choice (Settings → Notes) when the body runs past it.
+    /// The folding, the fades and the chevron all live in `CollapsibleMarkdown`,
+    /// one view shared with the task row; the editor always shows everything.
     @ViewBuilder
     private var bodyView: some View {
         if draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -585,8 +606,14 @@ private struct NoteCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 5)
         } else {
-            MarkdownText(markdown: draft.body)
-                .padding(.horizontal, 5)
+            CollapsibleMarkdown(
+                markdown: draft.body,
+                previewLines: settings.notePreviewLines.lines,
+                expanded: $expanded,
+                chevronBox: actionsSize,
+                expandLabel: "Show the whole note",
+                collapseLabel: "Collapse note"
+            )
         }
     }
 
@@ -622,6 +649,7 @@ private struct NoteCardView: View {
             MarkdownEditor(
                 text: $draft.body,
                 font: Card.font(.body),
+                onTab: { focusTitle() },
                 focused: $bodyFocused,
                 selection: $bodySelection
             )
@@ -718,6 +746,19 @@ private struct NoteCardView: View {
                 bodyFocused = true
             }
         }
+    }
+
+    /// Tab traversal between the card's two fields. Written directly, without
+    /// `focusForEntry()`'s one-turn delay: both fields already exist — the card
+    /// is open, and nothing about the view tree changes with the focus — so
+    /// there is no registration to wait for.
+    private func focusTitle() { titleFocused = true }
+
+    private func focusBody() {
+        // Alongside a programmatic focus is the one place the selection may be
+        // written; end of the text, same as entry.
+        bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        bodyFocused = true
     }
 
     // MARK: Persistence
