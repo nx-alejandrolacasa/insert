@@ -23,7 +23,9 @@
       "Bash(screencapture -x -o __TRACKED_VAR__/shot.png)",
       "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox)",
       "Bash(sed -i '' 's/@State private var assigned: \\\\[String\\\\] = \\\\[\\\\]/@State private var assigned: [UUID] = []/' Tests/InsertTests/TmpInsetTests.swift)",
-      "Bash(swift test *)"
+      "Bash(swift test *)",
+      "Bash(log show *)",
+      "Bash(/usr/bin/log show *)"
     ]
   }
 }
