@@ -211,6 +211,12 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
+                Toggle("Check spelling while typing", isOn: $settings.checkSpelling)
+            } footer: {
+                Text("Underlines misspelled words while you write a note or a task — title and body both — in the spelling language your Mac is set to. Control-click a word for its corrections. Nothing is ever changed for you: autocorrect and grammar checking stay off.")
+            }
+
+            Section {
                 Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
             } footer: {
                 Text("The menu-bar item summarizes tasks that are past due, due today, and coming up.")
@@ -382,6 +388,18 @@ private struct NotesSettingsTab: View {
 /// One editable row. Holds its own draft copy so typing stays smooth, then
 /// pushes each committed change back through `updateNoteType`. The locked base
 /// type disables its name field and drops the delete control.
+/// The width shared by every name field in this pane — the type rows and the add
+/// form below them, so the two line up as one column.
+///
+/// It is a number rather than a flexible frame because the Settings window is a
+/// fixed 700pt and **not resizable** (`SettingsWindowController`), so this row's
+/// budget is known: ~440pt of content, of which the tint swatches take 198 (nine
+/// 22pt targets) and the spacings 60. At 150 that left 30pt for the "Add" button,
+/// which came out as a capsule reading “A…”. 110 pays for the capsule with room
+/// to spare and still holds the longest default name — and the button is
+/// `fixedSize` besides, so a label can never again be the thing that gives.
+private let noteTypeNameWidth: CGFloat = 110
+
 private struct NoteTypeRow: View {
     private let settings = SettingsStore.shared
 
@@ -407,7 +425,7 @@ private struct NoteTypeRow: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: noteTypeNameWidth)
                 .disabled(type.isLocked)
                 .onSubmit(commit)
                 // Commit renames when focus leaves too, not only on Return.
@@ -482,7 +500,7 @@ private struct AddNoteTypeForm: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: noteTypeNameWidth)
                 .onSubmit(add)
 
             TintPicker(selection: tint) { tint = $0 }
@@ -492,6 +510,12 @@ private struct AddNoteTypeForm: View {
             Button("Add", action: add)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
+                // The label is not negotiable: in a row this full, SwiftUI's
+                // answer was to truncate it to “A…” rather than take space from
+                // anything else. `fixedSize` makes the button ask for the width
+                // its word needs, so the row is short of room somewhere visible
+                // instead of quietly unreadable here.
+                .fixedSize()
                 .disabled(trimmedName.isEmpty)
         }
         .labelsHidden()

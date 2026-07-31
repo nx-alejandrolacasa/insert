@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         MarkdownReturn.install()
+        SpellChecking.install()
         TaskReminder.shared.start()
         Self.runHousekeeping()
         Self.normalizeSidebarWidth()
@@ -59,7 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         housekeepingTimer?.invalidate()
     }
 
-    /// Where the toolbar's glass is flattened, once per update cycle.
+    /// Where the toolbar's glass is flattened and the focused editor is told
+    /// whether to check spelling, once per update cycle.
     ///
     /// It has to be *repeated*, not done once at launch: AppKit rebuilds the platter
     /// behind a toolbar item as the item changes — the search field expanding,
@@ -68,8 +70,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `applicationDidUpdate` fires after each event, so this is on the hot path.
     /// It's kept cheap by walking only the titlebar (a few dozen views, and the
     /// content view is skipped outright) and by touching nothing already flat.
+    ///
+    /// Spell checking rides the same tick for a related reason: focus moves
+    /// between a card's title and its body, and between one card and the next,
+    /// with no notification to hang it on — see `SpellChecking`, which reads the
+    /// first responder and writes only what's about to change.
     func applicationDidUpdate(_ notification: Notification) {
         Self.flattenToolbarGlass()
+        SpellChecking.applyToFocusedEditors()
     }
 
     /// Replaces the Liquid Glass platter behind the toolbar's search field with a

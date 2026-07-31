@@ -101,6 +101,7 @@ Sources/Insert/
   DateSections.swift          overdue/today/upNext buckets for the menu bar
   TaskReminder.swift          the once-a-day "N tasks for today" notification
   Formatting.swift            the locale the UI presents in (English)
+  SpellChecking.swift         spell checking in the cards' titles and bodies
   BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies + the shared
                               collapsible preview (CollapsibleMarkdown)
@@ -707,6 +708,59 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   exists because entry creates the fields in the same update, and here both
   fields already exist when the key fires, so there is no registration to wait
   for.
+- **Spelling is marked, never corrected.** Settings → General → "Check spelling
+  while typing" (on by default) underlines misspellings in a card's **title and
+  body**, notes and tasks alike; corrections are offered where they can be
+  accepted deliberately, in the text view's own Control-click menu. Grammar
+  checking and automatic spelling correction are switched **off explicitly**
+  rather than left at whatever the text view came with, because a bare
+  `NSTextView` arrives with both of them *on* (measured:
+  `isContinuousSpellCheckingEnabled` false, `isGrammarCheckingEnabled` and
+  `isAutomaticSpellingCorrectionEnabled` true) and these are Markdown files
+  Obsidian also opens — a substitution made on the user's behalf is a write to
+  their note. The smart quote and dash substitutions are left exactly as they
+  are: they're the status quo of typing here, and switching spelling on is no
+  reason to change what lands in a file.
+  SwiftUI offers **nothing** for this on macOS — there is no spell-checking
+  modifier anywhere in its interface (`autocorrectionDisabled` is iOS's, and a
+  different thing) — so `SpellChecking` reaches the `NSTextView` through the
+  **first responder**, from `applicationDidUpdate`. `MarkdownReturn`'s route, for
+  `applicationDidUpdate`'s own reason: focus moves between a card's two fields
+  and from one card to the next with no notification to hang this on.
+  **Setting the flag once, when focus lands, is not enough — that was the first
+  version and it was reported broken**: *"it works, but it takes ages, only when
+  I stop typing, and not even always"*, which is the signature of marks that are
+  made and then dropped. A SwiftUI text view is reconfigured on every graph
+  update, and a card re-renders on every keystroke and again when its ~0.4s
+  debounced save lands. **Which of those drops them was never established**, so
+  the fix is aimed at the class, not the instance, in two halves. The flag is
+  **re-asserted**: every update tick compares the live property against the
+  preference and writes when they differ, so nothing can quietly turn checking
+  off mid-sentence. And every edit **forces a pass** — `SpellChecking.install()`
+  watches `NSText.didChangeNotification` and calls
+  `checkText(in:types:options:)`, the automatic machinery's own call, which marks
+  without touching the selection the way "Check Document Now" would. Twice, on
+  one debounce: at 150ms, which is inside the gap between keystrokes so a
+  finished word is marked while the sentence is still being written, and again
+  500ms later — *past* the save and its re-render, because a pass that runs
+  before the thing that clears the marks is a pass that didn't happen.
+  The price of re-asserting is paid knowingly: the text view's own "Check
+  Spelling While Typing" in the Control-click menu no longer sticks, since
+  unchecking it there is undone within a frame. Settings is the switch.
+  **The two halves of a card are two different text views**, which is the rest of
+  the shape. A body is a `TextEditor` with an `NSTextView` of its own. A title is
+  a `TextField`, which has **none**: it borrows the window's one shared **field
+  editor**, and so do the toolbar's search field and Settings' text fields — so
+  what the field editor is given follows it to the next field, and it has to be
+  told on every focus change what the field it is *currently* attached to wants.
+  Hence the two exclusions: the **search field** (a query, not prose, and it
+  names itself by being an `NSSearchField`) and the **Settings window**
+  (`SettingsWindowController.owns(_:)` — a note type's name is an ordinary
+  `NSTextField` exactly as a card's title is, so the window is the only thing
+  that separates them). A field that can't be identified counts as excluded, so
+  nothing inherits underlines from whatever was edited before it.
+  None of this is testable without a view, and the app isn't launched in the agent
+  shell, so it is confirmed on screen or not at all.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

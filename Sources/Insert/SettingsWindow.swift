@@ -51,6 +51,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private override init() {}
 
+    /// Whether `window` is the Settings window. `SpellChecking` asks: a card's
+    /// title should underline misspellings and a note type's name here should
+    /// not, and since both are plain `NSTextField`s sharing one field editor,
+    /// the window is the only thing that tells them apart.
+    func owns(_ window: NSWindow) -> Bool { window === self.window }
+
     func show() {
         NSApp.activate()
 

@@ -60,6 +60,14 @@ final class SettingsStore {
         didSet { defaults.set(typeface.rawValue, forKey: Keys.typeface) }
     }
 
+    /// Whether the cards underline misspelled words as you type — titles and
+    /// bodies, notes and tasks. On by default, which is what a text editor on
+    /// this platform does; it only ever marks, never corrects (see
+    /// `SpellChecking`).
+    var checkSpelling: Bool {
+        didSet { defaults.set(checkSpelling, forKey: Keys.checkSpelling) }
+    }
+
     /// Whether the menu-bar extra is shown.
     var showMenuBar: Bool {
         didSet { defaults.set(showMenuBar, forKey: Keys.showMenuBar) }
@@ -149,6 +157,7 @@ final class SettingsStore {
         static let weekStyle = "weekStyle"
         static let doneTaskRetention = "doneTaskRetention"
         static let showMenuBar = "showMenuBar"
+        static let checkSpelling = "checkSpelling"
         static let dailyReminder = "dailyReminder"
         static let reminderMinutes = "reminderMinutes"
         static let appReduceMotion = "appReduceMotion"
@@ -199,6 +208,9 @@ final class SettingsStore {
         // Rounded, which is the only face the cards had before this was a choice.
         typeface = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") ?? .rounded
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
+        // On unless turned off: underlining a typo is what a text editor does
+        // here, and it changes nothing on disk.
+        checkSpelling = defaults.object(forKey: Keys.checkSpelling) as? Bool ?? true
         dailyReminder = defaults.object(forKey: Keys.dailyReminder) as? Bool ?? false
         // 09:00 by default, and snapped to the offered half hours: the picker used
         // to allow any minute of any hour, so an install saved before that became a
