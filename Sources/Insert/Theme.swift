@@ -60,6 +60,191 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
 
     /// A slightly stronger fill for pills/chips.
     var chip: Color { accent.opacity(0.20) }
+
+    /// The highlighter band a note title wears (docs/plans/ decision 2): the
+    /// tint blended into the card face — 45% of `accent` over white in Light,
+    /// a quieter 34% over the dark card in Dark. The mock's 60% was tried and
+    /// softened by request: under a saturated tint (the base blue Note worst
+    /// of all) the full-strength band crowded the glyphs sitting on it, and a
+    /// highlighter should read as light behind the words, not a bar through
+    /// them.
+    ///
+    /// Blended to an **opaque** colour rather than applied as an alpha wash so
+    /// what sits behind the title can never show through the band, and derived
+    /// from `accent` rather than tabled per type so a custom type's marker
+    /// falls out of its tint like everything else. The title's own contrast
+    /// survives by construction: the worst case (purple) leaves black type at
+    /// 10:1 in Light and white type at 8:1 in Dark, and the band only covers
+    /// the bottom third of the glyphs anyway.
+    var marker: Color {
+        let a = ramp.accent
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let highContrast = AccessibilityOverride.increaseContrast
+                || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            let base: Double = dark ? 0.118 : 1.0
+            // Under Increase Contrast the band goes *quieter*, not louder —
+            // the accessible direction for pigment behind glyphs is less of
+            // it, so the title stands off a paler stroke.
+            let fraction: Double = switch (dark, highContrast) {
+            case (false, false): 0.45
+            case (false, true): 0.25
+            case (true, false): 0.34
+            case (true, true): 0.20
+            }
+            func mix(_ c: Double) -> Double { c * fraction + base * (1 - fraction) }
+            return NSColor(srgbRed: mix(a.r), green: mix(a.g), blue: mix(a.b), alpha: 1)
+        })
+    }
+}
+
+// MARK: - Accent
+
+/// The app's one interactive colour — primary buttons, the selected filter
+/// segment's dot, selection rings in the Settings pickers — chosen in
+/// Settings → General → Accent ("Highlight colour"). Blue by default.
+///
+/// One accent, everywhere, is the refresh's colour discipline (docs/plans/
+/// decision 4): project colour only ever appears as a dot, metadata is grey,
+/// and this is the only hue that means "interactive". Exactly these four
+/// options.
+///
+/// Most options **are their tint's `deep`** — the same palette the projects
+/// wear, deliberately. The refresh's own tokens (oklch 52% 0.11) were tried
+/// first and read flat and corporate beside the tint family; borrowing `deep`
+/// keeps the accent in the app's one palette and brings the solved contrast
+/// along for free (≥4.5:1 under white, ≥7:1 with Increase Contrast, unchanged
+/// between Light and Dark — white-on-fill doesn't depend on what's behind the
+/// fill). Two depart from `deep`, both by request. **Orange** is brighter than
+/// the tint's fill — oklch 58% 0.16 at hue 45, which is the most chromatic
+/// orange that still clears 4.5:1 under white; anything more playful than
+/// this has to give up the white label. **Gray** did exactly that: it *is*
+/// `Stone.chip`, the wash every chip wears, so a Gray primary button and the
+/// pills beside it are one colour by construction — and no grey that light can
+/// carry white type, so it is the one accent whose `foreground` isn't white
+/// (near-black on the light chip, near-white on the dark one). It replaced
+/// *both* earlier greys (a dark warm "Graphite" and a cool silver "Light
+/// Gray"): one grey option, and it's the palette's.
+enum AccentColor: String, CaseIterable, Identifiable {
+    case blue
+    case green
+    case orange
+    case lilac
+    case gray
+
+    var id: String { rawValue }
+
+    /// The greys this one replaced, for installs that saved them.
+    static func migratedFromRetired(_ raw: String) -> AccentColor? {
+        raw == "graphite" || raw == "lightGray" ? .gray : nil
+    }
+
+    var name: String {
+        switch self {
+        case .blue: "Blue"
+        case .green: "Green"
+        case .orange: "Orange"
+        case .lilac: "Lilac"
+        case .gray: "Gray"
+        }
+    }
+
+    /// A fill that carries `foreground` type, or a selection ring on neutral
+    /// ground.
+    var color: Color {
+        switch self {
+        case .blue: Tint.blue.deep
+        case .green: Tint.green.deep
+        // The purple family's fill — "Lilac" names where it sits beside the
+        // backdrop tint of the same name, but the fill has to be `deep`: the
+        // pastel lilac `accent` is a 3.4:1 under white, nowhere near a label.
+        case .lilac: Tint.purple.deep
+        case .orange: dynamic(
+            light: RGB(r: 0.77, g: 0.33, b: 0.06), dark: RGB(r: 0.77, g: 0.33, b: 0.06),
+            lightHC: RGB(r: 0.62, g: 0.21, b: 0.04), darkHC: RGB(r: 0.62, g: 0.21, b: 0.04))
+        // **Literally the chip's own paint**, so a Gray "New Task" and the
+        // "All time" chip beside it are THE SAME colour (the maintainer's
+        // words) — by construction, not by matching numbers. Two attempts at
+        // an opaque equivalent measured a few 255ths off on screen every
+        // time: an sRGB literal and a 15%-alpha wash composited on a P3
+        // display don't resolve identically, so the only exact match is the
+        // same translucent fill over the same ground. It also means both warm
+        // to a tinted backdrop together.
+        case .gray: Stone.chip
+        }
+    }
+
+    /// What type on the fill wears: white everywhere except Gray, whose fill
+    /// is the chip colour — near-black on the light chip, near-white on the
+    /// dark one (≥10:1 both ways).
+    var foreground: Color {
+        switch self {
+        case .gray:
+            Color(nsColor: NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                    ? NSColor(srgbRed: 0.92, green: 0.92, blue: 0.93, alpha: 1)
+                    : NSColor(srgbRed: 0.13, green: 0.13, blue: 0.14, alpha: 1)
+            })
+        default: .white
+        }
+    }
+}
+
+/// The Accent row's four swatches (Settings → General): a filled circle per
+/// option, the selected one ringed in its own colour, System Settings style.
+struct AccentPicker: View {
+    let selection: AccentColor
+    let onSelect: (AccentColor) -> Void
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ForEach(AccentColor.allCases) { accent in
+                let selected = accent == selection
+                Button {
+                    onSelect(accent)
+                } label: {
+                    Circle()
+                        .fill(accent.color)
+                        .frame(width: 22, height: 22)
+                        // The hairline every swatch in Settings wears; only
+                        // Light Gray visibly needs it, but one odd swatch out
+                        // would read as a state.
+                        .overlay(Circle().strokeBorder(Stone.line, lineWidth: 0.5))
+                        .overlay {
+                            Circle()
+                                .strokeBorder(accent.color, lineWidth: 1.5)
+                                .padding(-3.5)
+                                .opacity(selected ? 1 : 0)
+                        }
+                        // Room for the ring, and a comfortable click target.
+                        .padding(4)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(accent.name)
+                .accessibilityLabel(accent.name)
+                .accessibilityAddTraits(selected ? [.isSelected] : [])
+            }
+        }
+    }
+}
+
+// MARK: - Semantic colours
+
+/// The one place red is allowed: a genuinely overdue task's date. Everything
+/// else a date can be — today, upcoming, "created at" — is grey, so that when
+/// this fires it means exactly one thing (docs/plans/ decision 4).
+///
+/// oklch 50% 0.16 32 in Light (6.5:1 on the white card), brightened to 72% in
+/// Dark (6.3:1 on the dark card) — the `Tint.ink` move, solved against the
+/// refresh's AA floor for sub-14px text rather than borrowed from `Tint.red`,
+/// whose hue is pinker than the overdue token's vermilion.
+enum Semantic {
+    static let overdue: Color = dynamic(
+        light: RGB(r: 0.672, g: 0.200, b: 0.122),
+        dark: RGB(r: 0.937, g: 0.504, b: 0.421),
+        lightHC: RGB(r: 0.560, g: 0.150, b: 0.080),
+        darkHC: RGB(r: 0.965, g: 0.560, b: 0.480))
 }
 
 // MARK: - Palette
@@ -98,13 +283,20 @@ private extension Tint {
             inkDark:    RGB(r: 0.63, g: 0.59, b: 0.53),
             inkLightHC: RGB(r: 0.29, g: 0.27, b: 0.23),
             inkDarkHC:  RGB(r: 0.76, g: 0.71, b: 0.64))
+        // Yellow's dark halves are the one aesthetic judgment in this table:
+        // any yellow at 4.5:1 goes brown, and the first values leaned olive —
+        // "that brown/gold-ish shade is ugly". These sit at the floor's edge
+        // (4.55:1, 7.2:1 HC) with the green pulled up and the blue pulled out,
+        // which reads as amber rather than mud. They can't get brighter
+        // without giving up AA; if they still look wrong, the lever is hue,
+        // not lightness.
         case .yellow: Ramp(
             accent:     RGB(r: 0.95, g: 0.77, b: 0.29),
-            fill:       RGB(r: 0.60, g: 0.43, b: 0.06),
-            fillHC:     RGB(r: 0.45, g: 0.32, b: 0.04),
-            inkLight:   RGB(r: 0.50, g: 0.36, b: 0.05),
+            fill:       RGB(r: 0.63, g: 0.42, b: 0.00),
+            fillHC:     RGB(r: 0.47, g: 0.31, b: 0.00),
+            inkLight:   RGB(r: 0.63, g: 0.42, b: 0.00),
             inkDark:    RGB(r: 0.95, g: 0.77, b: 0.29),
-            inkLightHC: RGB(r: 0.36, g: 0.26, b: 0.03),
+            inkLightHC: RGB(r: 0.47, g: 0.31, b: 0.00),
             inkDarkHC:  RGB(r: 0.95, g: 0.77, b: 0.29))
         case .purple: Ramp(
             accent:     RGB(r: 0.60, g: 0.45, b: 0.95),
@@ -183,7 +375,8 @@ private extension Tint {
 private func dynamic(light: RGB, dark: RGB, lightHC: RGB, darkHC: RGB) -> Color {
     Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let isHighContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let isHighContrast = AccessibilityOverride.increaseContrast
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let rgb = switch (isDark, isHighContrast) {
         case (false, false): light
         case (false, true): lightHC
@@ -194,6 +387,18 @@ private func dynamic(light: RGB, dark: RGB, lightHC: RGB, darkHC: RGB) -> Color 
     })
 }
 
+/// The Accessibility menu's in-app "Increase Contrast", mirrored out of
+/// `SettingsStore` so the dynamic-colour providers above can read it: those
+/// closures are nonisolated and resolve off SwiftUI's schedule, so they can't
+/// touch a `@MainActor` store. Written only from the main thread
+/// (`SettingsStore` owns it), hence the unsafe opt-out rather than a lock.
+/// `SettingsStore.refreshDynamicColors()` is the other half — flipping this
+/// changes what the providers *would* answer, and something still has to make
+/// AppKit ask them again.
+enum AccessibilityOverride {
+    nonisolated(unsafe) static var increaseContrast = false
+}
+
 // MARK: - Stone
 
 /// The app's neutral. Plain grey read cold and a little clinical beside the
@@ -202,14 +407,57 @@ private func dynamic(light: RGB, dark: RGB, lightHC: RGB, darkHC: RGB) -> Color 
 /// opacity rather than a fixed colour, so it warms whatever sits behind it and
 /// needs no separate light/dark variants.
 enum Stone {
-    private static let base = Color(red: 0.52, green: 0.47, blue: 0.39)
+    /// One wash at two strengths: the everyday alpha, and a firmer one under
+    /// Increase Contrast — most of what that switch *visibly* does lives
+    /// here, because the tinted fills were already solved to 7:1 and barely
+    /// move, where a hairline going from 0.18 to 0.45 is edges appearing on
+    /// every card, chip and button at once.
+    private static func wash(_ alpha: Double, hc: Double) -> Color {
+        Color(nsColor: NSColor(name: nil) { _ in
+            let highContrast = AccessibilityOverride.increaseContrast
+                || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            return NSColor(srgbRed: 0.52, green: 0.47, blue: 0.39,
+                           alpha: highContrast ? hc : alpha)
+        })
+    }
 
     /// Card and row fills.
-    static let surface = base.opacity(0.10)
+    static let surface = wash(0.10, hc: 0.16)
     /// Chips and small capsules — a shade firmer than `surface`.
-    static let chip = base.opacity(0.15)
+    static let chip = wash(0.15, hc: 0.22)
+    /// The buttons' ground — `#F5F4F3` in Light, the maintainer's sampled
+    /// control-background colour, with a matching lifted warm dark. **Solid**,
+    /// unlike `surface`/`chip`: a button should sit the same on every card and
+    /// tint, where the translucent washes take the colour of whatever is
+    /// behind them. Worn by `FlatButtonStyle` and the search field's
+    /// `FlatToolbarCapsule`, which are meant to read as one material.
+    static let control = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.173, green: 0.169, blue: 0.163, alpha: 1)
+            : NSColor(srgbRed: 0.961, green: 0.957, blue: 0.953, alpha: 1)
+    })
     /// Hairline borders.
-    static let line = base.opacity(0.18)
+    static let line = wash(0.18, hc: 0.45)
+
+    /// Metadata type — timestamps, chip names, the due badge's resting state.
+    ///
+    /// Not `.secondary`: `secondaryLabelColor` is an alpha of the label colour
+    /// that lands around 3.9:1 on a white card, under the refresh's 4.5:1
+    /// floor for text below 14px (docs/plans/ decision 5). This is a solid
+    /// grey solved against the card faces instead — 7.4:1 in Light, 6.7:1 in
+    /// Dark — so metadata is quiet by being grey, not by being faint. Under
+    /// Increase Contrast it steps most of the way to the label colour.
+    static let metaText = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let highContrast = AccessibilityOverride.increaseContrast
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        return switch (dark, highContrast) {
+        case (false, false): NSColor(srgbRed: 0.323, green: 0.335, blue: 0.352, alpha: 1)
+        case (false, true): NSColor(srgbRed: 0.13, green: 0.14, blue: 0.15, alpha: 1)
+        case (true, false): NSColor(srgbRed: 0.632, green: 0.647, blue: 0.665, alpha: 1)
+        case (true, true): NSColor(srgbRed: 0.85, green: 0.86, blue: 0.88, alpha: 1)
+        }
+    })
 }
 
 // MARK: - The reading typeface
@@ -355,7 +603,10 @@ enum Metrics {
     /// Gap between a panel header and the first content below it. Shared so the
     /// notes and tasks columns line up exactly.
     static let headerGap: CGFloat = 10
-    static let islandRadius: CGFloat = 16
+    /// 12pt, down from 16: the refresh puts every container in the 10–12pt
+    /// band (docs/plans/ decision 6 — "round means pressable", and a card is
+    /// not pressable-shaped). Task rows were already there at `rowRadius`.
+    static let islandRadius: CGFloat = 12
     static let rowRadius: CGFloat = 10
     static let cardSpacing: CGFloat = 12
     /// How long a card takes to grow into edit mode, or shrink out of it. Shared
@@ -371,23 +622,6 @@ enum Metrics {
     /// chip's 8pt of horizontal padding is right where a pill's 11pt is right,
     /// and this way a chip's height stops depending on which glyph it carries.
     static let chipHeight: CGFloat = 24
-    /// The note card's type glyph: the well it sits in, and the size it is drawn
-    /// at. Both modes take these from here, because the well is only *drawn* while
-    /// editing and the glyph has to be the same size either side of that — a card
-    /// changing the size of its icon as it opens is the same fault as one changing
-    /// the size of its text.
-    ///
-    /// 12pt in a 26pt well, and the pair is what matters: **a frame doesn't clip a
-    /// glyph**, so an SF Symbol wider than its frame simply spills out of the fill
-    /// behind it, which is what `.title3` did — `person.3` measures **33pt** wide at
-    /// 15pt against a 26pt well, and `person.2.wave.2` 27pt. Widths at 12pt are
-    /// 25pt and 21pt, so 12 is the largest size at which the widest *default* type
-    /// symbol still fits. Pinned to that worst case for the reason `chipHeight` is
-    /// pinned to its tallest one: otherwise whether the icon fits depends on which
-    /// symbol the user picked. A custom symbol wider still would need the well
-    /// widened, not the glyph shrunk again — below about 11pt these stop reading.
-    static let noteSymbolWell: CGFloat = 26
-    static let noteSymbolSize: CGFloat = 12
     /// A card's title row, floored at the height of the tallest thing it can carry:
     /// the **Done** capsule, 26pt at `.actionCapsule` / `.controlSize(.small)`,
     /// against a 16pt title line. Measured, not chosen.
@@ -396,9 +630,9 @@ enum Metrics {
     /// it the task row's title row was 16pt collapsed and 26pt open, and since the
     /// row is baseline-aligned the extra 10pt landed 5pt above the title and 5pt
     /// below it — so opening a card slid the title down 5pt and the body down 10pt,
-    /// out from under the cursor that had just clicked it. The note card never had
-    /// the fault and needs no fix: its 26pt symbol well already sets this height in
-    /// both modes, which is the same number arrived at from the other side.
+    /// out from under the cursor that had just clicked it. The note card needs the
+    /// same floor since its type glyph (a 26pt symbol well that used to set this
+    /// height as a side effect) was removed with the type symbols.
     static let cardTitleRowHeight: CGFloat = 26
     /// The narrowest either the notes or the tasks column may be dragged —
     /// generous on purpose, so a stray drag can't leave a 90pt sliver where
@@ -467,52 +701,13 @@ extension View {
     }
 }
 
-// MARK: - Filter pill
-
-/// A capsule filter pill, shared by the notes type filter, the notes type picker
-/// and the tasks state filter, so all three read as one system. Grey always means
-/// "All".
-///
-/// Selection is a **filled** pill: `deep` behind white type, against the tint's
-/// soft wash behind `.primary` when unselected. This used to keep a constant wash
-/// and show selection in the border instead, deliberately, so that picking
-/// something didn't put a louder block of colour on screen. Measurement retired
-/// that: `deep` and `chip` are the same hue, so an outline drawn from one against
-/// the other lands between 1.44:1 and 3.36:1 — under the 3:1 a state indicator
-/// needs, in one appearance or the other, for *every* tint at *any* opacity. No
-/// border taken from the tint family can carry this, so the fill does.
-struct FilterPill: View {
-    let label: String
-    var symbol: String? = nil
-    let tint: Tint
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let symbol, !symbol.isEmpty { Image(systemName: symbol) }
-                Text(label)
-            }
-            .font(.caption.weight(selected ? .semibold : .regular))
-            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .chipHeight()
-            .background(Capsule().fill(selected ? AnyShapeStyle(tint.deep) : AnyShapeStyle(tint.chip)))
-            // The hairline is decoration on an unselected pill; a filled one
-            // needs no outline at all.
-            .overlay {
-                if !selected {
-                    Capsule().strokeBorder(Stone.line, lineWidth: 0.5)
-                }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
-    }
-}
+// `FilterPill` — the tinted capsule the filter rows wore before the refresh —
+// lived here. The rows are one `SegmentedFilter` track each now; a note of the
+// pill's own lesson survives because it still binds: selection drawn as an
+// *outline* in the tint family measured under the 3:1 a state indicator needs
+// (`deep` against `chip`, 1.44–3.36:1), which is why selection anywhere in the
+// tint family is a fill, and why the pickers' accent rings sit on neutral
+// ground instead.
 
 /// A compact row of tappable color swatches (one per `Tint`). Reports the chosen
 /// tint upward via a closure so both the edit rows and the add form can share it.
@@ -569,9 +764,9 @@ struct TintPicker: View {
 /// own code passes `.shadow(…)` any more, and this is where the last of it would
 /// have crept back in.
 ///
-/// So: `Stone.chip` and `Stone.line`, exactly what the filter pills use, and what
-/// `AppDelegate`'s `FlatToolbarCapsule` paints behind the search field — the flat
-/// world's version of "these surfaces are one material". Hover is a `.primary`
+/// So: `Stone.control` and `Stone.line`, exactly what `AppDelegate`'s
+/// `FlatToolbarCapsule` paints behind the search field — the flat world's
+/// version of "these surfaces are one material". Hover is a `.primary`
 /// wash — the state plain glass never gave them, and `.primary` rather than the
 /// accent for the `.glassProminent` reason above. A press deepens that wash instead
 /// of scaling: with no material left to respond, the fill is the only thing that
@@ -610,7 +805,7 @@ struct FlatButtonStyle<S: InsettableShape>: ButtonStyle {
                 // `nil` on both axes for the padded case, where it's a no-op.
                 .frame(width: side, height: side)
                 .background {
-                    shape.fill(Stone.chip)
+                    shape.fill(Stone.control)
                     shape.fill(.primary.opacity(wash))
                 }
                 .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
@@ -644,13 +839,99 @@ struct FlatButtonStyle<S: InsettableShape>: ButtonStyle {
 }
 
 extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
-    /// A column's primary action.
+    /// A flat neutral capsule — secondary actions ("Done" on an open card).
     static var actionCapsule: Self { .init(shape: Capsule(), sizing: .padded) }
+}
+
+/// The accent-filled capsule each column's primary action wears ("New Note",
+/// "New Task") — white label on the user's highlight colour.
+///
+/// This *reverses* the earlier retreat from `.glassProminent`, knowingly. The
+/// prominence went because system blue was drawn from neither `Tint` nor a
+/// `Backdrop` and fought whatever gradient sat behind it; the refresh
+/// (docs/plans/ decision 4) retires the gradients and makes the accent a real
+/// preference, so the colour now belongs to the design — and one filled pill
+/// per column is exactly the ration `.glassProminent` was held to. Flat rather
+/// than glass for the standing reason: glass casts a drop shadow and the window
+/// doesn't. Hover and press deepen the fill with a black wash, since white
+/// atop it rules out the `.primary` wash `FlatButtonStyle` uses.
+struct AccentButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Surface(configuration: configuration)
+    }
+
+    private struct Surface: View {
+        let configuration: Configuration
+
+        @Environment(\.controlSize) private var controlSize
+        @State private var hovering = false
+
+        var body: some View {
+            let large = controlSize >= .large
+            // Read here, in a view body, so the `@Observable` access
+            // registers and every button follows a Settings change.
+            let accent = SettingsStore.shared.accent
+            configuration.label
+                .foregroundStyle(accent.foreground)
+                .padding(.horizontal, large ? 14 : 11)
+                .padding(.vertical, large ? 8 : 6)
+                .background {
+                    Capsule().fill(accent.color)
+                    Capsule().fill(.black.opacity(wash))
+                }
+                // The hairline every flat control wears (`FlatButtonStyle`,
+                // the chips, the search capsule). On the vivid accents it
+                // disappears into the fill's own edge; it exists for the light
+                // Gray accent, where a borderless pill read as a different
+                // material from the bordered controls beside it.
+                .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
+                .contentShape(Capsule())
+                .animation(.easeInOut(duration: 0.12), value: hovering)
+                .onHover { hovering = $0 }
+        }
+
+        private var wash: Double {
+            if configuration.isPressed { return 0.22 }
+            return hovering ? 0.12 : 0
+        }
+    }
+}
+
+extension ButtonStyle where Self == AccentButtonStyle {
+    /// A column's primary action.
+    static var accentCapsule: Self { .init() }
 }
 
 extension ButtonStyle where Self == FlatButtonStyle<Circle> {
     /// A lone toolbar glyph, at the diameter AppKit rounds one to.
     static var toolbarGlyph: Self { .init(shape: Circle(), sizing: .square(28)) }
+}
+
+// MARK: - Popover surface
+
+extension View {
+    /// Goes on a popover's *content*: swaps the system popover material for an
+    /// opaque window-coloured background while transparency is reduced —
+    /// system switch or Settings → Accessibility's. The material's faint
+    /// see-through is the system's own doing and only the system switch would
+    /// otherwise touch it; this is the in-app switch keeping the same promise
+    /// on the surfaces Insert presents.
+    func opaquePopoverWhenTransparencyReduced() -> some View {
+        modifier(PopoverSurface())
+    }
+}
+
+private struct PopoverSurface: ViewModifier {
+    @Environment(SettingsStore.self) private var settings
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+
+    func body(content: Content) -> some View {
+        if systemReduceTransparency || settings.appReduceTransparency {
+            content.presentationBackground(Color(nsColor: .windowBackgroundColor))
+        } else {
+            content
+        }
+    }
 }
 
 // MARK: - Card surface
@@ -661,48 +942,30 @@ extension View {
     /// columns' scroll views clipped at their edges and which pooled into a grubby
     /// band wherever cards stacked.
     ///
-    /// A tint gives the card that colour's wash over an opaque base. **No tint is
-    /// plain paper** — `textBackgroundColor`, white in Light and near-black in
-    /// Dark. That's the untinted task row, and it's neither of the two things it
-    /// has been before: not the warm `Stone` neutral, which made the tasks column
-    /// a stack of faintly grey slabs, and not transparent, which let the backdrop
-    /// gradient run under the text. Opaque and *neutral* — the card is white, the
-    /// colour is the backdrop's job.
-    func island(radius: CGFloat = Metrics.islandRadius, tint: Tint? = nil) -> some View {
-        modifier(IslandSurface(radius: radius, tint: tint))
+    /// Every island is **plain paper** — `textBackgroundColor`, white in Light
+    /// and near-black in Dark. Opaque and *neutral*, deliberately: not the warm
+    /// `Stone` neutral, which made the tasks column a stack of faintly grey
+    /// slabs, and not transparent, which let the backdrop run under the text.
+    /// The card is white; colour is the backdrop's job. (A `tint:` parameter
+    /// used to layer a translucent wash over an opaque base here — first for
+    /// the note types, then only for the "Color tasks by due date" row wash —
+    /// and left when that feature did: with due badges gone grey, a setting
+    /// named after their colours no longer described anything.)
+    func island(radius: CGFloat = Metrics.islandRadius) -> some View {
+        modifier(IslandSurface(radius: radius))
     }
 }
 
 private struct IslandSurface: ViewModifier {
     let radius: CGFloat
-    let tint: Tint?
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
-            // A tinted card gets two stacked fills. `tint.soft` is a
-            // *translucent* wash — it's meant to tint whatever is behind it — so
-            // over a `Backdrop` gradient it stopped being a card and became a
-            // slightly tinted window onto the wash, with the gradient running
-            // through the text. The opaque base under it stops that.
-            // `windowBackgroundColor` specifically, because that is exactly what
-            // sits behind an island when no backdrop is set, so a tinted card is
-            // pixel-identical there and needs no branching on the setting.
-            //
-            // The base is listed first so the wash paints *over* it. Chaining two
-            // `.background` modifiers instead would put the wash further back
-            // than the base and hide it.
-            .background {
-                if let tint {
-                    shape.fill(Color(nsColor: .windowBackgroundColor))
-                    shape.fill(tint.soft)
-                } else {
-                    // Paper, not the window's grey: `textBackgroundColor` is the
-                    // white a document surface uses, and it flips to near-black in
-                    // Dark on its own.
-                    shape.fill(Color(nsColor: .textBackgroundColor))
-                }
-            }
+            // Paper, not the window's grey: `textBackgroundColor` is the white
+            // a document surface uses, and it flips to near-black in Dark on
+            // its own.
+            .background(shape.fill(Color(nsColor: .textBackgroundColor)))
             // A hairline keeps the card's edge readable now that there's no
             // shadow separating it from the background.
             .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }

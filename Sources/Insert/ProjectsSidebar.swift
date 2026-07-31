@@ -89,12 +89,13 @@ struct ProjectsSidebar: View {
         // traffic lights rather than in a band below them. `header` insets
         // itself past the lights.
         .ignoresSafeArea(.container, edges: .top)
-        // Liquid Glass over the window's backdrop, so the column refracts the
-        // gradient instead of merely dimming it — the same treatment the toolbar's
-        // search field wears, which is what the two large glass surfaces in this
-        // window need to have in common. With no backdrop there's nothing of ours
-        // to refract, so this drops out entirely and AppKit's own sidebar material
-        // (and its desktop translucency) is left alone.
+        // The tint's stronger cut, painted over the window's base wash — the
+        // sidebar is where a flat tint actually reads (docs/plans/ decision 1).
+        // A fill, not the Liquid Glass the gradients wore: glass earned its
+        // place by refracting a gradient's travel, and a flat colour has none
+        // to refract. With "Plain" there's nothing of ours to paint, so this
+        // drops out entirely and AppKit's own sidebar material (and its desktop
+        // translucency) is left alone.
         //
         // The `if` lives *inside* the background builder on purpose. Branching
         // around the column itself would give the `List` a new identity every time
@@ -102,17 +103,16 @@ struct ProjectsSidebar: View {
         // — the same trap `Backdrop.windowStyle` documents. Here only the
         // background layer is rebuilt.
         .background {
-            if settings.backdrop.frostsSidebar {
+            if let sidebarTint = settings.backdrop.sidebarColor {
                 // `.ignoresSafeArea()` is the whole reason this reads as one
                 // column. The sidebar's content already ignores the top safe area
                 // so the header can sit level with the traffic lights, but the
                 // *background* layer doesn't inherit that: left alone it starts
                 // below the toolbar's inset, and the titlebar band above it ends
-                // up with one fewer glass layer than everything below. The join
-                // showed as a hard horizontal seam right under the traffic lights
-                // — which reads as two stacked panels, not as a sidebar.
-                Color.clear
-                    .glassEffect(.regular, in: Rectangle())
+                // up one layer short. The join showed as a hard horizontal seam
+                // right under the traffic lights — which reads as two stacked
+                // panels, not as a sidebar.
+                sidebarTint
                     .ignoresSafeArea()
             }
         }
@@ -197,8 +197,16 @@ struct ProjectsSidebar: View {
         .padding(.trailing, Metrics.panelPadding)
     }
 
-    /// A row as a button, wearing the selection pill in its own colour. A button
-    /// rather than a tap gesture: gestures on `List` rows swallow clicks.
+    /// A row as a button, wearing the selection pill. A button rather than a
+    /// tap gesture: gestures on `List` rows swallow clicks.
+    ///
+    /// The pill is a **capsule washed very faintly in the row's own colour** —
+    /// the project's accent at 0.12, well under the 0.20 a chip wears, so the
+    /// hue registers without the fill becoming a colour block (the refresh
+    /// keeps blocks of project colour off the surfaces; this is the one place
+    /// a hint of it was asked back). Text stays `.primary` in both states.
+    /// "Everything"'s grey runs a step stronger, because the warm grey at the
+    /// projects' opacity all but vanished against the sidebar.
     private func selectableRow(
         tint: Tint,
         selected: Bool,
@@ -207,20 +215,15 @@ struct ProjectsSidebar: View {
     ) -> some View {
         Button(action: action) {
             content()
-                // The system used to whiten a selected row's text for us; with our
-                // own pill we set it, and `.secondary` in the subtitle derives from
-                // it so both lines stay legible on the fill.
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background {
                     if selected {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(tint.deep)
+                        Capsule().fill(tint.accent.opacity(tint == .gray ? 0.20 : 0.12))
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         // The pill is a colour-only cue, so state it outright for VoiceOver.
@@ -310,10 +313,9 @@ struct ProjectsSidebar: View {
                 leading: {
                     Image(systemName: SymbolCatalog.everything)
                         .font(.body)
-                        // White on the highlight, its own colour off it.
-                        .foregroundStyle(isSelected(nil)
-                            ? AnyShapeStyle(.white)
-                            : AnyShapeStyle(Tint.gray.ink))
+                        // Its own colour in both states — the neutral pill
+                        // doesn't need the glyph whitened.
+                        .foregroundStyle(Tint.gray.ink)
                         .frame(width: 22)
                         // Decorative: the row's title says the same thing.
                         .accessibilityHidden(true)
@@ -333,9 +335,7 @@ struct ProjectsSidebar: View {
                 leading: {
                     Image(systemName: project.symbol)
                         .font(.body)
-                        .foregroundStyle(isSelected(project.id)
-                            ? AnyShapeStyle(.white)
-                            : AnyShapeStyle(project.tint.ink))
+                        .foregroundStyle(project.tint.ink)
                         .frame(width: 22)
                         .accessibilityHidden(true)
                 },
@@ -801,6 +801,7 @@ private struct ProjectEditorPopover: View {
         }
         .padding(16)
         .frame(width: 320)
+        .opaquePopoverWhenTransparencyReduced()
         .onAppear { nameFocused = true }
     }
 

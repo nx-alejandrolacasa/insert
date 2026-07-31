@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The flat capsule that stands in for the search field's glass platter — the same
-/// `Stone.chip` fill and `Stone.line` hairline as `FlatButtonStyle`, so the
-/// toolbar's field and the columns' "New Note" / "New Task" buttons read as one
-/// material, which is what they were meant to do as glass.
+/// `Stone.control` fill and `Stone.line` hairline as `FlatButtonStyle`, so the
+/// toolbar's field and the window's flat buttons read as one material, which is
+/// what they were meant to do as glass.
 ///
 /// Drawn in `draw(_:)` rather than set as a `layer.backgroundColor` so the colours
 /// resolve against the *current* appearance every time: a `CGColor` is a resolved
@@ -14,7 +14,7 @@ private final class FlatToolbarCapsule: NSView {
         let radius = bounds.height / 2
         let capsule = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25),
                                   xRadius: radius, yRadius: radius)
-        NSColor(Stone.chip).setFill()
+        NSColor(Stone.control).setFill()
         capsule.fill()
         NSColor(Stone.line).setStroke()
         capsule.lineWidth = 0.5
@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Same reason: set the appearance before the first frame, or a Light /
         // Dark override lands as a visible flash on every launch.
         SettingsStore.shared.applyAppearance()
+        // Insert is a one-window app: nothing here opens a second main window,
+        // so AppKit's automatic window tabbing only contributed "Show Tab Bar"
+        // / "Show All Tabs" to the View menu — commands with nothing to do.
+        // Turning tabbing off is also what removes them from the menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

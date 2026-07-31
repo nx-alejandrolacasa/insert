@@ -39,6 +39,13 @@ struct ProjectHashField: View {
     @FocusState.Binding var focused: Bool
 
     @Environment(Library.self) private var library
+    @Environment(SettingsStore.self) private var settings
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    /// The system switch OR-ed with Settings → Accessibility's in-app one.
+    private var transparencyReduced: Bool {
+        reduceTransparency || settings.appReduceTransparency
+    }
 
     /// Highlighted row in the dropdown (driven by ↑/↓).
     @State private var highlightedIndex = 0
@@ -200,7 +207,11 @@ struct ProjectHashField: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(index == highlightedIndex ? Color.accentColor.opacity(0.22) : .clear)
+                            // The Accent setting, not `Color.accentColor`,
+                            // which ignores `.tint()` — see the task checkbox.
+                            .fill(index == highlightedIndex
+                                ? SettingsStore.shared.accent.color.opacity(0.22)
+                                : Color.clear)
                     )
                     .contentShape(Rectangle())
                 }
@@ -210,7 +221,8 @@ struct ProjectHashField: View {
         .padding(4)
         .frame(width: 240, alignment: .leading)
         // Glass here, unlike the cards: this floats over the list, so it needs a
-        // material to stay legible.
+        // material to stay legible — or, with Reduce Transparency on (system or
+        // Settings → Accessibility), an opaque panel doing the same job.
         //
         // No drop shadow, though it's the one thing in the window that would have
         // the best claim to one. The app is deliberately shadowless — the look it
@@ -219,7 +231,14 @@ struct ProjectHashField: View {
         // thing casting light in an otherwise flat window. Glass and the hairline
         // do the separating instead: the material already refracts the rows behind
         // it, and the border closes the edge the shadow used to.
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+            if transparencyReduced {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+            } else {
+                Color.clear.glassEffect(.regular, in: shape)
+            }
+        }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Stone.line, lineWidth: 0.5)
@@ -251,10 +270,13 @@ private struct FieldHeightKey: PreferenceKey {
 
 // MARK: - Chips
 
-/// A removable project chip, wearing its project's colour so an assignment is
-/// recognisable without reading it. Hovering fades the trailing end of the
-/// name and shows an ✕ over it — the chip keeps its width, the button lands on
-/// quiet ground, and one click removes the assignment.
+/// A removable project chip: the project's colour **dot** and its name on
+/// neutral ground — a dot rather than the symbol-on-tinted-capsule it used to
+/// be, because on a card the project's colour only ever appears as a dot
+/// (docs/plans/ decisions 3 and 4), and the removable chip has to read as the
+/// same object as the read-only `ProjectDotChip` beside it. Hovering fades the
+/// trailing end of the name and shows an ✕ over it — the chip keeps its width,
+/// the button lands on quiet ground, and one click removes the assignment.
 struct ProjectChip: View {
     let project: Project
     let onRemove: () -> Void
@@ -262,12 +284,14 @@ struct ProjectChip: View {
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: project.symbol)
-                .foregroundStyle(project.tint.ink)
+        HStack(spacing: 5) {
+            Circle()
+                .fill(project.tint.accent)
+                .frame(width: 6, height: 6)
             Text(project.name)
         }
             .font(.caption)
+            .foregroundStyle(Stone.metaText)
             .lineLimit(1)
             // A mask, not a shorter label: the chip must not change size under
             // the pointer. Same stop count both ways so the fade animates.
@@ -281,17 +305,17 @@ struct ProjectChip: View {
                     startPoint: .leading, endPoint: .trailing
                 )
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 9)
             .padding(.vertical, 3)
             .chipHeight()
-            .background(Capsule().fill(project.tint.chip))
-            .overlay(Capsule().strokeBorder(project.tint.accent.opacity(0.35), lineWidth: 0.5))
+            .background(Capsule().fill(Stone.chip))
+            .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
             .overlay(alignment: .trailing) {
                 if hovered {
                     Button(action: onRemove) {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(project.tint.ink)
+                            .foregroundStyle(Stone.metaText)
                             // The glyph alone is a tiny target; grow the hit
                             // area, not the glyph.
                             .padding(4)

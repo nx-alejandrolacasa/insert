@@ -39,11 +39,18 @@ final class SettingsStore {
         }
     }
 
-    /// The gradient wash behind the main window — decoration only, and off by
+    /// The flat tint behind the main window — decoration only, and off by
     /// default. Adapts to `appearance` on its own (see `Backdrop`), so this
     /// needs no re-apply step the way the theme does.
     var backdrop: Backdrop {
         didSet { defaults.set(backdrop.rawValue, forKey: Keys.backdrop) }
+    }
+
+    /// The highlight colour — primary buttons, selected filter segments,
+    /// selection rings. Blue by default, matching what the accent was before
+    /// it became a choice.
+    var accent: AccentColor {
+        didSet { defaults.set(accent.rawValue, forKey: Keys.accent) }
     }
 
     /// The face note and task cards are written in. Read by `Card` during every
@@ -76,11 +83,34 @@ final class SettingsStore {
         didSet { defaults.set(reminderMinutes, forKey: Keys.reminderMinutes) }
     }
 
-    /// Wash each task row in its due badge's colour — orange overdue, green
-    /// today, purple upcoming. Undated and done rows keep the neutral stone,
-    /// same as when this is off.
-    var dueTintedTasks: Bool {
-        didSet { defaults.set(dueTintedTasks, forKey: Keys.dueTintedTasks) }
+    // "Color tasks by due date" (`dueTintedTasks`) lived here until the July
+    // 2026 refresh: it washed each row in its due badge's orange/green/purple,
+    // and once the badges went grey a setting named after their colours no
+    // longer described anything. Removed at the maintainer's request; the old
+    // key is simply no longer read.
+
+    /// The Accessibility menu's three switches, each **in-app** and OR-ed with
+    /// its system counterpart — turning one on here quiets Insert without
+    /// asking the whole Mac to change, and the system setting still wins when
+    /// it's on. Read wherever the system flag already was.
+    var appReduceMotion: Bool {
+        didSet { defaults.set(appReduceMotion, forKey: Keys.appReduceMotion) }
+    }
+
+    var appReduceTransparency: Bool {
+        didSet { defaults.set(appReduceTransparency, forKey: Keys.appReduceTransparency) }
+    }
+
+    /// The one of the three that can't ride the SwiftUI environment: the
+    /// high-contrast palette variants are chosen inside dynamic `NSColor`
+    /// providers, so this is mirrored into `AccessibilityOverride` for them to
+    /// read, and the caches those providers fill are then invalidated by hand.
+    var appIncreaseContrast: Bool {
+        didSet {
+            defaults.set(appIncreaseContrast, forKey: Keys.appIncreaseContrast)
+            AccessibilityOverride.increaseContrast = appIncreaseContrast
+            refreshDynamicColors()
+        }
     }
 
     /// How much of a note shows before it's folded — a preview of so many
@@ -112,6 +142,7 @@ final class SettingsStore {
     private enum Keys {
         static let appearance = "appearance"
         static let backdrop = "backdrop"
+        static let accent = "accent"
         static let typeface = "typeface"
         static let noteTypes = "noteTypes"
         static let noteSort = "noteSort"
@@ -120,7 +151,9 @@ final class SettingsStore {
         static let showMenuBar = "showMenuBar"
         static let dailyReminder = "dailyReminder"
         static let reminderMinutes = "reminderMinutes"
-        static let dueTintedTasks = "dueTintedTasks"
+        static let appReduceMotion = "appReduceMotion"
+        static let appReduceTransparency = "appReduceTransparency"
+        static let appIncreaseContrast = "appIncreaseContrast"
         static let notePreviewLines = "notePreviewLines"
         static let taskPreviewLines = "taskPreviewLines"
         static let noteCardDates = "noteCardDates"
@@ -145,7 +178,24 @@ final class SettingsStore {
         appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
         // Plain window background unless asked otherwise, so an install that
         // never opens Settings looks exactly as it did before backdrops existed.
-        backdrop = Backdrop(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? .plain
+        // A gradient saved before the flat tints replaced them maps to its
+        // nearest tint by family, and the mapping is persisted at once —
+        // `didSet` doesn't fire during init — so it runs exactly once.
+        let savedBackdrop = defaults.string(forKey: Keys.backdrop) ?? ""
+        if let current = Backdrop(rawValue: savedBackdrop) {
+            backdrop = current
+        } else if let migrated = Backdrop.migratedFromGradient(savedBackdrop) {
+            backdrop = migrated
+            defaults.set(migrated.rawValue, forKey: Keys.backdrop)
+        } else {
+            backdrop = .plain
+        }
+        // Blue, which is the only accent the app had before this was a choice.
+        // The two retired greys (graphite, lightGray) collapse onto Gray.
+        let savedAccent = defaults.string(forKey: Keys.accent) ?? ""
+        accent = AccentColor(rawValue: savedAccent)
+            ?? AccentColor.migratedFromRetired(savedAccent)
+            ?? .blue
         // Rounded, which is the only face the cards had before this was a choice.
         typeface = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") ?? .rounded
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
@@ -157,7 +207,13 @@ final class SettingsStore {
         // until the user picks something.)
         reminderMinutes = ReminderSchedule.nearestSlot(
             to: defaults.object(forKey: Keys.reminderMinutes) as? Int ?? 9 * 60)
-        dueTintedTasks = defaults.object(forKey: Keys.dueTintedTasks) as? Bool ?? false
+        appReduceMotion = defaults.bool(forKey: Keys.appReduceMotion)
+        appReduceTransparency = defaults.bool(forKey: Keys.appReduceTransparency)
+        let increaseContrast = defaults.bool(forKey: Keys.appIncreaseContrast)
+        appIncreaseContrast = increaseContrast
+        // `didSet` doesn't fire during init, so mirror the loaded value by
+        // hand; the first render then resolves fresh, no cache to invalidate.
+        AccessibilityOverride.increaseContrast = increaseContrast
         // Seeded from the "Collapse long notes" toggle this replaced, which was
         // ten lines or nothing — an install that had it on keeps its fold.
         let legacyCollapse = defaults.object(forKey: Keys.collapseLongNotes) as? Bool ?? false
@@ -205,6 +261,20 @@ final class SettingsStore {
     /// since `didSet` doesn't fire for the value loaded in `init`.
     func applyAppearance() {
         NSApp.appearance = appearance.nsAppearance
+    }
+
+    /// Makes every dynamic `NSColor` re-ask its provider. They cache per
+    /// appearance, and nothing invalidates that when only our
+    /// `AccessibilityOverride` flag flips — the *system* Increase Contrast
+    /// swaps the whole effective appearance, which is what usually does it.
+    /// Re-applying the appearance the app already wears is coalesced away, so
+    /// flip to the other one and straight back: both writes land in one
+    /// main-actor turn, nothing draws in between, and every provider runs
+    /// again with the flag's new value.
+    private func refreshDynamicColors() {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        NSApp.appearance = NSAppearance(named: dark ? .aqua : .darkAqua)
+        applyAppearance()
     }
 
     // MARK: - Note types

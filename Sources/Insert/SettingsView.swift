@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The panes of the Settings window, in sidebar order.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, notes, tasks, storage
+    case general, notes, tasks, accessibility, storage
 
     var id: Self { self }
 
@@ -12,6 +12,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "General"
         case .notes: "Notes"
         case .tasks: "Tasks"
+        case .accessibility: "Accessibility"
         case .storage: "Storage"
         }
     }
@@ -21,6 +22,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "gearshape"
         case .notes: "note.text"
         case .tasks: "checklist"
+        case .accessibility: "accessibility"
         case .storage: "externaldrive"
         }
     }
@@ -30,6 +32,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: .gray
         case .notes: .purple
         case .tasks: .blue
+        case .accessibility: .teal
         case .storage: .orange
         }
     }
@@ -65,6 +68,7 @@ struct SettingsDetail: View {
             case .general: GeneralSettingsTab()
             case .notes: NotesSettingsTab()
             case .tasks: TasksSettingsTab()
+            case .accessibility: AccessibilitySettingsTab()
             case .storage: StorageSettingsTab()
             }
         }
@@ -168,11 +172,34 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
-                BackdropPicker(selection: settings.backdrop) { settings.backdrop = $0 }
+                // Not `LabeledContent`: with a two-row grid for content it
+                // parked the label oddly against the row's corner. Top-aligned
+                // by hand, with the label padded down to the same inset the
+                // Accent row's centred label lands at (its 30pt swatch line
+                // centres a ~16pt label ≈ 7pt in), so the two rows read as one
+                // margin.
+                HStack(alignment: .top) {
+                    Text("Tint")
+                        .padding(.top, 7)
+                    Spacer()
+                    BackdropPicker(selection: settings.backdrop) { settings.backdrop = $0 }
+                }
             } header: {
                 Text("Background")
             } footer: {
-                Text("A gradient behind the main window. Each one has a light and a dark version, so it follows the theme above — the swatches show whichever is in use right now.")
+                Text("A flat, low-chroma tint on the window surface — no gradient. Each one has a Light and Dark value, so it follows the theme above.")
+            }
+
+            Section {
+                // A plain HStack centres the label on the swatches, which
+                // `LabeledContent` didn't.
+                HStack {
+                    Text("Highlight colour")
+                    Spacer()
+                    AccentPicker(selection: settings.accent) { settings.accent = $0 }
+                }
+            } header: {
+                Text("Accent")
             }
 
             Section {
@@ -242,12 +269,6 @@ private struct TasksSettingsTab: View {
                 }
             } footer: {
                 Text("One notification each morning, counting the tasks due that day — “You have 3 tasks for today”. The times on offer stop at midday because a count of the day's work is only worth having before the day starts. Nothing is sent on a day with nothing due, and it never names a task. Insert has to be running to send it.")
-            }
-
-            Section {
-                Toggle("Color tasks by due date", isOn: $settings.dueTintedTasks)
-            } footer: {
-                Text("Task backgrounds take their due badge's color — orange when overdue, green due today, purple upcoming. Undated tasks keep the neutral background.")
             }
 
             Section {
@@ -367,22 +388,20 @@ private struct NoteTypeRow: View {
     let type: NoteType
 
     @State private var name: String
-    @State private var symbol: String
 
     init(type: NoteType) {
         self.type = type
         _name = State(initialValue: type.name)
-        _symbol = State(initialValue: type.symbol)
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            // The symbol sits in a round well tinted with the type's colour, so
-            // the row reads as "this swatch + this name".
-            SymbolWell(symbol: symbol, tint: type.tint) { picked in
-                symbol = picked
-                commit()
-            }
+            // The type's colour dot, the same mark it wears on the cards' meta
+            // rows and in the filter track. (A symbol well sat here until the
+            // type symbols were removed from notes wholesale.)
+            Circle()
+                .fill(type.tint.accent)
+                .frame(width: 10, height: 10)
 
             // A fixed width keeps every name field the same size down the list.
             TextField("Name", text: $name)
@@ -431,7 +450,6 @@ private struct NoteTypeRow: View {
     /// custom types; the locked type's name is enforced by the store anyway.
     private func commit() {
         var updated = type
-        updated.symbol = symbol
         if !type.isLocked {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -442,12 +460,11 @@ private struct NoteTypeRow: View {
 }
 
 /// The inline form for creating a new custom type. Kept deliberately minimal:
-/// name, symbol, tint, and an "Add" button that no-ops on an empty name.
+/// name, tint, and an "Add" button that no-ops on an empty name.
 private struct AddNoteTypeForm: View {
     private let settings = SettingsStore.shared
 
     @State private var name = ""
-    @State private var symbol = "tag"
     @State private var tint: Tint = .blue
 
     private var trimmedName: String {
@@ -458,7 +475,9 @@ private struct AddNoteTypeForm: View {
         // Same column rhythm as the rows above, so the add form lines up with
         // the list it appends to.
         HStack(spacing: 12) {
-            SymbolWell(symbol: symbol, tint: tint) { symbol = $0 }
+            Circle()
+                .fill(tint.accent)
+                .frame(width: 10, height: 10)
 
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
@@ -481,47 +500,57 @@ private struct AddNoteTypeForm: View {
 
     private func add() {
         guard !trimmedName.isEmpty else { return }
-        settings.addNoteType(name: trimmedName, symbol: symbol, tint: tint)
+        // The default symbol, unpicked: nothing shows type symbols any more,
+        // but the frontmatter field survives, so new types still get a sane
+        // one for anything reading the files elsewhere.
+        settings.addNoteType(name: trimmedName, symbol: SymbolCatalog.defaultNote, tint: tint)
         // Reset for the next entry.
         name = ""
-        symbol = "tag"
         tint = .blue
     }
 }
 
-/// The type's symbol as a round, tinted well: a circular swatch that opens the
-/// searchable symbol picker, so each row leads with a consistent colour dot
-/// rather than a boxy field.
-private struct SymbolWell: View {
-    let symbol: String
-    let tint: Tint
-    let onPick: (String) -> Void
+// `SymbolWell` — the round tinted symbol-picker button each type row led with —
+// lived here until the type symbols were removed from notes wholesale (main
+// view, edit mode and this pane, July 2026, maintainer's request). Projects
+// keep their symbols and their own `SymbolPicker` flow; only the note types
+// lost theirs.
 
-    @State private var showingPicker = false
+// MARK: - Accessibility
 
-    private static let size: CGFloat = 32
+/// In-app versions of the three system Accessibility switches the interface
+/// honours. Each is OR-ed with its system counterpart wherever that one was
+/// already read — turning one on here quiets Insert without asking the whole
+/// Mac to change, and a system setting that's on always applies regardless.
+private struct AccessibilitySettingsTab: View {
+    @Bindable var settings = SettingsStore.shared
 
     var body: some View {
-        Button {
-            showingPicker = true
-        } label: {
-            Image(systemName: symbol)
-                .font(.title3)
-                .foregroundStyle(tint.ink)
-                .frame(width: Self.size, height: Self.size)
-                .background(Circle().fill(tint.chip))
-                .overlay(Circle().strokeBorder(tint.accent.opacity(0.45), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .help("Set this type's symbol")
-        .accessibilityLabel("Set this type's symbol")
-        .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
-            SymbolPicker(selection: symbol, tint: tint) { picked in
-                onPick(picked)
-                showingPicker = false
+        Form {
+            Section {
+                Toggle("Reduce motion", isOn: $settings.appReduceMotion)
+            } footer: {
+                Text("Cards, the sidebar and the filter selection change in one step instead of travelling.")
             }
-            .frame(width: 320)
+
+            Section {
+                Toggle("Reduce transparency", isOn: $settings.appReduceTransparency)
+            } footer: {
+                Text("Translucent surfaces become opaque: the filter rows' glass selection pill, the # project dropdown, and popovers like the due-date calendar.")
+            }
+
+            Section {
+                Toggle("Increase contrast", isOn: $settings.appIncreaseContrast)
+            } footer: {
+                Text("Colours deepen, metadata darkens, and every hairline border firms up, so text and controls stand further off their backgrounds.")
+            }
+
+            Section {
+            } footer: {
+                Text("Each switch works alongside its system-wide setting: turning one on here changes Insert alone, and a system setting that is on always applies.")
+            }
         }
+        .formStyle(.grouped)
     }
 }
 

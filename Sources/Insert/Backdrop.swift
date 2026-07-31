@@ -3,266 +3,167 @@ import SwiftUI
 
 // MARK: - Backdrop
 
-/// The optional gradient wash behind the main window — the app's one piece of
-/// pure decoration, and the only setting that exists purely to make Insert feel
-/// like *yours*.
+/// The optional flat tint behind the main window — the app's one piece of pure
+/// decoration, and the only setting that exists purely to make Insert feel like
+/// *yours*.
 ///
-/// Five gradients, plus "None" for the plain window background, which stays the
-/// default so an install that never opens Settings looks exactly as it always
-/// has. `dawn` and `dusk` are drawn from the icon's warm family (see
-/// `tools/IconGenerator.swift`) and `grove` is their cool counterpart, so the
-/// set isn't only variations on a sunset; `cloud` and `stone` are borrowed from a
-/// CSS gradient gallery, hex values intact, with only their Dark halves inferred
-/// here. The row runs quietest-first: the two near-white neutrals, the warm pair,
-/// then `grove`, the only cool one left.
+/// Seven tints plus "Plain" for the untinted window background, which stays
+/// the default so an install that never opens Settings looks exactly as it
+/// always has. These replaced five *gradients* (Cloud, Stone, Dawn, Dusk, Grove) in the
+/// July 2026 visual refresh (`docs/plans/`), for a measured reason: a gradient
+/// was legible only in the outer margins and the sidebar, and each one needed
+/// its Light and Dark ends solved for contrast separately per region. A flat
+/// tint means text contrast is identical everywhere in the window, so it is
+/// verified once per theme. A saved gradient is migrated to its nearest tint by
+/// family (see `migratedFromGradient`), so a chosen backdrop stays a chosen
+/// backdrop.
 ///
-/// Seven candidates were cut on sight, and they're the brief for a sixth — a
-/// Honey and a Dune too close to the pale warm end of Dawn, an Orchid that ended
-/// on the very lilac Dawn begins with, a Neon simply too loud for a surface you
-/// look at all day, a Rare Wind, a linear near-white-into-sand that gave its name
-/// to `stone`, and a Soft grass too bright at its deep end. **A new gradient
-/// earns its place by not being reachable from an existing one** — and by being
-/// quiet enough to sit behind text all day. Sharing a hue family is fine; sharing
-/// a *stop* is what makes two entries feel like one mirrored, and the gradient
-/// that wins the swatch row is usually the one you turn off within the hour.
-/// Five of the seven cuts were for one of those two reasons.
+/// **Every tint is one lightness and one chroma; hue is the only variable.**
+/// Light values sit at oklch L 97.5% / C 0.014–0.016 (the refresh's spec), so
+/// switching tint never changes contrast. The dark values are derived, not yet
+/// designed by hand: the same rule at a fixed dark lightness (L 23.5% for the
+/// window, 26.5% for the sidebar), chosen to sit within a couple of points of
+/// `windowBackgroundColor`'s own dark value so a tinted dark window reads as
+/// the system's dark window, warmed — not as a new colour. Keep that constraint
+/// if a tint is ever added: same L/C as the six here, new hue only.
 ///
-/// **Each gradient is one gradient, not two.** A backdrop names a pair of hues;
-/// what changes between Light and Dark is the *value* those hues are rendered
-/// at, never the hues themselves — Dawn is lilac-into-apricot in both, pale in
-/// Light and deep in Dark. That's why the stops are declared as light/dark pairs
-/// and resolved through a dynamic `NSColor`, exactly as `Tint` does: the whole
-/// palette then follows Settings → General → Theme with nothing to re-apply, and
-/// no view has to read `colorScheme` to draw a swatch.
-///
-/// Both halves of every pair are solved for legibility against the text that
-/// sits on them. The pale stops land between 14:1 and 21:1 for black, the deep
-/// stops between 13:1 and 18:1 for white — comfortably past the 7:1 that AAA
-/// asks and the 7:1 the `Tint` ramps reserve for Increase Contrast, which is why
-/// there is no separate high-contrast variant here. Content still sits on
-/// `.island()` surfaces on top of this, so the backdrop is never the only thing
-/// carrying a glyph; keep it that way and keep any new pair inside those bands.
+/// A tint paints **two strengths**: the window's base surface at ~55% of the
+/// tint's chroma (near-white, so cards keep their edge) and the sidebar at
+/// ~90% (where the tint actually reads). The Settings swatch runs to ~125%,
+/// the tint's *identity* rather than either surface — a 52pt swatch of the
+/// base colour previews nothing. Those fractions started at 30/62/100 and were
+/// raised by request ("the tints are almost invisible"); if they move again,
+/// regenerate the whole table from the oklch spec rather than nudging one
+/// entry, or the set stops being one lightness and chroma.
 enum Backdrop: String, CaseIterable, Identifiable {
     /// The plain window background. Spelled `plain` rather than `none` so
     /// `Backdrop?` can't quietly mean two things at a call site.
     case plain
-    /// Near-white into pale cool grey (`#fdfbfb` → `#ebedee`) — overcast light.
-    /// The only achromatic member, and by a distance the quietest: it reads as
-    /// paper rather than as a colour, which is the point. Note the two ends lean
-    /// opposite ways — the light one is faintly *warm* (red highest), the pale
-    /// one faintly *cool* (blue highest) — and that half-percent disagreement is
-    /// the whole gradient. Flatten it to one neutral and there's nothing left.
-    case cloud
-    /// Warm off-white with a soft bloom out of the centre — the one **radial**
-    /// backdrop, and the reason `Ramp` has a shape at all. `cloud`'s warm twin:
-    /// the same near-white idea, one cool and flat, this one warm and lit.
-    ///
-    /// The source is two stacked CSS radials blended with `screen`: a near-flat
-    /// `#EADFDF → #ECE2DF` base, and over it an ellipse running white at 50%
-    /// alpha to black at 50% alpha. That blend is resolved here rather than
-    /// reproduced, because `screen` against those two ends is arithmetic with a
-    /// known answer: screening with black is the identity, so the outer stop is
-    /// just the base's `#ECE2DF`, and screening with white at half alpha lands
-    /// halfway to white, so the centre is `0.5 + 0.5 × #EADFDF`. Two stops, no
-    /// blend mode, no second layer — and nothing for SwiftUI to composite
-    /// per-frame.
-    ///
-    /// Faithful to the source, that came out at a ~12% swing in luminance, and
-    /// **12% is not a gradient** — it read as a flat colour in the window and as
-    /// nothing whatsoever in a 52pt swatch, which is the one job the Settings
-    /// preview has. So the outer stop is deepened past `#ECE2DF`, to about a 19%
-    /// swing. The centre is still the resolved blend; only the edge moved. If a
-    /// borrowed gradient's own stops are 1% apart, copying them exactly is the
-    /// wrong kind of faithful.
-    ///
-    /// That edge sat at ~30% first, and 30% overshot in the other direction: a
-    /// near-white centre falling to a visibly sandy rim reads as a vignette, which
-    /// is a heavier thing than the lit off-white this is meant to be. So the two
-    /// numbers bracket it — 12% is invisible, 30% is a frame — and the useful range
-    /// for a near-white radial is the ~20% between them.
-    ///
-    /// Unrelated to the `Stone` palette in `Theme.swift`, which is the app's
-    /// neutral for chips and hairlines. Same word, different job — no call site
-    /// can confuse them (`Backdrop.stone` against the `Stone` enum), but don't
-    /// wire one to the other on the strength of the name. This case also inherits
-    /// the name from a *different* gradient: a linear near-white-into-sand that
-    /// was cut, so a saved `"stone"` from before now selects the radial.
-    case stone
-    /// Pale lilac into pale apricot — the icon's own gradient, toned well down
-    /// from it. The lilac end is what carries the name; the apricot end is nearly
-    /// white.
-    case dawn
-    /// Pale apricot into pale coral rose. The coral end carries the name.
-    ///
-    /// Dusk's first stop and `dawn`'s last are near-identical pale apricots, so by
-    /// the rule in this file's header the two share a stop. They get away with it
-    /// where a mirrored pair wouldn't, because they *chain* rather than reflect —
-    /// Dawn runs lilac → apricot and Dusk apricot → coral, so each still reads as
-    /// the colour at its own far end and the two never resolve to the same
-    /// impression. Toning both down narrowed that margin; narrowing it further is
-    /// how they'd finally collapse into one another.
-    case dusk
-    /// Soft sky into sage leaf — kept low in saturation on purpose: green and
-    /// blue at pastel strength read as scenery, and at anything more they read
-    /// as a status colour, which every other green and blue in the app already
-    /// means (a due-today badge, the base Note type).
-    case grove
+    /// Warm straw (hue 85) — the palest warm one, paper left in the sun.
+    case linen
+    /// Terracotta warmth (hue 45).
+    case clay
+    /// Pink warmth (hue 25) — the refresh mock's own tint.
+    case blush
+    /// Soft green (hue 145), kept at the set's low chroma so it reads as
+    /// scenery rather than as the status green the due badge owns.
+    case sage
+    /// Pale teal (hue 190) — added to fill the set's one empty hue family:
+    /// the wheel's widest gap sat between Sage and Mist, and at this chroma a
+    /// cyan reads as its own thing where a yellow-green (~110) goes sickly
+    /// and a magenta (~335) reads as a second Blush.
+    case seafoam
+    /// Soft blue (hue 245), the same rule against the app's status blue.
+    case mist
+    /// Pale violet (hue 300).
+    case lilac
 
     var id: Self { self }
 
     var label: String {
         switch self {
-        case .plain: "None"
-        case .cloud: "Cloud"
-        case .stone: "Stone"
-        case .dawn: "Dawn"
-        case .dusk: "Dusk"
-        case .grove: "Grove"
+        case .plain: "Plain"
+        case .linen: "Linen"
+        case .clay: "Clay"
+        case .blush: "Blush"
+        case .sage: "Sage"
+        case .seafoam: "Seafoam"
+        case .mist: "Mist"
+        case .lilac: "Lilac"
         }
     }
 
-    /// The wash itself, or `nil` for the plain background. Type-erased because
-    /// the two ramp shapes are different `ShapeStyle`s, and every call site only
-    /// ever hands this straight to `.fill` or `.containerBackground`.
-    ///
-    /// The linear ones run **diagonally**, corner to corner. A window is much
-    /// wider than it is tall, so the icon's top-to-bottom ramp would put both
-    /// stops in narrow bands at the very top and bottom and leave the middle —
-    /// where all the content is — a flat mid-tone. Corner to corner is the flat
-    /// `.icns`'s direction, and it keeps some travel across the whole surface.
-    var gradient: AnyShapeStyle? {
-        switch ramp {
-        case .none:
-            nil
-        case .linear(let stops):
-            AnyShapeStyle(LinearGradient(
-                colors: stops.map(\.color),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ))
-        // Centre-out, and the radius runs past the frame: the CSS this came from
-        // sizes its ellipse at 147% of the box height, so the outer stop is only
-        // ever reached in the corners. Clamping it to the edge instead would ring
-        // the window with the dark stop and lose the point of the shape.
-        case .elliptical(let stops):
-            AnyShapeStyle(EllipticalGradient(
-                colors: stops.map(\.color),
-                center: .center,
-                startRadiusFraction: 0,
-                endRadiusFraction: 0.85
-            ))
+    /// The nearest tint for a gradient saved before the refresh, by family:
+    /// the cool near-white and the sky-into-sage go to the cool tints, the
+    /// warm ones to the warm tints. `nil` for anything unrecognised.
+    static func migratedFromGradient(_ raw: String) -> Backdrop? {
+        switch raw {
+        case "cloud": .mist
+        case "stone": .linen
+        case "dawn": .blush
+        case "dusk": .clay
+        case "grove": .sage
+        default: nil
         }
     }
 
-    /// What the window paints behind everything. `.windowBackground` for "None",
-    /// so the setting can be applied *unconditionally* — branching on it in the
-    /// view builder instead would give the two cases different identities and
-    /// tear down `NavigationSplitView` (and with it the autosaved column widths)
-    /// every time the picker moved.
+    /// The window's base surface, or `nil` for the plain background.
+    var color: Color? { roles?.base.color }
+
+    /// What the window paints behind everything. `.windowBackground` for
+    /// "Plain", so the setting can be applied *unconditionally* — branching on
+    /// it in the view builder instead would give the two cases different
+    /// identities and tear down `NavigationSplitView` (and with it the
+    /// autosaved column widths) every time the picker moved.
     var windowStyle: AnyShapeStyle {
-        gradient ?? AnyShapeStyle(.windowBackground)
+        color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.windowBackground)
     }
 
-    /// Whether the projects sidebar frosts the backdrop itself, instead of
-    /// leaving AppKit's own sidebar material to it.
-    ///
-    /// It has to, for anything but "None". AppKit's sidebar material blends
-    /// **behind the window**: it frosts the desktop and is blind to everything
-    /// Insert draws, so the gradient would simply not be there. What goes over it
-    /// is **Liquid Glass** (see `ProjectsSidebar`), not a `Material` — a
-    /// `.thinMaterial` was the first attempt and it reads as a flat grey panel
-    /// laid over the design, because a material only blurs and dims what's behind
-    /// it. Glass also *refracts* and picks up the backdrop's own light, which is
-    /// what makes the column look like it belongs to the gradient rather than
-    /// sitting on top of it — and it matches the toolbar's search field, the one
-    /// other large glass surface in the window.
-    ///
-    /// False for "None", which leaves the AppKit material untouched, so a default
-    /// install keeps the desktop translucency it has always had.
-    var frostsSidebar: Bool { self != .plain }
+    /// The sidebar's stronger cut of the tint, or `nil` for "Plain", which
+    /// leaves AppKit's own sidebar material (and its desktop translucency)
+    /// untouched. A flat fill rather than the Liquid Glass the gradients wore:
+    /// glass earned its place by *refracting* a gradient's travel, and a flat
+    /// tint has none — the mock's sidebar is simply the tint at a higher
+    /// strength, which a fill is and a glass layer over the base colour isn't.
+    var sidebarColor: Color? { roles?.sidebar.color }
 
-    /// The shape and the stops, each stop in its two appearances. Reused by the
-    /// gradient and by the Settings swatches, so a preview can't drift from the
-    /// thing it previews.
-    ///
-    /// Stops are an array rather than a `start`/`end` pair: every member happens
-    /// to be two stops today, but a three-stop sweep is the natural way to build
-    /// a gradient that travels across more than one hue, and the shape costs
-    /// nothing to keep.
-    ///
-    /// Declared in `allCases` order, which is the order the Settings grid shows:
-    /// the two near-white neutrals (`cloud`, `stone`), the app's own
-    /// warm pair (`dawn`, `dusk`), then `grove`.
-    private var ramp: Ramp? {
+    /// The Settings swatch fill: the tint at full identity strength.
+    var swatchColor: Color {
+        roles?.swatch.color ?? Color(nsColor: .windowBackgroundColor)
+    }
+
+    /// The three strengths a tint is used at, each in its two appearances.
+    /// Values are oklch converted to sRGB offline (`docs/plans/` README carries
+    /// the spec); light rows are L 99 / 97.4 / 97.5, dark rows L 23.5 / 26.5 /
+    /// 27, chroma scaled per role as the header describes.
+    private var roles: Roles? {
         switch self {
-        case .plain:
-            nil
-        // Dark is inferred, not measured off a source: the same two ends turned
-        // over. Near-black keeping the light end's faint warmth, into a lifted
-        // cool grey for the pale end — so an overcast day becomes an overcast
-        // night rather than a grey card, and the warm/cool split that carries
-        // the light version survives at the only strength that reads down here.
-        case .cloud: .linear([
-            DynamicRGB(light: RGB(r: 0.992, g: 0.984, b: 0.984), dark: RGB(r: 0.105, g: 0.102, b: 0.102)),
-            DynamicRGB(light: RGB(r: 0.922, g: 0.929, b: 0.933), dark: RGB(r: 0.165, g: 0.172, b: 0.178))])
-        // Centre first, edge second — the order an `EllipticalGradient` reads, and
-        // the opposite of how the CSS lists its stops.
-        //
-        // The centre is the resolved screen blend (see the case). The **edge is
-        // deepened past what the source gives**, and that's a deliberate departure:
-        // the CSS's own two stops are `#EADFDF → #ECE2DF`, a 1% step, and even with
-        // the white bloom screened over it the whole thing came to a ~12% swing in
-        // luminance — which reads as a flat colour, not a gradient, and reads as
-        // *nothing at all* in a 52pt swatch. This edge takes it to ~19%, enough to
-        // see the falloff while keeping the character: still a warm off-white lit
-        // from the middle, and the palest member of the set after `cloud`. It was
-        // briefly ~30%, which was past subtle — the bloom read as a vignette rather
-        // than as light. Both halves moved the same distance in component space, so
-        // Dark keeps step with Light, and each end keeps red leading: the falloff
-        // is warm off-white into warmer, never into grey.
-        case .stone: .elliptical([
-            DynamicRGB(light: RGB(r: 0.959, g: 0.937, b: 0.937), dark: RGB(r: 0.185, g: 0.170, b: 0.168)),
-            DynamicRGB(light: RGB(r: 0.902, g: 0.866, b: 0.858), dark: RGB(r: 0.135, g: 0.125, b: 0.123))])
-        // Both of these were toned down: they were the two most saturated members
-        // and sat oddly beside the near-white borrowed ones. Every stop keeps its
-        // hue and its *lead* channel — the identity of each is which channel wins,
-        // not by how much — and only loses chroma. Deliberately the pale ends kept
-        // more of their colour than the middle, since that's where each one's name
-        // actually lives: Dawn's lilac and Dusk's coral.
-        case .dawn: .linear([
-            DynamicRGB(light: RGB(r: 0.925, g: 0.910, b: 0.985), dark: RGB(r: 0.150, g: 0.145, b: 0.190)),
-            DynamicRGB(light: RGB(r: 0.990, g: 0.955, b: 0.915), dark: RGB(r: 0.195, g: 0.175, b: 0.155))])
-        case .dusk: .linear([
-            DynamicRGB(light: RGB(r: 0.995, g: 0.950, b: 0.905), dark: RGB(r: 0.200, g: 0.175, b: 0.150)),
-            DynamicRGB(light: RGB(r: 0.980, g: 0.895, b: 0.885), dark: RGB(r: 0.205, g: 0.165, b: 0.163))])
-        // Sky first, sage second — inverted from how this was first written, so the
-        // gradient runs blue at the top-leading corner down into green, the way
-        // the thing it's named after is actually arranged.
-        case .grove: .linear([
-            DynamicRGB(light: RGB(r: 0.84, g: 0.92, b: 0.95), dark: RGB(r: 0.11, g: 0.17, b: 0.21)),
-            DynamicRGB(light: RGB(r: 0.90, g: 0.95, b: 0.89), dark: RGB(r: 0.13, g: 0.19, b: 0.15))])
+        case .plain: nil
+        case .linen: Roles(
+            base: DynamicRGB(light: RGB(r: 0.997, g: 0.986, b: 0.965), dark: RGB(r: 0.124, g: 0.117, b: 0.102)),
+            sidebar: DynamicRGB(light: RGB(r: 0.982, g: 0.965, b: 0.930), dark: RGB(r: 0.158, g: 0.144, b: 0.117)),
+            swatch: DynamicRGB(light: RGB(r: 0.989, g: 0.965, b: 0.917), dark: RGB(r: 0.166, g: 0.149, b: 0.113)))
+        case .clay: Roles(
+            base: DynamicRGB(light: RGB(r: 1.000, g: 0.981, b: 0.968), dark: RGB(r: 0.133, g: 0.113, b: 0.105)),
+            sidebar: DynamicRGB(light: RGB(r: 1.000, g: 0.956, b: 0.936), dark: RGB(r: 0.172, g: 0.137, b: 0.122)),
+            swatch: DynamicRGB(light: RGB(r: 1.000, g: 0.953, b: 0.925), dark: RGB(r: 0.184, g: 0.139, b: 0.119)))
+        case .blush: Roles(
+            base: DynamicRGB(light: RGB(r: 1.000, g: 0.979, b: 0.975), dark: RGB(r: 0.134, g: 0.112, b: 0.110)),
+            sidebar: DynamicRGB(light: RGB(r: 1.000, g: 0.953, b: 0.947), dark: RGB(r: 0.174, g: 0.135, b: 0.131)),
+            swatch: DynamicRGB(light: RGB(r: 1.000, g: 0.949, b: 0.941), dark: RGB(r: 0.187, g: 0.136, b: 0.131)))
+        case .sage: Roles(
+            base: DynamicRGB(light: RGB(r: 0.975, g: 0.993, b: 0.975), dark: RGB(r: 0.109, g: 0.122, b: 0.109)),
+            sidebar: DynamicRGB(light: RGB(r: 0.947, g: 0.976, b: 0.946), dark: RGB(r: 0.131, g: 0.153, b: 0.131)),
+            swatch: DynamicRGB(light: RGB(r: 0.941, g: 0.981, b: 0.940), dark: RGB(r: 0.130, g: 0.160, b: 0.130)))
+        case .seafoam: Roles(
+            base: DynamicRGB(light: RGB(r: 0.966, g: 0.994, b: 0.991), dark: RGB(r: 0.102, g: 0.123, b: 0.121)),
+            sidebar: DynamicRGB(light: RGB(r: 0.931, g: 0.978, b: 0.973), dark: RGB(r: 0.118, g: 0.154, b: 0.151)),
+            swatch: DynamicRGB(light: RGB(r: 0.919, g: 0.984, b: 0.978), dark: RGB(r: 0.112, g: 0.162, b: 0.158)))
+        case .mist: Roles(
+            base: DynamicRGB(light: RGB(r: 0.971, g: 0.990, b: 1.000), dark: RGB(r: 0.106, g: 0.120, b: 0.132)),
+            sidebar: DynamicRGB(light: RGB(r: 0.940, g: 0.971, b: 0.999), dark: RGB(r: 0.125, g: 0.149, b: 0.170)),
+            swatch: DynamicRGB(light: RGB(r: 0.931, g: 0.974, b: 1.000), dark: RGB(r: 0.123, g: 0.155, b: 0.183)))
+        case .lilac: Roles(
+            base: DynamicRGB(light: RGB(r: 0.990, g: 0.982, b: 1.000), dark: RGB(r: 0.120, g: 0.114, b: 0.132)),
+            sidebar: DynamicRGB(light: RGB(r: 0.971, g: 0.959, b: 1.000), dark: RGB(r: 0.150, g: 0.140, b: 0.171)),
+            swatch: DynamicRGB(light: RGB(r: 0.975, g: 0.957, b: 1.000), dark: RGB(r: 0.156, g: 0.142, b: 0.184)))
         }
     }
 }
 
-/// A backdrop's ramp: the stops, plus the shape they're laid out in.
-///
-/// Two shapes because `stone` is radial where every other member is a
-/// diagonal linear ramp. Kept as an enum rather than, say, a `startPoint`/
-/// `endPoint` pair on every case, so a linear backdrop can't accidentally be
-/// given a centre and a radial one can't be given a direction.
-private enum Ramp {
-    /// Corner to corner, stops in reading order.
-    case linear([DynamicRGB])
-    /// Centre outwards, first stop at the centre.
-    case elliptical([DynamicRGB])
+/// One tint's three strengths: the window base, the sidebar, the swatch.
+private struct Roles {
+    let base: DynamicRGB
+    let sidebar: DynamicRGB
+    let swatch: DynamicRGB
 }
 
-/// One gradient stop, in its two appearances.
+/// One colour, in its two appearances.
 ///
 /// A thinner `dynamic(light:dark:lightHC:darkHC:)` than `Tint`'s: there are no
 /// Increase Contrast variants to carry, because both values already clear AAA
-/// against the text drawn on them (see `Backdrop`).
+/// against the text drawn on them (black on the light rows lands past 19:1,
+/// white on the dark rows past 13:1).
 private struct DynamicRGB {
     let light: RGB
     let dark: RGB
@@ -277,38 +178,44 @@ private struct DynamicRGB {
 
 // MARK: - Picker
 
-/// A grid of gradient swatches, one per `Backdrop`, each captioned with its name.
+/// A grid of tint swatches, one per `Backdrop`, each captioned with its name.
 ///
-/// Deliberately not a `Picker`: the whole point of choosing a background is
-/// seeing it, and a menu of the words "Dawn" and "Stone" tells you nothing.
-/// The swatches paint from the very same `gradient` the window does, so they also
-/// answer the question the names can't — what the *current* theme's version of
-/// each one looks like, radial ones included.
+/// Deliberately not a `Picker`: the whole point of choosing a tint is seeing
+/// it, and a menu of the words "Blush" and "Sage" tells you nothing. The
+/// swatches paint the same dynamic colour the window reads, so they also answer
+/// the question the names can't — what the *current* theme's version of each
+/// one looks like.
 struct BackdropPicker: View {
     let selection: Backdrop
     let onSelect: (Backdrop) -> Void
 
     private static let swatchWidth: CGFloat = 52
     private static let swatchHeight: CGFloat = 34
-    private static let radius: CGFloat = 7
+    /// 9pt, not the controls' full capsule: a swatch is a preview of a surface,
+    /// not a button — "round means pressable" (docs/plans/ decision 6).
+    private static let radius: CGFloat = 9
 
     var body: some View {
-        // One row. Six entries at 52pt plus 10pt gaps is 362pt against the
-        // Settings pane's ~420 (a fixed 700pt window, less its sidebar and the
-        // Form's insets), so it fits with room to spare. **Seven is where it stops
-        // fitting** — 424pt — and the answer then is a `LazyVGrid` of four
-        // columns, not smaller swatches: below about 46pt a gradient preview stops
-        // previewing anything, which defeats the point of not using a `Picker`.
+        // A grid, not the single row the gradients had: past six entries a
+        // 52pt row outgrows the Settings pane, which is exactly the "seven is
+        // where it stops fitting" line the old row documented — and the answer
+        // it prescribed is this, four columns (an exact 4×2 with Plain plus
+        // the seven tints), not smaller swatches: below about 46pt a swatch
+        // stops previewing anything.
         //
-        // 10pt apart so the selection ring, which sits outside its swatch, has
+        // 10pt gaps so the selection ring, which sits outside its swatch, has
         // room either side and can't touch its neighbours.
-        HStack(alignment: .top, spacing: 10) {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.fixed(Self.swatchWidth), spacing: 10), count: 4),
+            alignment: .trailing,
+            spacing: 10
+        ) {
             ForEach(Backdrop.allCases) { backdrop in
                 swatch(backdrop)
             }
         }
-        // The selection ring overhangs its swatch; give it somewhere to go rather
-        // than letting the Form row clip it.
+        // The selection ring overhangs its swatch; give it somewhere to go
+        // rather than letting the Form row clip it.
         .padding(.vertical, 4)
     }
 
@@ -321,20 +228,20 @@ struct BackdropPicker: View {
         } label: {
             VStack(spacing: 6) {
                 shape
-                    .fill(backdrop.gradient ?? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)))
+                    .fill(backdrop.swatchColor)
                     .frame(width: Self.swatchWidth, height: Self.swatchHeight)
                     // The same hairline `.island()` uses, so a pale swatch on a
                     // pale Form row still has an edge.
                     .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
-                    // `.secondary`, not `.primary`: a full-strength label-coloured
-                    // ring is the loudest thing in the pane and fights the very
-                    // gradients it's meant to be pointing at. Softening it does
-                    // give up contrast — a knowing trade, and the reason the
-                    // caption below still goes `.primary` when selected, so the
-                    // state is carried by two cues rather than by this ring alone.
+                    // The accent ring the refresh gives every picker: selection
+                    // is the accent's job (docs/plans/ decision 4), and on this
+                    // neutral ground — unlike the tint-on-tint case `Tint`
+                    // documents — an outline can carry the 3:1 an indicator
+                    // needs. The caption below going `.primary` is the second
+                    // cue.
                     .overlay {
                         RoundedRectangle(cornerRadius: Self.radius + 2, style: .continuous)
-                            .strokeBorder(.secondary, lineWidth: 2)
+                            .strokeBorder(SettingsStore.shared.accent.color, lineWidth: 1.5)
                             .padding(-3)
                             .opacity(selected ? 1 : 0)
                     }
@@ -342,11 +249,10 @@ struct BackdropPicker: View {
                 Text(backdrop.label)
                     .font(.caption)
                     .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                    // Centred in its grid column, which is wider than the swatch
-                    // Held to the swatch's width: every label is one short word, so
-                    // none of them needs more, and pinning it means a longer name
-                    // added later widens its own column rather than silently
-                    // knocking the whole row out of step.
+                    // Held to the swatch's width: every label is one short word,
+                    // so none of them needs more, and pinning it means a longer
+                    // name added later widens its own column rather than
+                    // silently knocking the whole grid out of step.
                     .multilineTextAlignment(.center)
                     .frame(width: Self.swatchWidth)
             }

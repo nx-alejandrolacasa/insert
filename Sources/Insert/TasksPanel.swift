@@ -19,12 +19,16 @@ import SwiftUI
 struct TasksPanel: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
+    @Environment(SettingsStore.self) private var settings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// A row whose due date or done state you change keeps the place it had, so it
     /// doesn't leave under the cursor. Held until the list is rebuilt for another
     /// reason. See `TaskPins`.
     @State private var pins = TaskPins()
+
+    /// The system switch OR-ed with the Accessibility menu's in-app one.
+    private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
     var body: some View {
         // Two-way binding for the segmented state filter.
@@ -45,9 +49,9 @@ struct TasksPanel: View {
                     .padding(.top, Metrics.panelPadding)
                     .padding(.bottom, 8)
 
-                // A pill row mirroring the notes column's type filter, so both
-                // columns present their filters identically.
-                filterPills
+                // A segmented track mirroring the notes column's type filter,
+                // so both columns present their filters identically.
+                filterRow
                     .padding(.horizontal, Metrics.panelPadding)
                     // Same gap as the notes column, so both headers sit at an
                     // identical distance from their first row of content.
@@ -105,7 +109,7 @@ struct TasksPanel: View {
         // Let the list rebuild before scrolling so the target row exists.
         Task {
             try? await Task.sleep(for: .milliseconds(60))
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            withAnimation(motionReduced ? nil : .easeInOut(duration: 0.25)) {
                 proxy.scrollTo(task.id, anchor: .top)
             }
         }
@@ -130,33 +134,30 @@ struct TasksPanel: View {
             } label: {
                 Label("New Task", systemImage: "plus").fontWeight(.semibold)
             }
-            // See "New Note" in `NotesPanel` for why neither the accent fill nor
-            // glass survived. These two are one control in two columns; they change
-            // together or not at all.
-            .buttonStyle(.actionCapsule)
+            // The accent pill, twinned with "New Note" — these two are one
+            // control in two columns; they change together or not at all.
+            .buttonStyle(.accentCapsule)
             .controlSize(.large)
             .help("Create a new task")
         }
     }
 
-    // MARK: - Filter pills
+    // MARK: - Filter row
 
-    /// The state pills (All / Pending / Done) anchored left and the date
+    /// The state track (All / Pending / Done) anchored left and the date
     /// dropdown anchored right, while the column is wide enough for both plus a
     /// gap; when it isn't, they join one line that scrolls sideways together,
     /// the notes column's arrangement — never two rows, never a crushed gap.
-    /// Grey still means "All", matching the notes row.
     ///
     /// The two are independent axes and combine: Pending + Today, Done +
-    /// Overdue. The state pills are a radio — exactly one always lit — and the
-    /// date axis is a dropdown *because* it isn't one: a trio of pills that
-    /// toggled off beside a trio that didn't would be two behaviours in one
-    /// row, and "All time" as a fourth pill wouldn't fit. The dropdown carries
-    /// its off state as an ordinary entry instead.
-    private var filterPills: some View {
+    /// Overdue. The state track is a radio — exactly one always lit — and the
+    /// date axis stays a **separate button outside the track** (docs/plans/
+    /// decision 7): it is a different kind of control, a window with an off
+    /// state, and folding it into the track would put a toggle among radios.
+    private var filterRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                statePills
+                stateTrack
                 Spacer(minLength: 16)
                 dateMenu
             }
@@ -164,7 +165,7 @@ struct TasksPanel: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    statePills
+                    stateTrack
                     dateMenu
                 }
                 .padding(.vertical, 1)
@@ -172,25 +173,32 @@ struct TasksPanel: View {
         }
     }
 
-    private var statePills: some View {
-        ForEach(TaskFilter.allCases) { filter in
-            FilterPill(
-                label: filter.label,
-                tint: filter.tint,
-                selected: appState.taskFilter == filter
-            ) {
-                appState.taskFilter = filter
-            }
-        }
+    /// Every segment carries its state's own dot — grey All, orange Pending,
+    /// green Done (`TaskFilter.tint`), the scheme the old pills wore — exactly
+    /// as the notes track gives every type segment its type's dot.
+    private var stateTrack: some View {
+        SegmentedFilter<TaskFilter>(
+            segments: TaskFilter.allCases.map { filter in
+                SegmentedFilter.Segment(
+                    id: filter,
+                    label: filter.label,
+                    dot: filter.tint.accent
+                )
+            },
+            selection: appState.taskFilter,
+            onSelect: { appState.taskFilter = $0 }
+        )
     }
 
-    /// The date axis as a pill-shaped dropdown — the note card's type menu worn
-    /// by a filter, one control in two columns. Like that menu it always shows
-    /// exactly the current value in that value's colour, so it always wears the
-    /// selected `deep`-and-white; "All time" takes the grey the state row's
-    /// "All" wears, meaning the same thing.
+    /// The date axis as a pill dropdown outside the track. Neutral at rest —
+    /// "All time" is the axis switched off — and accent-filled while a window
+    /// is active, since a live filter is a selected state and selection is the
+    /// accent's job. The orange/green/purple it used to wear went with the
+    /// rest of the metadata colour (docs/plans/ decision 4): the rows it
+    /// selects are grey now too, so the pair still tell the same story.
     private var dateMenu: some View {
-        Menu {
+        let active = appState.taskDateFilter != nil
+        return Menu {
             // Plain buttons rather than a `Picker`, matching `typeMenu`: the
             // pill itself says which window is current.
             Button { appState.taskDateFilter = nil } label: { Text("All time") }
@@ -204,14 +212,23 @@ struct TasksPanel: View {
                     .font(.system(size: 8, weight: .bold))
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(active
+                ? AnyShapeStyle(settings.accent.foreground)
+                : AnyShapeStyle(.primary))
             .lineLimit(1)
-            // The same padding a `FilterPill` uses, so the dropdown and the
-            // pills beside it are the same pill at the same size.
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
             .chipHeight()
-            .background(Capsule().fill((appState.taskDateFilter?.tint ?? .gray).deep))
+            .background(
+                Capsule().fill(active
+                    ? AnyShapeStyle(settings.accent.color)
+                    : AnyShapeStyle(Stone.chip))
+            )
+            .overlay {
+                if !active {
+                    Capsule().strokeBorder(Stone.line, lineWidth: 0.5)
+                }
+            }
             .contentShape(Capsule())
         }
         // See `AddProjectMenu`: `.button` + plain keeps the label as drawn,
@@ -246,7 +263,7 @@ struct TasksPanel: View {
                 } label: {
                     Label("New Task", systemImage: "plus").fontWeight(.semibold)
                 }
-                .buttonStyle(.actionCapsule)
+                .buttonStyle(.accentCapsule)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -336,6 +353,9 @@ private struct TaskCardView: View {
     /// This card is the one currently open for editing.
     private var isEditing: Bool { appState.selectedTaskID == task.id }
 
+    /// The system switch OR-ed with the Accessibility menu's in-app one.
+    private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
+
     private var hasBody: Bool {
         !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -406,11 +426,7 @@ private struct TaskCardView: View {
             }
         }
         .padding(12)
-        // Optionally wash the row in its due colour (Settings → Tasks); the
-        // badge and the background then tell the same story. `dueTint` is nil for
-        // undated and done rows — and for every row with the setting off — which
-        // leaves those on plain white paper (see `island`).
-        .island(radius: Metrics.rowRadius, tint: settings.dueTintedTasks ? dueTint : nil)
+        .island(radius: Metrics.rowRadius)
         .opacity(draft.done ? 0.7 : 1)
         .contentShape(RoundedRectangle(cornerRadius: Metrics.rowRadius, style: .continuous))
         .gesture(TapGesture().onEnded { enterEdit() }, isEnabled: !isEditing)
@@ -430,7 +446,7 @@ private struct TaskCardView: View {
         // mode change rather than a line appearing, and the rows below travel
         // further.
         .animation(
-            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            motionReduced ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: isEditing
         )
         // Expanding the notes is the same kind of change as opening the card — the
@@ -438,7 +454,7 @@ private struct TaskCardView: View {
         // same duration. Value-scoped, so this and the mode change can't drive each
         // other: a card opened while expanded resizes once, not twice.
         .animation(
-            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            motionReduced ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: expanded
         )
     }
@@ -498,7 +514,11 @@ private struct TaskCardView: View {
                 .font(.title2)
                 // Padded out to a comfortable target; the glyph keeps its size.
                 .frame(width: 28, height: 28)
-                .foregroundStyle(draft.done ? Color.accentColor : Color.secondary)
+                // The Accent *setting*, not `Color.accentColor`: that reads
+                // the app/system accent and ignores the `.tint()` the
+                // preference threads through, which left the tick system blue
+                // whatever the user chose.
+                .foregroundStyle(draft.done ? settings.accent.color : Color.secondary)
                 .contentShape(Rectangle())
         }
         .centredOnTextCap()
@@ -564,18 +584,17 @@ private struct TaskCardView: View {
                 // Undated, the badge is an affordance, so it says what it does.
                 Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due))
             }
-            .font(.caption)
-            .foregroundStyle(dueForeground)
+            .font(.caption.weight(isOverdue ? .semibold : .regular))
+            .foregroundStyle(isOverdue ? Semantic.overdue : Stone.metaText)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .chipHeight()
-            .background(Capsule().fill(dueBackground))
+            .background(Capsule().fill(Color.secondary.opacity(0.14)))
         }
         .buttonStyle(.plain)
         .help("Set due date")
-        // Overdue vs today vs upcoming is carried by colour alone (orange /
-        // green / purple), which some people can't tell apart — so it goes in
-        // the spoken label as words.
+        // The overdue state is carried by colour (and a weight), which some
+        // people can't tell apart — so it goes in the spoken label as words.
         .accessibilityLabel(dueLabel)
         .popover(isPresented: $showDuePopover, arrowEdge: .bottom) {
             duePopover
@@ -597,24 +616,14 @@ private struct TaskCardView: View {
         return "Due \(date)"
     }
 
-    /// Orange once overdue, green for today, purple for anything upcoming —
-    /// a *dated* badge is never grey, so it can't be confused with the grey
-    /// "Add due" / "Add project" affordances beside it. `nil` (grey) is only
-    /// the undated affordance and the muted done state.
-    private var dueTint: Tint? {
-        guard let due = draft.due, !draft.done else { return nil }
+    /// The badge itself is grey until the task is genuinely overdue, then red —
+    /// nothing else (docs/plans/ decision 4). Today and upcoming are things the
+    /// date already says; overdue is the one state worth a colour, and reserving
+    /// red for it is what makes the red mean something.
+    private var isOverdue: Bool {
+        guard let due = draft.due, !draft.done else { return false }
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let day = cal.startOfDay(for: due)
-        if day < today { return .orange }
-        if day == today { return .green }
-        return .purple
-    }
-
-    private var dueForeground: Color { dueTint?.ink ?? .secondary }
-
-    private var dueBackground: Color {
-        dueTint?.chip ?? Color.secondary.opacity(0.14)
+        return cal.startOfDay(for: due) < cal.startOfDay(for: Date())
     }
 
     private var duePopover: some View {
@@ -650,6 +659,7 @@ private struct TaskCardView: View {
         // they measure 299pt with the selected one bold, so anything under
         // ~330 puts a label back on a second row or truncates it.
         .frame(width: 332)
+        .opaquePopoverWhenTransparencyReduced()
     }
 
     private func presetPill(_ preset: DuePreset) -> some View {
@@ -802,7 +812,7 @@ private struct TaskCardView: View {
         // with it — read as the list flinching every time a sentence got long
         // enough to wrap.
         .frame(height: max(28, measuredBodyHeight))
-        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: measuredBodyHeight)
+        .animation(motionReduced ? nil : .smooth(duration: 0.18), value: measuredBodyHeight)
     }
 
     /// The editor's text laid out at the row's width with the editor's own font

@@ -150,12 +150,12 @@ struct RootView: View {
             .navigationTitle(navigationTitle)
         }
         .navigationSplitViewStyle(.balanced)
-        // The chosen gradient, painted behind the whole window — under the
+        // The chosen tint, painted behind the whole window — under the
         // sidebar as well as the two panels, and up under the (background-less)
         // toolbar, so it's one uninterrupted wash. Applied unconditionally:
-        // "None" resolves to `.windowBackground`, which is what the window would
-        // have drawn anyway. See `Backdrop.windowStyle` for why this isn't an
-        // `if`.
+        // "Plain" resolves to `.windowBackground`, which is what the window
+        // would have drawn anyway. See `Backdrop.windowStyle` for why this
+        // isn't an `if`.
         .containerBackground(settings.backdrop.windowStyle, for: .window)
         // Let the sidebar's material run the full height of the window instead
         // of starting below a title-bar strip: drop the toolbar's background
@@ -225,17 +225,20 @@ struct RootView: View {
     private static let slideCurve = Animation.easeInOut(duration: 0.25)
     private static let slideDuration = Duration.milliseconds(250)
 
+    /// The system switch OR-ed with the Accessibility menu's in-app one.
+    private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
+
     /// The slide, dropped entirely when Reduce Motion is on: the column and the
     /// button then change state in one step instead of travelling. `nil` is a
     /// valid argument to `withAnimation`, so every call site below is unchanged.
     private var slide: Animation? {
-        reduceMotion ? nil : Self.slideCurve
+        motionReduced ? nil : Self.slideCurve
     }
 
     /// How long to wait before taking the faded-out button out of the toolbar.
     /// With no fade to wait for, that's immediately.
     private var slideDuration: Duration {
-        reduceMotion ? .zero : Self.slideDuration
+        motionReduced ? .zero : Self.slideDuration
     }
 
     /// The gap the toolbar leaves between two items — the same one the title

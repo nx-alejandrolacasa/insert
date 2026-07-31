@@ -20,6 +20,27 @@ struct InsertApp: App {
                 .environment(library)
                 .environment(appState)
                 .environment(settings)
+                // The user's highlight colour, threaded through SwiftUI's own
+                // channel so controls that resolve the *tint* — selection
+                // fills, `.glassProminent` confirm buttons — follow the Accent
+                // setting without naming it. Note `Color.accentColor` does
+                // NOT read this (it is the app/system accent), which is why
+                // the checkbox and the `#project` dropdown read the setting
+                // directly. AppKit's focus ring stays the system accent; that
+                // one has no supported override.
+                .tint(settings.accent.color)
+                // The heavy hammer the in-app Increase Contrast needs: the
+                // high-contrast variants live inside dynamic `NSColor`
+                // providers, and SwiftUI caches resolved colours per view —
+                // a subtree whose inputs didn't change never re-resolves, so
+                // flipping the flag left most of the window on its old
+                // colours. Changing the root's identity rebuilds everything
+                // with fresh resolutions. Costs transient UI state (an open
+                // card closes, scroll positions reset) on a switch that's
+                // flipped rarely; the *system* setting never needs this,
+                // because it swaps the effective appearance, which is its own
+                // full refresh.
+                .id(settings.appIncreaseContrast)
                 .frame(minWidth: 900, minHeight: 560)
         }
         .windowToolbarStyle(.unified)

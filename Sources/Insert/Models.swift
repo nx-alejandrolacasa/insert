@@ -440,8 +440,11 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Grey always means "All" (matching the notes filter row); pending is warm
-    /// and done is green.
+    /// The colour each state's dot wears in the segmented track — grey for
+    /// "All", warm for pending, green for done, the scheme the old filter
+    /// pills wore. Briefly replaced by a single accent dot on the active
+    /// segment during the refresh, and put back by request: the states have
+    /// always had their own colours here, and the dots are where they live now.
     var tint: Tint {
         switch self {
         case .all: .gray
@@ -480,17 +483,10 @@ enum TaskDateFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The due badge's own colours — orange once overdue, green for today,
-    /// purple for anything upcoming — so a pill and the rows it selects tell
-    /// the same story, even though that repeats Pending's orange and Done's
-    /// green within the row.
-    var tint: Tint {
-        switch self {
-        case .overdue: .orange
-        case .today: .green
-        case .tomorrow: .purple
-        }
-    }
+    // These windows used to wear the due badge's orange / green / purple; both
+    // sides of that pairing went grey in the refresh (docs/plans/ decision 4),
+    // so the dropdown now shows selection with the accent instead — see
+    // `TasksPanel.dateMenu`.
 
     /// Whether `task`'s due date falls in this filter's window. The due date
     /// *alone*: done-ness belongs to the state axis, which is what lets the two

@@ -74,11 +74,15 @@ enum Typeface: String, CaseIterable, Identifiable {
 
 // MARK: - Picker
 
-/// A row of specimens, one per `Typeface`, in the shape `BackdropPicker` uses —
-/// same 52pt swatch, same hairline, same selection ring — because the two sit in
-/// the same pane and a font choice is as visual as a gradient. A `Picker` would
-/// have to name the faces without showing them, and the names are the least
-/// useful thing about them.
+/// A row of specimens, one per `Typeface` — 52pt swatches with the hairline
+/// and accent selection ring the `BackdropPicker` beside it uses, because the
+/// two sit in the same pane and a font choice is as visual as a tint. A
+/// `Picker` would have to name the faces without showing them, and the names
+/// are the least useful thing about them.
+///
+/// The swatches are **capsules** where the tint swatches keep a 9pt radius — a
+/// deliberate exception to "round means pressable applies to controls only"
+/// (docs/plans/ decision 6 left this open; the maintainer chose the pills).
 ///
 /// The specimen is **"Aa"**, which is not a filler string: the capital shows the
 /// terminals and the serifs, and the lowercase `a` shows the round single-storey
@@ -94,7 +98,6 @@ struct TypefacePicker: View {
 
     private static let swatchWidth: CGFloat = 52
     private static let swatchHeight: CGFloat = 34
-    private static let radius: CGFloat = 7
     /// The column is as wide as the widest *label*, not as the swatch: "Monospace"
     /// measures 55.6pt at caption size against the swatch's 52, so held to the
     /// swatch it hyphen-wrapped to "Mono-/space" and left this row a line taller
@@ -115,7 +118,7 @@ struct TypefacePicker: View {
 
     private func swatch(_ typeface: Typeface) -> some View {
         let selected = typeface == selection
-        let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+        let shape = Capsule()
 
         return Button {
             onSelect(typeface)
@@ -126,13 +129,12 @@ struct TypefacePicker: View {
                     .frame(width: Self.swatchWidth, height: Self.swatchHeight)
                     .background(Stone.chip, in: shape)
                     .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
-                    // `.secondary` for the same reason the backdrop swatches use
-                    // it: a full-strength ring is the loudest thing in the pane.
-                    // The caption below going `.primary` when selected is the
-                    // second cue that pays for the softer ring.
+                    // The accent ring every picker in this pane wears now; the
+                    // caption below going `.primary` when selected is the
+                    // second cue.
                     .overlay {
-                        RoundedRectangle(cornerRadius: Self.radius + 2, style: .continuous)
-                            .strokeBorder(.secondary, lineWidth: 2)
+                        Capsule()
+                            .strokeBorder(SettingsStore.shared.accent.color, lineWidth: 1.5)
                             .padding(-3)
                             .opacity(selected ? 1 : 0)
                     }

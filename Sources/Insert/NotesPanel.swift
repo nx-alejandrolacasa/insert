@@ -29,6 +29,9 @@ struct NotesPanel: View {
     /// until the list is rebuilt for another reason. See `NotePins`.
     @State private var pins = NotePins()
 
+    /// The system switch OR-ed with the Accessibility menu's in-app one.
+    private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
+
     var body: some View {
         // Sort order is a preference (Settings → General), not a per-window
         // control, which keeps this header down to a title and one button.
@@ -47,7 +50,7 @@ struct NotesPanel: View {
                     .padding(.top, Metrics.panelPadding)
                     .padding(.bottom, 8)
 
-                typeFilterPills
+                typeFilter
                     .padding(.horizontal, Metrics.panelPadding)
                     .padding(.bottom, Metrics.headerGap)
 
@@ -116,46 +119,33 @@ struct NotesPanel: View {
                 Label("New Note", systemImage: "plus")
                     .fontWeight(.semibold)
             }
-            // Not `.glassProminent` (it paints the system accent) and no longer
-            // plain `.glass` either (glass casts a drop shadow, and this window
-            // doesn't) — see `FlatButtonStyle` for both arguments. The
-            // semibold label is what carries "primary action" now; it doesn't need
-            // a colour to.
-            .buttonStyle(.actionCapsule)
+            // The accent-filled pill the refresh gives each column's primary
+            // action — see `AccentButtonStyle` for why the prominence this
+            // once gave up came back with the flat tints.
+            .buttonStyle(.accentCapsule)
             .controlSize(.large)
             .help("Create a new note (⌘N)")
         }
     }
 
-    // MARK: - Type filter pills
+    // MARK: - Type filter
 
-    /// A second header row: one pill per note type, tapped to filter the list.
-    /// The choices are visible at a glance and each pill wears its type's colour,
-    /// so the row doubles as a legend. Single-select, matching the tasks column:
-    /// picking a type replaces the previous one, and "All" clears the filter.
-    private var typeFilterPills: some View {
+    /// A second header row: the type filter as one segmented track — "All",
+    /// then a segment per note type, each carrying its type's colour dot so
+    /// the row ties to the marker stroke on the cards it selects. Single-
+    /// select, matching the tasks column. Still inside a horizontal scroller:
+    /// types are user-extensible, and a track wider than the column should
+    /// slide rather than crush its segments.
+    private var typeFilter: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                FilterPill(
-                    label: "All",
-                    symbol: nil,
-                    tint: .gray,
-                    selected: appState.noteTypeFilter == nil
-                ) {
-                    appState.noteTypeFilter = nil
-                }
-
-                ForEach(settings.noteTypes) { type in
-                    FilterPill(
-                        label: type.name,
-                        symbol: type.symbol,
-                        tint: type.tint,
-                        selected: appState.noteTypeFilter == type.id
-                    ) {
-                        appState.noteTypeFilter = type.id
-                    }
-                }
-            }
+            SegmentedFilter<String?>(
+                segments: [SegmentedFilter.Segment(id: nil, label: "All")]
+                    + settings.noteTypes.map {
+                        SegmentedFilter.Segment(id: $0.id, label: $0.name, dot: $0.tint.accent)
+                    },
+                selection: appState.noteTypeFilter,
+                onSelect: { appState.noteTypeFilter = $0 }
+            )
             .padding(.vertical, 1)
         }
     }
@@ -208,7 +198,7 @@ struct NotesPanel: View {
         Task {
             try? await Task.sleep(for: .milliseconds(60))
             // Reduce Motion means jump straight there rather than scroll.
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            withAnimation(motionReduced ? nil : .easeInOut(duration: 0.25)) {
                 proxy.scrollTo(note.id, anchor: .top)
             }
         }
@@ -245,7 +235,6 @@ private struct NoteCardView: View {
     /// The in-flight debounced save, cancelled and restarted on every edit.
     @State private var saveTask: Task<Void, Never>?
 
-    @State private var showingSymbolPicker = false
     /// Height of the rendered body text, so the editor grows with content
     /// instead of the greedy `TextEditor` filling the whole scroll viewport.
     @State private var measuredBodyHeight: CGFloat = 34
@@ -274,6 +263,8 @@ private struct NoteCardView: View {
     private var type: NoteType { settings.noteType(id: draft.typeID) }
     /// This card is the one currently open for editing.
     private var isEditing: Bool { appState.selectedNoteID == note.id }
+    /// The system switch OR-ed with the Accessibility menu's in-app one.
+    private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
     var body: some View {
         tappableIsland
@@ -324,15 +315,28 @@ private struct NoteCardView: View {
             // The chips row sits *under* the body: between title and body it cut
             // the note in half and pushed the text you're writing down the card.
             bodyArea
-            if isEditing || showsProjectChips { projectRow }
-            footer
+            if isEditing {
+                projectRow
+                footer
+            } else {
+                // View mode collapses type, projects and timestamp onto one
+                // meta line (docs/plans/ decision 3).
+                metaRow
+            }
         }
         .padding(12)
-        .island(tint: type.tint)
+        // White paper, whatever the type: the type moved off the card wash and
+        // onto the title's marker stroke and the meta row's label (docs/plans/
+        // decision 2), so body-text contrast is the same on every card and the
+        // wash no longer fights the chips inside it.
+        .island()
         .overlay {
             if isEditing {
+                // The accent, not the type's colour: this ring means "open for
+                // editing", which is an interactive state, and interactive is
+                // the accent's one job (docs/plans/ decision 4).
                 RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous)
-                    .strokeBorder(type.tint.accent.opacity(0.55), lineWidth: 1.5)
+                    .strokeBorder(settings.accent.color.opacity(0.55), lineWidth: 1.5)
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous))
@@ -352,7 +356,7 @@ private struct NoteCardView: View {
         // the editor and adds a row of chips, and the cards below it move by that
         // difference.
         .animation(
-            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            motionReduced ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: isEditing
         )
         // Collapsing or expanding the body is the same kind of change as opening
@@ -360,7 +364,7 @@ private struct NoteCardView: View {
         // same way, for the same duration. Value-scoped, like the task row's,
         // so this and the mode change can't drive each other.
         .animation(
-            reduceMotion ? nil : .smooth(duration: Metrics.cardModeDuration),
+            motionReduced ? nil : .smooth(duration: Metrics.cardModeDuration),
             value: expanded
         )
     }
@@ -382,31 +386,25 @@ private struct NoteCardView: View {
 
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 10) {
-            // Emoji and title read as one unit, so they sit closer together than
-            // the row's other gaps.
-            HStack(alignment: .center, spacing: 4) {
-                if isEditing {
-                    symbolButton
-                    // `#project` tags a project and is stripped from the title,
-                    // same as in the task composer.
-                    ProjectHashField(
-                        placeholder: "Title  (type # to tag a project)",
-                        text: $draft.title,
-                        assigned: $draft.projectIDs,
-                        font: Card.font(.title3, weight: .bold),
-                        onEscape: { exitEdit() },
-                        onTab: { focusBody() },
-                        focused: $titleFocused
-                    )
-                } else {
-                    typeSymbol
-                        // The type pills below name the category; this glyph is
-                        // decoration on top of the title beside it.
-                        .accessibilityHidden(true)
-                    Text(draft.displayTitle)
-                        .font(Card.font(.title3, weight: .bold))
-                        .lineLimit(2)
-                }
+            if isEditing {
+                // `#project` tags a project and is stripped from the title,
+                // same as in the task composer.
+                ProjectHashField(
+                    placeholder: "Title  (type # to tag a project)",
+                    text: $draft.title,
+                    assigned: $draft.projectIDs,
+                    font: Card.font(.title3, weight: .bold),
+                    onEscape: { exitEdit() },
+                    onTab: { focusBody() },
+                    focused: $titleFocused
+                )
+            } else {
+                // No type glyph in either mode: the marker stroke and the meta
+                // row's label already say the type twice (docs/plans/ decision
+                // 2), and the symbols were removed from notes outright — which
+                // is also what keeps the title from sliding sideways as the
+                // card opens: both modes start it at the card's edge.
+                MarkerTitle(text: draft.displayTitle, marker: type.tint.marker)
             }
 
             Spacer(minLength: 8)
@@ -429,100 +427,72 @@ private struct NoteCardView: View {
                 // the task row.
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { actionsSize = $0 }
         }
-    }
-
-    /// The note's type glyph. One definition for both modes — edit mode is the same
-    /// glyph with the well drawn behind it, so the two can't fall out of step (see
-    /// `Metrics.noteSymbolWell`).
-    private var typeSymbol: some View {
-        Image(systemName: draft.symbol)
-            .font(.system(size: Metrics.noteSymbolSize))
-            .foregroundStyle(type.tint.ink)
-            .frame(width: Metrics.noteSymbolWell, height: Metrics.noteSymbolWell)
-    }
-
-    private var symbolButton: some View {
-        Button {
-            showingSymbolPicker = true
-        } label: {
-            typeSymbol
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Stone.surface)
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Change symbol")
-        .accessibilityLabel("Change symbol")
-        .popover(isPresented: $showingSymbolPicker, arrowEdge: .bottom) {
-            SymbolPicker(selection: draft.symbol, tint: type.tint) { picked in
-                draft.symbol = picked
-                showingSymbolPicker = false
-            }
-            .frame(width: 320)
-        }
+        // Floored like the task card's title row, and needed for the same
+        // reason since the symbols went: the 26pt symbol well used to set this
+        // height as a side effect, and without a floor the row is title-height
+        // closed and Done-height open, sliding the body as the card opens. See
+        // `Metrics.cardTitleRowHeight`.
+        .frame(minHeight: Metrics.cardTitleRowHeight)
     }
 
     // MARK: Project assignments
 
-    /// The projects this note belongs to. While editing, the chips are removable
-    /// (double-click) and a ＋ adds more, exactly as on a task row; in view mode
-    /// it's a read-only label, with "Unassigned" spelled out so a stray note is
-    /// easy to spot in the aggregate list.
-    @ViewBuilder
+    /// The edit-mode projects row: removable chips, a ＋ for more, and the type
+    /// dropdown on the trailing edge — exactly as on a task row.
     private var projectRow: some View {
-        if isEditing {
-            HStack(spacing: 6) {
-                ForEach(draft.projectIDs, id: \.self) { id in
-                    if let project = library.project(id: id) {
-                        ProjectChip(project: project) {
-                            draft.projectIDs.removeAll { $0 == id }
-                        }
+        HStack(spacing: 6) {
+            ForEach(draft.projectIDs, id: \.self) { id in
+                if let project = library.project(id: id) {
+                    ProjectChip(project: project) {
+                        draft.projectIDs.removeAll { $0 == id }
                     }
                 }
-                // Bare ＋ beside chips it extends; the full wording only when
-                // it stands alone.
-                AddProjectMenu(assigned: draft.projectIDs, compact: !draft.projectIDs.isEmpty) {
-                    draft.projectIDs.append($0)
-                }
-                Spacer(minLength: 0)
-                // Trailing, the way a task row hangs its due badge off the end
-                // of the same chips row: the type is one value, so it belongs
-                // on the fixed edge rather than drifting rightwards as chips
-                // are added.
-                typeMenu
             }
-        } else {
-            HStack(spacing: 6) {
+            // Bare ＋ beside chips it extends; the full wording only when
+            // it stands alone.
+            AddProjectMenu(assigned: draft.projectIDs, compact: !draft.projectIDs.isEmpty) {
+                draft.projectIDs.append($0)
+            }
+            Spacer(minLength: 0)
+            // Trailing, the way a task row hangs its due badge off the end
+            // of the same chips row: the type is one value, so it belongs
+            // on the fixed edge rather than drifting rightwards as chips
+            // are added.
+            typeMenu
+        }
+    }
+
+    // MARK: Meta row — view mode
+
+    /// One line under the body: type · projects · timestamp (docs/plans/
+    /// decision 3). The type label always leads; the chips appear only in the
+    /// aggregate view, as they always have, held to two plus an overflow so
+    /// the card's height doesn't grow with its assignments; the dates footer
+    /// keeps its own Settings choice and sits right-aligned.
+    private var metaRow: some View {
+        HStack(spacing: 9) {
+            TypeCapsLabel(type: type)
+
+            if showsProjectChips {
+                // The hairline between the type and the chips, so the two
+                // reads don't run together.
+                Rectangle()
+                    .fill(Stone.line)
+                    .frame(width: 1, height: 11)
+
                 if draft.projectIDs.isEmpty {
                     // Actionable where "Unassigned" was inert: the same pill
                     // flags the stray note *and* fixes it.
                     AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
                 } else {
-                    ForEach(draft.projectIDs, id: \.self) { id in
-                        if let project = library.project(id: id) {
-                            projectLabel(project.name, symbol: project.symbol, tint: project.tint)
-                        }
-                    }
+                    ProjectChipsRow(projects: draft.projectIDs.compactMap { library.project(id: $0) })
                 }
-                Spacer(minLength: 0)
             }
-        }
-    }
 
-    private func projectLabel(_ name: String, symbol: String, tint: Tint) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol)
-                .foregroundStyle(tint.ink)
-            Text(name)
+            Spacer(minLength: 0)
+
+            footer
         }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .chipHeight()
-            .background(Capsule().fill(tint.chip))
     }
 
     // MARK: Type menu
@@ -531,10 +501,10 @@ private struct NoteCardView: View {
     /// with a chevron — a pop-up button drawn as one of the app's own pills, not
     /// a `Picker`, which would redraw it in system chrome and lose the colour.
     ///
-    /// It replaced a row of one `FilterPill` per type, which is what the tint's
-    /// `deep`-and-white here is borrowed from: the *selected* state of that row,
-    /// since this control shows exactly one type and it is always the current
-    /// one. The row cost a whole line of the card and grew with every type added
+    /// It replaced a row of one filter pill per type, which is what the tint's
+    /// `deep`-and-white here is borrowed from: the *selected* state of that
+    /// retired row, since this control shows exactly one type and it is always
+    /// the current one. The row cost a whole line of the card and grew with every type added
     /// in Settings, where the note being edited is what should have the space;
     /// the dropdown costs a badge. Nothing is lost but the second glance —
     /// which type is set is still on show, only the alternatives moved behind a
@@ -542,18 +512,17 @@ private struct NoteCardView: View {
     private var typeMenu: some View {
         Menu {
             // Plain buttons rather than a `Picker`: the pill itself says which
-            // type is current, so a menu carrying checkmarks would only mean
-            // giving up each type's own symbol to show it.
+            // type is current. Names alone — the type symbols were removed
+            // from notes wholesale.
             ForEach(settings.noteTypes) { menuType in
                 Button {
                     selectType(menuType)
                 } label: {
-                    Label(menuType.name, systemImage: menuType.symbol)
+                    Text(menuType.name)
                 }
             }
         } label: {
             HStack(spacing: 4) {
-                if !type.symbol.isEmpty { Image(systemName: type.symbol) }
                 Text(type.name)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
@@ -561,8 +530,8 @@ private struct NoteCardView: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)
             .lineLimit(1)
-            // The same padding a `FilterPill` uses, so the dropdown and the
-            // filter row above it are the same pill at the same size.
+            // The same padding the tasks column's date dropdown uses, so the
+            // two menus are the same pill at the same size.
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
             .chipHeight()
@@ -579,8 +548,10 @@ private struct NoteCardView: View {
         .accessibilityLabel("Note type: \(type.name)")
     }
 
-    /// Switching type also swaps the symbol when the note still uses the previous
-    /// type's default, so untouched icons track the category.
+    /// Switching type still swaps the symbol when the note carries the previous
+    /// type's default: nothing *shows* symbols any more, but the frontmatter
+    /// keeps the field, and a file whose symbol tracks its type stays coherent
+    /// for whatever reads it in Obsidian.
     private func selectType(_ newType: NoteType) {
         guard newType.id != draft.typeID else { return }
         let previous = settings.noteType(id: draft.typeID)
