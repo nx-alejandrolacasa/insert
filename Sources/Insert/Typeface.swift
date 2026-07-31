@@ -82,7 +82,7 @@ enum Typeface: String, CaseIterable, Identifiable {
 ///
 /// The swatches are **capsules** where the tint swatches keep a 9pt radius — a
 /// deliberate exception to "round means pressable applies to controls only"
-/// (docs/plans/ decision 6 left this open; the maintainer chose the pills).
+/// (CLAUDE.md decision 6 left this open; the maintainer chose the pills).
 ///
 /// The specimen is **"Aa"**, which is not a filler string: the capital shows the
 /// terminals and the serifs, and the lowercase `a` shows the round single-storey

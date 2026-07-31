@@ -9,14 +9,14 @@ import SwiftUI
 ///
 /// Seven tints plus "Plain" for the untinted window background, which stays
 /// the default so an install that never opens Settings looks exactly as it
-/// always has. These replaced five *gradients* (Cloud, Stone, Dawn, Dusk, Grove) in the
-/// July 2026 visual refresh (`docs/plans/`), for a measured reason: a gradient
-/// was legible only in the outer margins and the sidebar, and each one needed
-/// its Light and Dark ends solved for contrast separately per region. A flat
-/// tint means text contrast is identical everywhere in the window, so it is
-/// verified once per theme. A saved gradient is migrated to its nearest tint by
-/// family (see `migratedFromGradient`), so a chosen backdrop stays a chosen
-/// backdrop.
+/// always has. These replaced five *gradients* (Cloud, Stone, Dawn, Dusk,
+/// Grove) in the July 2026 visual refresh (CLAUDE.md decision 1), for a
+/// measured reason: a gradient was legible only in the outer margins and the
+/// sidebar, and each one needed its Light and Dark ends solved for contrast
+/// separately per region. A flat tint means text contrast is identical
+/// everywhere in the window, so it is verified once per theme. A saved gradient
+/// is migrated to its nearest tint by family (see `migratedFromGradient`), so a
+/// chosen backdrop stays a chosen backdrop.
 ///
 /// **Every tint is one lightness and one chroma; hue is the only variable.**
 /// Light values sit at oklch L 97.5% / C 0.014–0.016 (the refresh's spec), so
@@ -113,9 +113,11 @@ enum Backdrop: String, CaseIterable, Identifiable {
     }
 
     /// The three strengths a tint is used at, each in its two appearances.
-    /// Values are oklch converted to sRGB offline (`docs/plans/` README carries
-    /// the spec); light rows are L 99 / 97.4 / 97.5, dark rows L 23.5 / 26.5 /
-    /// 27, chroma scaled per role as the header describes.
+    /// Values are oklch converted to sRGB offline — this type's header is the
+    /// spec now that the refresh handoff is gone, so regenerate from the L/C
+    /// and the per-case hues above rather than from a table elsewhere. Light
+    /// rows are L 99 / 97.4 / 97.5, dark rows L 23.5 / 26.5 / 27, chroma
+    /// scaled per role as the header describes.
     private var roles: Roles? {
         switch self {
         case .plain: nil
@@ -192,7 +194,7 @@ struct BackdropPicker: View {
     private static let swatchWidth: CGFloat = 52
     private static let swatchHeight: CGFloat = 34
     /// 9pt, not the controls' full capsule: a swatch is a preview of a surface,
-    /// not a button — "round means pressable" (docs/plans/ decision 6).
+    /// not a button — "round means pressable" (CLAUDE.md decision 6).
     private static let radius: CGFloat = 9
 
     var body: some View {
@@ -234,7 +236,7 @@ struct BackdropPicker: View {
                     // pale Form row still has an edge.
                     .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
                     // The accent ring the refresh gives every picker: selection
-                    // is the accent's job (docs/plans/ decision 4), and on this
+                    // is the accent's job (CLAUDE.md decision 4), and on this
                     // neutral ground — unlike the tint-on-tint case `Tint`
                     // documents — an outline can carry the 3:1 an indicator
                     // needs. The caption below going `.primary` is the second

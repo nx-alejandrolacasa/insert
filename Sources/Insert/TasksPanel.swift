@@ -151,7 +151,7 @@ struct TasksPanel: View {
     ///
     /// The two are independent axes and combine: Pending + Today, Done +
     /// Overdue. The state track is a radio — exactly one always lit — and the
-    /// date axis stays a **separate button outside the track** (docs/plans/
+    /// date axis stays a **separate button outside the track** (CLAUDE.md
     /// decision 7): it is a different kind of control, a window with an off
     /// state, and folding it into the track would put a toggle among radios.
     private var filterRow: some View {
@@ -194,7 +194,7 @@ struct TasksPanel: View {
     /// "All time" is the axis switched off — and accent-filled while a window
     /// is active, since a live filter is a selected state and selection is the
     /// accent's job. The orange/green/purple it used to wear went with the
-    /// rest of the metadata colour (docs/plans/ decision 4): the rows it
+    /// rest of the metadata colour (CLAUDE.md decision 4): the rows it
     /// selects are grey now too, so the pair still tell the same story.
     private var dateMenu: some View {
         let active = appState.taskDateFilter != nil
@@ -617,7 +617,7 @@ private struct TaskCardView: View {
     }
 
     /// The badge itself is grey until the task is genuinely overdue, then red —
-    /// nothing else (docs/plans/ decision 4). Today and upcoming are things the
+    /// nothing else (CLAUDE.md decision 4). Today and upcoming are things the
     /// date already says; overdue is the one state worth a colour, and reserving
     /// red for it is what makes the red mean something.
     private var isOverdue: Bool {

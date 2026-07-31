@@ -90,7 +90,7 @@ struct ProjectsSidebar: View {
         // itself past the lights.
         .ignoresSafeArea(.container, edges: .top)
         // The tint's stronger cut, painted over the window's base wash — the
-        // sidebar is where a flat tint actually reads (docs/plans/ decision 1).
+        // sidebar is where a flat tint actually reads (CLAUDE.md decision 1).
         // A fill, not the Liquid Glass the gradients wore: glass earned its
         // place by refracting a gradient's travel, and a flat colour has none
         // to refract. With "Plain" there's nothing of ours to paint, so this

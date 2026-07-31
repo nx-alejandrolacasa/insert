@@ -273,7 +273,7 @@ private struct FieldHeightKey: PreferenceKey {
 /// A removable project chip: the project's colour **dot** and its name on
 /// neutral ground — a dot rather than the symbol-on-tinted-capsule it used to
 /// be, because on a card the project's colour only ever appears as a dot
-/// (docs/plans/ decisions 3 and 4), and the removable chip has to read as the
+/// (CLAUDE.md decisions 3 and 4), and the removable chip has to read as the
 /// same object as the read-only `ProjectDotChip` beside it. Hovering fades the
 /// trailing end of the name and shows an ✕ over it — the chip keeps its width,
 /// the button lands on quiet ground, and one click removes the assignment.

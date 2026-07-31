@@ -61,7 +61,7 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
     /// A slightly stronger fill for pills/chips.
     var chip: Color { accent.opacity(0.20) }
 
-    /// The highlighter band a note title wears (docs/plans/ decision 2): the
+    /// The highlighter band a note title wears (CLAUDE.md decision 2): the
     /// tint blended into the card face — 45% of `accent` over white in Light,
     /// a quieter 34% over the dark card in Dark. The mock's 60% was tried and
     /// softened by request: under a saturated tint (the base blue Note worst
@@ -104,7 +104,7 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
 /// segment's dot, selection rings in the Settings pickers — chosen in
 /// Settings → General → Accent ("Highlight colour"). Blue by default.
 ///
-/// One accent, everywhere, is the refresh's colour discipline (docs/plans/
+/// One accent, everywhere, is the refresh's colour discipline (CLAUDE.md
 /// decision 4): project colour only ever appears as a dot, metadata is grey,
 /// and this is the only hue that means "interactive". Exactly these four
 /// options.
@@ -233,7 +233,7 @@ struct AccentPicker: View {
 
 /// The one place red is allowed: a genuinely overdue task's date. Everything
 /// else a date can be — today, upcoming, "created at" — is grey, so that when
-/// this fires it means exactly one thing (docs/plans/ decision 4).
+/// this fires it means exactly one thing (CLAUDE.md decision 4).
 ///
 /// oklch 50% 0.16 32 in Light (6.5:1 on the white card), brightened to 72% in
 /// Dark (6.3:1 on the dark card) — the `Tint.ink` move, solved against the
@@ -443,7 +443,7 @@ enum Stone {
     ///
     /// Not `.secondary`: `secondaryLabelColor` is an alpha of the label colour
     /// that lands around 3.9:1 on a white card, under the refresh's 4.5:1
-    /// floor for text below 14px (docs/plans/ decision 5). This is a solid
+    /// floor for text below 14px (CLAUDE.md decision 5). This is a solid
     /// grey solved against the card faces instead — 7.4:1 in Light, 6.7:1 in
     /// Dark — so metadata is quiet by being grey, not by being faint. Under
     /// Increase Contrast it steps most of the way to the label colour.
@@ -604,7 +604,7 @@ enum Metrics {
     /// notes and tasks columns line up exactly.
     static let headerGap: CGFloat = 10
     /// 12pt, down from 16: the refresh puts every container in the 10–12pt
-    /// band (docs/plans/ decision 6 — "round means pressable", and a card is
+    /// band (CLAUDE.md decision 6 — "round means pressable", and a card is
     /// not pressable-shaped). Task rows were already there at `rowRadius`.
     static let islandRadius: CGFloat = 12
     static let rowRadius: CGFloat = 10
@@ -849,7 +849,7 @@ extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
 /// This *reverses* the earlier retreat from `.glassProminent`, knowingly. The
 /// prominence went because system blue was drawn from neither `Tint` nor a
 /// `Backdrop` and fought whatever gradient sat behind it; the refresh
-/// (docs/plans/ decision 4) retires the gradients and makes the accent a real
+/// (CLAUDE.md decision 4) retires the gradients and makes the accent a real
 /// preference, so the colour now belongs to the design — and one filled pill
 /// per column is exactly the ration `.glassProminent` was held to. Flat rather
 /// than glass for the standing reason: glass casts a drop shadow and the window

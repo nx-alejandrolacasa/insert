@@ -484,7 +484,7 @@ enum TaskDateFilter: String, CaseIterable, Identifiable {
     }
 
     // These windows used to wear the due badge's orange / green / purple; both
-    // sides of that pairing went grey in the refresh (docs/plans/ decision 4),
+    // sides of that pairing went grey in the refresh (CLAUDE.md decision 4),
     // so the dropdown now shows selection with the accent instead — see
     // `TasksPanel.dateMenu`.
 

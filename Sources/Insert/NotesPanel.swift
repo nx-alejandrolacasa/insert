@@ -320,13 +320,13 @@ private struct NoteCardView: View {
                 footer
             } else {
                 // View mode collapses type, projects and timestamp onto one
-                // meta line (docs/plans/ decision 3).
+                // meta line (CLAUDE.md decision 3).
                 metaRow
             }
         }
         .padding(12)
         // White paper, whatever the type: the type moved off the card wash and
-        // onto the title's marker stroke and the meta row's label (docs/plans/
+        // onto the title's marker stroke and the meta row's label (CLAUDE.md
         // decision 2), so body-text contrast is the same on every card and the
         // wash no longer fights the chips inside it.
         .island()
@@ -334,7 +334,7 @@ private struct NoteCardView: View {
             if isEditing {
                 // The accent, not the type's colour: this ring means "open for
                 // editing", which is an interactive state, and interactive is
-                // the accent's one job (docs/plans/ decision 4).
+                // the accent's one job (CLAUDE.md decision 4).
                 RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous)
                     .strokeBorder(settings.accent.color.opacity(0.55), lineWidth: 1.5)
             }
@@ -400,7 +400,7 @@ private struct NoteCardView: View {
                 )
             } else {
                 // No type glyph in either mode: the marker stroke and the meta
-                // row's label already say the type twice (docs/plans/ decision
+                // row's label already say the type twice (CLAUDE.md decision
                 // 2), and the symbols were removed from notes outright — which
                 // is also what keeps the title from sliding sideways as the
                 // card opens: both modes start it at the card's edge.
@@ -464,7 +464,7 @@ private struct NoteCardView: View {
 
     // MARK: Meta row — view mode
 
-    /// One line under the body: type · projects · timestamp (docs/plans/
+    /// One line under the body: type · projects · timestamp (CLAUDE.md
     /// decision 3). The type label always leads; the chips appear only in the
     /// aggregate view, as they always have, held to two plus an overflow so
     /// the card's height doesn't grow with its assignments; the dates footer

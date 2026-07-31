@@ -38,7 +38,7 @@ struct CardDatesFooter: View {
             .font(.caption2)
             // `Stone.metaText`, not `.tertiary`: a timestamp is metadata, and
             // the refresh's floor for text under 14px is 4.5:1 against the
-            // card it's painted on (docs/plans/ decision 5) — tertiary label
+            // card it's painted on (CLAUDE.md decision 5) — tertiary label
             // colour is nowhere near it.
             .foregroundStyle(Stone.metaText)
             .accessibilityElement(children: .ignore)

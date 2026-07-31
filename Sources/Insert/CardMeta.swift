@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The refresh's note-card anatomy (docs/plans/ decisions 2 and 3): the card
+/// The refresh's note-card anatomy (CLAUDE.md decisions 2 and 3): the card
 /// face is white, and a note's type is expressed twice — a highlighter stroke
 /// behind the title, and a small-caps label leading the meta row. The pieces
 /// live here because both cards borrow from them and neither owns them.
@@ -78,7 +78,7 @@ struct TypeCapsLabel: View {
 // MARK: - Project dot chips
 
 /// A read-only project chip: colour dot + name on neutral ground. The dot is
-/// the only place project colour appears on a card (docs/plans/ decision 4).
+/// the only place project colour appears on a card (CLAUDE.md decision 4).
 struct ProjectDotChip: View {
     let name: String
     let dot: Color
@@ -104,7 +104,7 @@ struct ProjectDotChip: View {
 /// full, everything past them collapses into one overflow chip — the hidden
 /// projects' dots, overlapped, and a `+N` — because a note nearly always has
 /// one project, two at most, and a card that grows a row per project spends
-/// space the note's own text should have (docs/plans/ decision 3).
+/// space the note's own text should have (CLAUDE.md decision 3).
 ///
 /// The overflow chip is a **click popover** naming what it hides — chosen over
 /// a hover popover or a tooltip because a click is the platform's standard

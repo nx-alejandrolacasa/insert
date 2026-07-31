@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The filter rows' segmented control (docs/plans/ decision 7): a recessed
+/// The filter rows' segmented control (CLAUDE.md decision 7): a recessed
 /// capsule track holding one segment per option, with the selection carried by
 /// a **Liquid Glass pill that travels** between segments rather than a colour
 /// that cross-fades.

@@ -148,12 +148,16 @@ upright one, so "it renders" and "it renders right" are different claims.
 
 Behaviour that isn't obvious from the code, and shouldn't drift:
 
-- **The July 2026 visual refresh** (`docs/plans/README.md` is the handoff, with
-  the decision log and its mocks) restyled the surfaces without touching
-  behaviour, and several bullets below changed with it. The shape of it: the
-  five window *gradients* became seven flat **tints** (Plain + Linen / Clay /
-  Blush / Sage / Mist / Lilac — saved gradients migrate by family, dark values
-  derived, one L/C per role with hue the only variable); a note's type moved
+- **The July 2026 visual refresh** restyled the surfaces without touching
+  behaviour, and several bullets below changed with it. The handoff document and
+  its two HTML mocks are **gone** — the refresh shipped, so the code is the
+  record now, and the oklch tables the handoff carried are baked into
+  `Backdrop`/`Theme` with their derivations in the comments there. What outlived
+  them is this bullet, ending in the numbered decision log the source comments
+  cite as "decision N". The shape of it: the five window *gradients* became
+  flat **tints** (Plain + Linen / Clay / Blush / Sage / Mist / Lilac, with
+  Seafoam added after the refresh — saved gradients migrate by family, dark
+  values derived, one L/C per role with hue the only variable); a note's type moved
   off the card wash onto a **marker stroke** behind the title plus a small-caps
   label in the meta row, so every card face is plain paper; metadata went
   **grey with red reserved for genuinely overdue** (`Semantic.overdue`,
@@ -178,6 +182,54 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   edit-mode button is also what stopped the title sliding sideways as a card
   opened, and the note card's title row gained the explicit
   `cardTitleRowHeight` floor its 26pt symbol well used to provide by accident.
+  The **decision log**, kept in full because it is what the source comments
+  cite and because most of it is a rule rather than a value:
+  1. **Gradients → flat tints.** A gradient was legible only in the outer
+     margins and the sidebar, and each one needed its Light and Dark ends
+     solved per region; a flat tint means text contrast is identical
+     everywhere, so it's verified once per theme. The tint paints the window
+     base and the sidebar, never the cards.
+  2. **Note type is a marker stroke, not a card wash** — colour where the eye
+     already is, body-text contrast constant, and no wash left to fight the
+     chips inside the card. The band sits *behind* the glyphs, and title
+     contrast is never reduced to accommodate it. Three treatments were
+     rejected on the way and shouldn't be re-proposed: a coloured left rule
+     (generic), a filing-tab treatment, and a no-card "ledger" layout with a
+     monospaced gutter (too space-hungry).
+  3. **The meta row is one line** — type label · hairline · chips · timestamp,
+     each chip a colour dot plus a name and no icon, held to two plus `+N`.
+     Chosen over letting the chips wrap onto their own line, which was mocked
+     and rejected: one project per note is the common case, two at most, so a
+     fixed card height is worth more than showing every assignment.
+  4. **Colour discipline** — one accent, for interactive and selected state
+     only; project colour appears only as a dot (the sidebar's own icons
+     aside); metadata is grey; red means genuinely overdue and nothing else.
+     The accent is a preference of exactly four — blue, green, orange,
+     graphite — and adding a fifth is a decision, not a tweak.
+  5. **The contrast floor is three rules, not one.** Text under 14px ≥4.5:1;
+     interactive glyphs (the ⋯ menu, the chevrons) ≥4:1; and both verified
+     against the surface actually painted behind them — a tint or a card face,
+     **not** a nominal white. That third rule is the one that gets forgotten,
+     and it's why `Semantic.overdue` and `Stone.metaText` are each solved
+     against *both* card faces, Light paper and Dark near-black; it is also
+     what ruled out `.secondary`/`.tertiary` for metadata, since an alpha wash
+     has no fixed contrast to verify.
+  6. **Every control is a pill; containers keep a 10–12pt radius** — round
+     means pressable. But **icons are not controls**: anything drawing a lone
+     glyph rather than a label keeps its own shape, because a glyph rounded
+     into a pill reads as a toggle switch. That happened to the
+     sidebar-toggle glyph during review and was caught there;
+     `Sizing.toolbarGlyph`'s square 28pt is what keeps it a circle. The tint
+     swatches are the same case from the other side — a preview of a surface,
+     so a soft radius, not a capsule.
+  7. **The filter rows are a segmented track**, each note-type segment
+     carrying its type's dot so the row ties back to the markers on the cards,
+     with the date axis a separate button *outside* the track because it is a
+     different kind of control.
+  One thing was parked rather than rejected, flagged here so it isn't lost: the
+  **"ledger" layout as a future compact density**. It lost as the default for
+  the reason in decision 2, but a deliberately dense mode is the one context
+  where being space-hungry stops being the objection.
 - **Settings → Accessibility** offers in-app Reduce Motion / Reduce Transparency /
   Increase Contrast (briefly a top-level menu, moved to its own Settings pane),
   each **OR-ed with its system counterpart** — they only add
@@ -938,10 +990,14 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   so switching tint never changes contrast and a new entry is a hue, not a
   design. Sage and Mist are kept at the set's low chroma so green and blue read
   as scenery, not as the status colours those hues mean elsewhere.
-  A tint paints **two strengths**: the window base at ~30% of the identity
-  chroma and the sidebar at ~60–70%, where it actually reads; the Settings
-  swatch shows the full identity value, because a 52pt swatch of the base
-  colour previews nothing. The picker is a `LazyVGrid` of four columns — seven
+  A tint paints **three strengths**: the window base at ~55% of the tint's
+  chroma (near-white, so cards keep their edge), the sidebar at ~90% where the
+  tint actually reads, and the Settings swatch at ~125% — the tint's *identity*
+  rather than either surface, because a 52pt swatch of the base colour previews
+  nothing. Those fractions started at 30/62/100 and were raised by request
+  ("the tints are almost invisible"); if they move again, regenerate the whole
+  table from the oklch spec rather than nudging one entry, or the set stops
+  being one lightness and chroma. The picker is a `LazyVGrid` of four columns — seven
   entries at 52pt is exactly past where the old single row stopped fitting —
   and not smaller swatches, since below about 46pt a swatch stops previewing.
   A backdrop is **one** tint, not two: hue fixed per name, only the value
