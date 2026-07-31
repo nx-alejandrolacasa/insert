@@ -681,8 +681,10 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   card is also the update that creates the editor, so `focusForEntry()` writing
   `@FocusState` straight from `onChange(of: isEditing)` named a field SwiftUI had
   not registered yet and was dropped in silence. The card opened with no caret and
-  Esc did nothing either — the editor answers Esc through `onKeyPress`, which needs
-  focus to fire — so it took a *second* click, which focused the text view the
+  Esc did nothing either — the editor answered Esc through `onKeyPress` then, which
+  needs focus to fire (it is `cancelOperation(_:)` on the editor's own text view
+  now, which needs first-responder status just the same) — so it took a *second*
+  click, which focused the text view the
   AppKit way, to make either work. Both cards now wrap the write in
   `Task { @MainActor in }`, which lands it after the editor exists and after the
   click's own responder handling, the other thing that can take focus straight
@@ -702,65 +704,97 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   sees it), solved its way both times. The title side is a new `onTab` on
   `ProjectHashField`'s existing monitor, firing only with the dropdown closed —
   dropdown open, Tab still means "first match", which stays the override. The
-  body side is a focus-gated monitor of the same shape inside `MarkdownEditor`
-  (`onTab`, optional so an owner without a second field leaves Tab alone). The
+  body side was a focus-gated monitor of the same shape inside `MarkdownEditor`
+  and is now an `insertTab(_:)`/`insertBacktab(_:)` override on the editor's own
+  text view (`onTab`, optional so an owner without a second field leaves Tab
+  alone) — the same behaviour, answered where the key lands rather than
+  intercepted before it. The
   focus writes are direct, *not* `focusForEntry()`'s deferred turn: that delay
   exists because entry creates the fields in the same update, and here both
   fields already exist when the key fires, so there is no registration to wait
   for.
-- **Spelling is marked, never corrected.** Settings → General → "Check spelling
-  while typing" (on by default) underlines misspellings in a card's **title and
-  body**, notes and tasks alike; corrections are offered where they can be
-  accepted deliberately, in the text view's own Control-click menu. Grammar
-  checking and automatic spelling correction are switched **off explicitly**
-  rather than left at whatever the text view came with, because a bare
-  `NSTextView` arrives with both of them *on* (measured:
-  `isContinuousSpellCheckingEnabled` false, `isGrammarCheckingEnabled` and
-  `isAutomaticSpellingCorrectionEnabled` true) and these are Markdown files
-  Obsidian also opens — a substitution made on the user's behalf is a write to
-  their note. The smart quote and dash substitutions are left exactly as they
-  are: they're the status quo of typing here, and switching spelling on is no
-  reason to change what lands in a file.
-  SwiftUI offers **nothing** for this on macOS — there is no spell-checking
-  modifier anywhere in its interface (`autocorrectionDisabled` is iOS's, and a
-  different thing) — so `SpellChecking` reaches the `NSTextView` through the
-  **first responder**, from `applicationDidUpdate`. `MarkdownReturn`'s route, for
-  `applicationDidUpdate`'s own reason: focus moves between a card's two fields
-  and from one card to the next with no notification to hang this on.
-  **Setting the flag once, when focus lands, is not enough — that was the first
-  version and it was reported broken**: *"it works, but it takes ages, only when
-  I stop typing, and not even always"*, which is the signature of marks that are
-  made and then dropped. A SwiftUI text view is reconfigured on every graph
-  update, and a card re-renders on every keystroke and again when its ~0.4s
-  debounced save lands. **Which of those drops them was never established**, so
-  the fix is aimed at the class, not the instance, in two halves. The flag is
-  **re-asserted**: every update tick compares the live property against the
-  preference and writes when they differ, so nothing can quietly turn checking
-  off mid-sentence. And every edit **forces a pass** — `SpellChecking.install()`
-  watches `NSText.didChangeNotification` and calls
-  `checkText(in:types:options:)`, the automatic machinery's own call, which marks
-  without touching the selection the way "Check Document Now" would. Twice, on
-  one debounce: at 150ms, which is inside the gap between keystrokes so a
-  finished word is marked while the sentence is still being written, and again
-  500ms later — *past* the save and its re-render, because a pass that runs
-  before the thing that clears the marks is a pass that didn't happen.
-  The price of re-asserting is paid knowingly: the text view's own "Check
-  Spelling While Typing" in the Control-click menu no longer sticks, since
-  unchecking it there is undone within a frame. Settings is the switch.
-  **The two halves of a card are two different text views**, which is the rest of
-  the shape. A body is a `TextEditor` with an `NSTextView` of its own. A title is
-  a `TextField`, which has **none**: it borrows the window's one shared **field
-  editor**, and so do the toolbar's search field and Settings' text fields — so
-  what the field editor is given follows it to the next field, and it has to be
-  told on every focus change what the field it is *currently* attached to wants.
-  Hence the two exclusions: the **search field** (a query, not prose, and it
+- **Spelling is marked, never corrected — and the body editor is an
+  `NSTextView` because of it.** Settings → General → "Check spelling while
+  typing" (on by default) underlines misspellings in a card's **title and
+  body**, notes and tasks alike; corrections come from the text view's own
+  Control-click menu, where they're accepted deliberately. Grammar checking,
+  automatic spelling correction, smart quotes, smart dashes, text replacement
+  and link detection are all refused **by name**, because a bare `NSTextView`
+  arrives with them *on* (measured) and these are Markdown files Obsidian also
+  opens: a substitution made on the user's behalf is a write to someone's note,
+  and `--` has no business becoming an en dash in a file.
+  **SwiftUI's `TextEditor` cannot do this on macOS, and that is what cost the
+  editor its `TextEditor`.** There is no spell-checking modifier in SwiftUI at
+  all (`autocorrectionDisabled` is iOS's, a different thing), the state lives per
+  `NSTextView` — and SwiftUI writes `isContinuousSpellCheckingEnabled = false`
+  on every graph update. Instrumented here, on macOS 26: **45 reversions across
+  44 keystrokes**, one per edit, 8–20ms after it, always the same text view
+  object, so it is reconfigured rather than rebuilt. That's FB13607434
+  (feedback-assistant/reports#467), still open; Apple's forums (thread 744800)
+  report the same from the outside — enabling it from the Control-click menu
+  "works briefly but becomes disabled again after typing a few characters".
+  **Two workarounds were tried from outside the text view, and both are
+  instructive dead ends.** Setting the flag once when focus lands gave marks
+  that arrived "late, only when I stop typing, and not even always" — the
+  reversion, seen from the user's side. Re-asserting it every update tick then
+  made the underlines *flicker on every keystroke*, because turning checking off
+  clears the marks and turning it on schedules a fresh check, so the flag being
+  fought is a visible flash. A forced `checkText(in:)` over the whole note twice
+  per typing pause was in that version too, and was worse than useless: it
+  re-checked every word in the document to find the one that changed, and was
+  measurably slow on a long note. **Neither is what AppKit wants** — its own
+  machinery checks incrementally, around the edit and the visible range, and
+  keeps the marks it has, which is the behaviour Notes has and the one to aim
+  for.
+  So the body editor hosts its **own** `NSTextView` (`MarkdownEditor` →
+  `MarkdownTextViewBridge`, `MarkdownTextView`): the flag is set once in
+  `makeNSView` and nothing takes it away. What that cost, and what it bought
+  back, is under "The editor is ours" below.
+  **The titles are why `SpellChecking` still exists.** A title is a `TextField`
+  (`ProjectHashField`) with no text view of its own: it borrows the window's one
+  shared **field editor**, and so do the toolbar's search field and Settings'
+  text fields. What that editor is given follows it to the next field, so it's
+  told on every focus change what the field it is *currently* attached to wants —
+  read from the **first responder** in `applicationDidUpdate`, since focus moves
+  between a card's two fields and from card to card with no notification to hang
+  it on. Hence two exclusions: the **search field** (a query, not prose, and it
   names itself by being an `NSSearchField`) and the **Settings window**
   (`SettingsWindowController.owns(_:)` — a note type's name is an ordinary
   `NSTextField` exactly as a card's title is, so the window is the only thing
   that separates them). A field that can't be identified counts as excluded, so
-  nothing inherits underlines from whatever was edited before it.
-  None of this is testable without a view, and the app isn't launched in the agent
-  shell, so it is confirmed on screen or not at all.
+  nothing inherits underlines from whatever was edited before it. The same pass
+  is also what lands a flipped Settings toggle on an already-open body.
+- **The editor is ours** — `MarkdownEditor` wraps an `NSViewRepresentable`
+  (`MarkdownTextViewBridge`) over an `NSTextView` subclass, for the reason in the
+  bullet above. The API the cards call is unchanged apart from two things: the
+  font is now the `NSFont` (`Card.nsFont(_:)`, the same face the proxies measure
+  through `Card.font(_:)`), and Esc is an `onEscape:` hook rather than an
+  `.onKeyPress(.escape)` at the call site, because a hosted text view answers keys
+  before SwiftUI's handlers see them.
+  What must not drift, since the cards' geometry rules depend on it: the text
+  container's `lineFragmentPadding` stays at its default **5pt** and
+  `textContainerInset` at **zero**, which is exactly the inset SwiftUI's editor
+  had — the call sites' hidden sizing proxies carry `.padding(.horizontal, 5)`
+  and their placeholders sit at `(5, 0)` "on the caret", and the preview/source
+  flip is compared on one frame.
+  The keys the text view now answers itself: **Tab / ⇧Tab** are
+  `insertTab(_:)` / `insertBacktab(_:)` overrides (the local `NSEvent` monitor
+  inside `MarkdownEditor` is gone — same behaviour, answered where the key
+  actually lands), and **Esc** is `cancelOperation(_:)` *plus* `complete(_:)`,
+  because a text view binds Esc to inline completion by default and that would
+  otherwise swallow it. **Return is not here**: `MarkdownReturn`'s app-wide
+  monitor reads the first responder, so it works unchanged — and `isFieldEditor`
+  still separates a body from a title.
+  Three details in the bridge that are easy to undo by accident. Text is written
+  into the view **only when it really differs**, because typing round-trips
+  through the binding and comes back equal — assigning then would throw away the
+  caret and the undo stack on every keystroke. Focus is reported *out* of the view
+  by overriding `becomeFirstResponder`/`resignFirstResponder`, so a click inside
+  the editor still counts as focus for the owner's `@FocusState`; the callback is
+  suppressed (`reportsFocus`) around a `makeFirstResponder` the bridge asks for
+  itself, since that one happens inside a view update. And `allowsUndo` plus
+  `isRichText = false` are what keep native undo and stop a paste arriving as
+  styled text.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

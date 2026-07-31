@@ -619,17 +619,16 @@ private struct NoteCardView: View {
 
             MarkdownEditor(
                 text: $draft.body,
-                font: Card.font(.body),
+                font: Card.nsFont(.body),
                 onTab: { focusTitle() },
+                // Esc leaves the Markdown editor, matching the title field. A
+                // hook rather than `.onKeyPress`: the editor is an `NSTextView`
+                // and answers the key itself.
+                onEscape: { exitEdit() },
                 focused: $bodyFocused,
                 selection: $bodySelection
             )
                 .frame(height: max(34, measuredBodyHeight))
-                // Esc leaves the Markdown editor, matching the title field.
-                .onKeyPress(.escape) {
-                    exitEdit()
-                    return .handled
-                }
         }
     }
 

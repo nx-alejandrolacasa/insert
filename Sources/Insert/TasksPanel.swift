@@ -796,16 +796,15 @@ private struct TaskCardView: View {
 
             MarkdownEditor(
                 text: $draft.body,
-                font: Card.font(.callout),
+                font: Card.nsFont(.callout),
                 onTab: { focusTitle() },
+                // Esc leaves the editor, matching the title field. A hook rather
+                // than `.onKeyPress`: the editor is an `NSTextView` and answers
+                // the key itself.
+                onEscape: { exitEdit() },
                 focused: $bodyFocused,
                 selection: $bodySelection
             )
-                // Esc leaves the editor, matching the title field.
-                .onKeyPress(.escape) {
-                    exitEdit()
-                    return .handled
-                }
         }
         // One number is the row's height, and it eases. Wrapping a line used to
         // resize the card in a single frame, which — because the rows below move

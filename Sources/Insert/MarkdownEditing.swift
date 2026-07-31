@@ -1,39 +1,62 @@
 import AppKit
 import SwiftUI
 
-/// The Markdown source editor shared by note cards, task cards and the task
-/// composer: a plain `TextEditor` plus the formatting shortcuts — ⌘B bold,
-/// ⌘I italic, ⌘U underline, ⇧⌘X strikethrough. Each wraps (or unwraps) the
-/// *selected* text in the matching Markdown delimiters and does nothing when
-/// nothing is selected; the actual string surgery lives in
-/// `MarkdownFormatting` so it can be tested without a view.
+/// The Markdown source editor shared by note cards and task cards: an
+/// `NSTextView` of our own, plus the formatting shortcuts — ⌘B bold, ⌘I italic,
+/// ⌘U underline, ⇧⌘X strikethrough. Each wraps (or unwraps) the *selected* text
+/// in the matching Markdown delimiters and does nothing when nothing is
+/// selected; the actual string surgery lives in `MarkdownFormatting` so it can
+/// be tested without a view.
 ///
-/// The shortcuts are invisible zero-size buttons carrying `keyboardShortcut`s,
-/// mounted only while the editor is focused — key equivalents resolve before
-/// the focused text view sees the event, and gating them on focus means two
-/// editors on screen never compete for ⌘B. Placeholders and sizing proxies
-/// stay with the callers, which each have their own.
+/// **This was a SwiftUI `TextEditor` until spell checking had to work, and the
+/// reason it isn't one any more is measured, not stylistic.** SwiftUI writes
+/// `isContinuousSpellCheckingEnabled = false` on the hosted text view on every
+/// graph update: instrumenting a typing session in this app on macOS 26 logged
+/// **45 reversions across 44 keystrokes**, one per edit, 8–20ms after it, always
+/// on the same text view object — so SwiftUI reconfigures the view rather than
+/// rebuilding it. That is FB13607434
+/// (github.com/feedback-assistant/reports/issues/467), still open, and Apple's
+/// forums (thread 744800) describe the same thing from the outside: enabling
+/// checking from the text view's own Control-click menu "works briefly but
+/// becomes disabled again after typing a few characters". Turning the flag off
+/// *clears* the marks and turning it on schedules a fresh check, so the only
+/// workaround available from outside — re-asserting the flag — buys underlines
+/// that flicker on every keystroke. Hosting the text view is the fix everyone
+/// lands on, and it is the fix here: the flag is set once, in `makeNSView`, and
+/// nothing takes it away, so AppKit marks incrementally around the edit and
+/// keeps the marks it already has, the way Notes does.
 ///
-/// Return is different, and needs the **local `NSEvent` monitor** below rather
-/// than a fifth button or an `onKeyPress`: an unmodified Return carries no key
-/// equivalent, and the text view consumes it as `insertNewline(_:)` before
-/// SwiftUI's key-press handlers get a look — the same wall `ProjectHashField`
-/// hit with Tab and Return, and solved the same way. The monitor sees the event
-/// before the window dispatches it, and swallows it only when the caret really
-/// is in a list item, so Return keeps its ordinary meaning everywhere else.
+/// What came with the change, since a hosted text view answers its own keys:
+/// **Tab** and **Esc** are now `insertTab(_:)` / `cancelOperation(_:)` overrides
+/// rather than a local `NSEvent` monitor and an `onKeyPress` at the call sites —
+/// the same two keys, answered in the one place that gets them first. **Return**
+/// still goes through `MarkdownReturn`'s app-wide monitor below, which reads the
+/// first responder and so needs no changing. And the editor takes an `NSFont`
+/// rather than a `Font`: `Card` hands out both spellings of the same face, and
+/// the call sites' sizing proxies keep using the SwiftUI one.
+///
+/// The formatting shortcuts stay invisible zero-size buttons carrying
+/// `keyboardShortcut`s, mounted only while the editor is focused — key
+/// equivalents resolve before the focused text view sees the event, and gating
+/// them on focus means two editors on screen never compete for ⌘B. Placeholders
+/// and sizing proxies stay with the callers, which each have their own.
 struct MarkdownEditor: View {
     @Binding var text: String
-    var font: Font = .body
-    /// The composer pins its editor to a fixed height, so it scrolls; everywhere
-    /// else the editor grows with a sizing proxy and scrolling is the list's job.
-    var scrollable = false
+    /// The card's face, as AppKit's. `Card.nsFont(_:)` is the same font the
+    /// call sites' proxies measure with through `Card.font(_:)`.
+    var font: NSFont
     /// Tab or ⇧Tab — the owner's field traversal (a card hands focus back to
     /// its title). Without it the text view answers Tab itself, as a literal
-    /// tab character, and there is no key that leaves the body. Intercepted by
-    /// a local monitor for `ProjectHashField`'s reason: the text view consumes
-    /// Tab before `onKeyPress` sees it.
+    /// tab character, and there is no key that leaves the body.
     var onTab: (() -> Void)? = nil
-    /// Owned by the caller, which decides when the editor takes focus.
+    /// Esc — the owner leaves edit mode. A hook rather than the `.onKeyPress`
+    /// the call sites used to carry: the text view answers keys before SwiftUI's
+    /// key-press handlers see them, which is why Tab needed a monitor in the
+    /// first place.
+    var onEscape: (() -> Void)? = nil
+    /// Owned by the caller, which decides when the editor takes focus. The text
+    /// view reports its own first-responder changes back into it, so a click
+    /// inside the editor still counts as focus.
     @FocusState.Binding var focused: Bool
     /// Owned by the caller as well, so that when it hands the editor focus it
     /// can also say where the caret goes — a card opening for editing puts it at
@@ -42,50 +65,18 @@ struct MarkdownEditor: View {
     /// position a click inside the editor just chose.
     @Binding var selection: TextSelection?
 
-    /// The Tab monitor, installed for the editor's lifetime when the owner
-    /// asked for traversal (its handler no-ops unless this editor is focused).
-    @State private var keyMonitor: Any?
-
     var body: some View {
-        TextEditor(text: $text, selection: $selection)
-            .font(font)
-            .textEditorStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .scrollDisabled(!scrollable)
-            .focused($focused)
-            .background {
-                if focused { formattingShortcuts }
-            }
-            .onAppear { installKeyMonitor() }
-            .onDisappear { removeKeyMonitor() }
-    }
-
-    private func installKeyMonitor() {
-        guard onTab != nil, keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Monitors fire on the main thread, but the closure isn't annotated;
-            // `assumeIsolated` can't *return* the non-Sendable event, so it
-            // answers "swallow?" instead.
-            let swallow = MainActor.assumeIsolated { handleKeyDown(event) }
-            return swallow ? nil : event
+        MarkdownTextViewBridge(
+            text: $text,
+            font: font,
+            onTab: onTab,
+            onEscape: onEscape,
+            focused: $focused,
+            selection: $selection
+        )
+        .background {
+            if focused { formattingShortcuts }
         }
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
-    }
-
-    /// Tab or ⇧Tab, unmodified otherwise, while this editor is focused. Shift is
-    /// allowed through the guard: with two fields in a card the loop is the same
-    /// in both directions, so both spellings traverse.
-    private func handleKeyDown(_ event: NSEvent) -> Bool {
-        guard let onTab, focused, event.keyCode == 48 else { return false }
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
-            return false
-        }
-        onTab()
-        return true
     }
 
     private var formattingShortcuts: some View {
@@ -123,6 +114,233 @@ struct MarkdownEditor: View {
         let start = change.text.index(change.text.startIndex, offsetBy: change.selection.lowerBound)
         let end = change.text.index(change.text.startIndex, offsetBy: change.selection.upperBound)
         self.selection = TextSelection(range: start..<end)
+    }
+}
+
+// MARK: - The text view
+
+/// The `NSTextView` behind `MarkdownEditor`, and the two-way plumbing that used
+/// to be `TextEditor`'s job: text, selection and focus.
+///
+/// Everything set in `makeNSView` is chosen to leave the card looking and
+/// measuring exactly as it did, because the card's own rules depend on it — the
+/// preview and the source are compared on the frame the mode flips (see
+/// CLAUDE.md), and the height comes from a hidden `Text` proxy at the call site
+/// with `.padding(.horizontal, 5)`. That 5pt is `NSTextContainer`'s default
+/// `lineFragmentPadding`, which is where SwiftUI's inset came from too, so it is
+/// left alone; `textContainerInset` is zero for the same reason, since the
+/// editor's first line has always started at the very top of its frame.
+private struct MarkdownTextViewBridge: NSViewRepresentable {
+    @Binding var text: String
+    var font: NSFont
+    var onTab: (() -> Void)?
+    var onEscape: (() -> Void)?
+    @FocusState.Binding var focused: Bool
+    @Binding var selection: TextSelection?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> MarkdownTextView {
+        let view = MarkdownTextView()
+        view.delegate = context.coordinator
+
+        view.isEditable = true
+        view.isSelectable = true
+        // Markdown source: no styling to carry, and a paste should arrive as the
+        // characters it is.
+        view.isRichText = false
+        view.usesFontPanel = false
+        view.usesRuler = false
+        view.allowsUndo = true
+        // The card is the surface; the editor is a layer of text on it.
+        view.drawsBackground = false
+        view.focusRingType = .none
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 5
+        view.textContainer?.widthTracksTextView = true
+        view.isHorizontallyResizable = false
+        view.isVerticallyResizable = true
+        view.minSize = .zero
+        view.maxSize = CGSize(width: CGFloat.greatestFiniteMagnitude,
+                              height: CGFloat.greatestFiniteMagnitude)
+        view.autoresizingMask = [.width]
+
+        view.font = font
+        view.textColor = .labelColor
+
+        // Spelling — the reason this is a text view of ours at all. Set once;
+        // nothing here ever takes it away again.
+        view.isContinuousSpellCheckingEnabled = SettingsStore.shared.checkSpelling
+        // Marked, never corrected: a substitution made on the user's behalf is a
+        // write to a Markdown file that Obsidian also opens. A bare `NSTextView`
+        // arrives with all of these *on*, so each one is refused by name.
+        view.isGrammarCheckingEnabled = false
+        view.isAutomaticSpellingCorrectionEnabled = false
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.isAutomaticDashSubstitutionEnabled = false
+        view.isAutomaticTextReplacementEnabled = false
+        view.isAutomaticTextCompletionEnabled = false
+        view.isAutomaticLinkDetectionEnabled = false
+        view.isAutomaticDataDetectionEnabled = false
+
+        view.string = text
+        return view
+    }
+
+    func updateNSView(_ view: MarkdownTextView, context: Context) {
+        // The coordinator writes through this, so it has to be the current one:
+        // the closures a card passes capture that card's state.
+        context.coordinator.parent = self
+        view.onTab = onTab
+        view.onEscape = onEscape
+        view.onFocusChange = { [coordinator = context.coordinator] focused in
+            // The overrides that call this are main-actor isolated already; the
+            // closure type isn't, so say so here — the same shape the key
+            // monitors in this file use.
+            MainActor.assumeIsolated { coordinator.report(focus: focused) }
+        }
+
+        if view.font != font { view.font = font }
+        // The caret wears the accent, which is what `.tint()` gave the SwiftUI
+        // editor for free.
+        let caret = NSColor(SettingsStore.shared.accent.color)
+        if view.insertionPointColor != caret { view.insertionPointColor = caret }
+        // Followed live so the Settings toggle lands on an open card. Reading the
+        // store here doesn't register a dependency — `SpellChecking` is what
+        // actually notices a change — but it costs nothing and keeps this view
+        // right whenever it is updated for any other reason.
+        let spelling = SettingsStore.shared.checkSpelling
+        if view.isContinuousSpellCheckingEnabled != spelling {
+            view.isContinuousSpellCheckingEnabled = spelling
+        }
+
+        // Only ever write the text when it really differs: typing round-trips
+        // through the binding and comes back equal, and assigning it then would
+        // throw away the caret and the undo stack on every keystroke.
+        if view.string != text {
+            let caretLocation = view.selectedRange().location
+            view.string = text
+            let length = (view.string as NSString).length
+            view.setSelectedRange(NSRange(location: min(caretLocation, length), length: 0))
+        }
+
+        // The caret the owner asked for — entry puts it at the end of the body.
+        // A no-op in the ordinary case, since the coordinator has already written
+        // the live selection back into the binding.
+        if let wanted = Self.nsRange(of: selection, in: view.string),
+           wanted != view.selectedRange() {
+            view.setSelectedRange(wanted)
+        }
+
+        // Focus in: the owner asked, so take it. `reportsFocus` is cleared
+        // around the call because the callback would otherwise write SwiftUI
+        // state from inside a view update. Focus *out* is left to AppKit — the
+        // field that took it says so itself, and the editor is torn down anyway
+        // when the card leaves edit mode.
+        if focused, view.window?.firstResponder !== view {
+            view.reportsFocus = false
+            view.window?.makeFirstResponder(view)
+            view.reportsFocus = true
+        }
+    }
+
+    /// `TextSelection` counts in `String.Index`, a text view in UTF-16, so every
+    /// caret crosses one of these two.
+    private static func nsRange(of selection: TextSelection?, in string: String) -> NSRange? {
+        guard let selection, case .selection(let range) = selection.indices else { return nil }
+        return NSRange(range, in: string)
+    }
+
+    fileprivate static func selection(of range: NSRange, in string: String) -> TextSelection? {
+        guard let converted = Range(range, in: string) else { return nil }
+        return range.length == 0
+            ? TextSelection(insertionPoint: converted.lowerBound)
+            : TextSelection(range: converted)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MarkdownTextViewBridge
+
+        init(_ parent: MarkdownTextViewBridge) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            if parent.text != view.string { parent.text = view.string }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            parent.selection = MarkdownTextViewBridge.selection(
+                of: view.selectedRange(), in: view.string)
+        }
+
+        func report(focus: Bool) {
+            if parent.focused != focus { parent.focused = focus }
+        }
+    }
+}
+
+/// The text view itself, a subclass for exactly two jobs.
+///
+/// **The keys it gets first.** Tab, ⇧Tab and Esc are answered by the text view
+/// before SwiftUI's `onKeyPress` sees them — the wall `ProjectHashField`
+/// documents, and this is the side of it where the keys can simply be answered
+/// instead of intercepted. Return is *not* here: `MarkdownReturn` reads the first
+/// responder, so it keeps working unchanged.
+///
+/// **The focus it reports.** A `@FocusState` the owner drives has to know when
+/// the user clicks *into* the editor, so first-responder changes are handed back.
+final class MarkdownTextView: NSTextView {
+    // Plain closure types, called from overrides that are already on the main
+    // actor. Annotating them `@MainActor` would make them `@Sendable` too, which
+    // the owner's own closures are not.
+    var onTab: (() -> Void)?
+    var onEscape: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
+
+    /// Cleared around a `makeFirstResponder` we asked for ourselves, so the
+    /// callback can't write SwiftUI state from inside a view update.
+    var reportsFocus = true
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became, reportsFocus { onFocusChange?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned, reportsFocus { onFocusChange?(false) }
+        return resigned
+    }
+
+    /// Both directions call the same closure: two fields make a loop of two, so
+    /// Tab and ⇧Tab mean the same thing in a card.
+    override func insertTab(_ sender: Any?) {
+        guard let onTab else { return super.insertTab(sender) }
+        onTab()
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        guard let onTab else { return super.insertBacktab(sender) }
+        onTab()
+    }
+
+    /// Esc leaves the card. `complete(_:)` is overridden alongside
+    /// `cancelOperation(_:)` because Esc is bound to *completion* in a text view
+    /// by default — the inline word list this editor has no use for, and which
+    /// would otherwise swallow the key.
+    override func cancelOperation(_ sender: Any?) {
+        guard let onEscape else { return super.cancelOperation(sender) }
+        onEscape()
+    }
+
+    override func complete(_ sender: Any?) {
+        guard let onEscape else { return super.complete(sender) }
+        onEscape()
     }
 }
 
