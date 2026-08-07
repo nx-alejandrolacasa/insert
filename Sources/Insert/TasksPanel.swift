@@ -20,6 +20,9 @@ struct TasksPanel: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
     @Environment(SettingsStore.self) private var settings
+    /// Read so the date window ages with the day: "Today" has to mean today's
+    /// tasks after midnight, not yesterday's. See `DayClock`.
+    @Environment(DayClock.self) private var clock
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// A row whose due date or done state you change keeps the place it had, so it
@@ -39,7 +42,8 @@ struct TasksPanel: View {
             filter: appState.taskFilter,
             dateFilter: appState.taskDateFilter,
             search: appState.searchText,
-            pinned: pins
+            pinned: pins,
+            now: clock.today
         )
 
         ScrollViewReader { proxy in
@@ -323,6 +327,10 @@ private struct TaskCardView: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
     @Environment(SettingsStore.self) private var settings
+    /// Read so the due badge ages: its words and its red are both a comparison
+    /// against today, and a row on screen at midnight has nothing else to make it
+    /// re-render. See `DayClock`.
+    @Environment(DayClock.self) private var clock
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var draft: TaskItem
@@ -582,7 +590,7 @@ private struct TaskCardView: View {
             HStack(spacing: 4) {
                 Image(systemName: "calendar")
                 // Undated, the badge is an affordance, so it says what it does.
-                Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due))
+                Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due, now: clock.today))
             }
             .font(.caption.weight(isOverdue ? .semibold : .regular))
             .foregroundStyle(isOverdue ? Semantic.overdue : Stone.metaText)
@@ -605,12 +613,12 @@ private struct TaskCardView: View {
     private var dueLabel: String {
         guard let due = draft.due else { return "Set due date" }
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        let today = clock.today
         let day = cal.startOfDay(for: due)
         // `DueFormat.relative` already reads as a phrase ("Yesterday", "3 days
         // ago"), so don't put "due" in front of it — "Due 3 days ago" is clumsy
         // where "Overdue, 3 days ago" isn't.
-        let date = DueFormat.relative(due)
+        let date = DueFormat.relative(due, now: today)
         if draft.done { return date }
         if day < today { return "Overdue, \(date)" }
         return "Due \(date)"
@@ -622,8 +630,7 @@ private struct TaskCardView: View {
     /// red for it is what makes the red mean something.
     private var isOverdue: Bool {
         guard let due = draft.due, !draft.done else { return false }
-        let cal = Calendar.current
-        return cal.startOfDay(for: due) < cal.startOfDay(for: Date())
+        return Calendar.current.startOfDay(for: due) < clock.today
     }
 
     private var duePopover: some View {

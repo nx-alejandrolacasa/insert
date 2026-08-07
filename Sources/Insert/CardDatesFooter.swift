@@ -21,6 +21,10 @@ struct CardDatesFooter: View {
     let updated: Date
 
     @Environment(SettingsStore.self) private var settings
+    /// Read so "today" stays today: the compaction below is a comparison against
+    /// the current day, and without this a card left on screen overnight kept
+    /// yesterday's stamps in today's shorthand. See `DayClock`.
+    @Environment(DayClock.self) private var clock
 
     var body: some View {
         if showCreated || showUpdated {
@@ -63,7 +67,7 @@ struct CardDatesFooter: View {
     private func segment(icon: String, date: Date) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-            if let day = Self.dayPart(of: date) {
+            if let day = Self.dayPart(of: date, now: clock.today) {
                 // A plain `·` between date and time — the lists' drawn dot was
                 // tried here and read too heavy at this size (the opposite
                 // verdict from the lists' own: a bullet leads a line, a
@@ -78,8 +82,8 @@ struct CardDatesFooter: View {
     /// The date half of a stamp: `nil` for today (the time alone says it),
     /// day-and-month within the current year, the year added beyond it.
     /// `now` is injectable so the two boundaries — midnight and New Year —
-    /// are testable; call sites let it default. Pinned by
-    /// `CardDateCompactionTests`.
+    /// are testable; the view passes `DayClock`'s day, so crossing either
+    /// re-renders. Pinned by `CardDateCompactionTests`.
     static func dayPart(of date: Date, now: Date = Date()) -> String? {
         let cal = Calendar.current
         if cal.isDate(date, inSameDayAs: now) { return nil }

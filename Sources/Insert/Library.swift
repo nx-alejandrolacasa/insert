@@ -676,18 +676,21 @@ final class Library {
     /// Tasks for a project (`nil` = all), filtered by state + search.
     /// Tasks for a project (`nil` = all), filtered and sorted. `pinned` holds the
     /// place of rows whose due date or done state changed while you were looking
-    /// at them — see `TaskPins`.
+    /// at them — see `TaskPins`. `now` is the day the date window is measured
+    /// against; the column passes `DayClock`'s, so a "Today" list is still today's
+    /// after midnight rather than yesterday's.
     func tasks(
         forProject projectID: UUID?,
         filter: TaskFilter,
         dateFilter: TaskDateFilter? = nil,
         search: String,
-        pinned: TaskPins = TaskPins()
+        pinned: TaskPins = TaskPins(),
+        now: Date = Date()
     ) -> [TaskItem] {
         var result = tasks
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
         result = result.filter { task in
-            filter.matches(task) && (dateFilter?.matches(task) ?? true)
+            filter.matches(task) && (dateFilter?.matches(task, now: now) ?? true)
         }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !query.isEmpty {

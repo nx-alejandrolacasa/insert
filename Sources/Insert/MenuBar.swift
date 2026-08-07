@@ -13,11 +13,13 @@ import SwiftUI
 struct MenuBarLabel: View {
     /// Only the task list is needed to derive the badge; the label never mutates.
     @Environment(Library.self) private var library
+    /// …and the day it is bucketed against, which changes on its own. See `DayClock`.
+    @Environment(DayClock.self) private var clock
 
     var body: some View {
-        // Recomputed on every render; SwiftUI re-renders when `library.tasks`
-        // changes because `Library` is `@Observable`.
-        let sections = DateSections.make(from: library.tasks)
+        // Recomputed on every render; SwiftUI re-renders when `library.tasks` or
+        // the day changes, because both are `@Observable`.
+        let sections = DateSections.make(from: library.tasks, now: clock.today)
         let summary = sections.menuBarTitle
 
         // Show the at-a-glance summary sentence ("1 overdue · 1 today") right in
@@ -69,6 +71,7 @@ struct MenuBarLabel: View {
 struct MenuBarContent: View {
     @Environment(Library.self) private var library
     @Environment(AppState.self) private var appState
+    @Environment(DayClock.self) private var clock
     @Environment(\.openWindow) private var openWindow
 
     /// Max task rows rendered per section before collapsing the remainder into
@@ -77,7 +80,7 @@ struct MenuBarContent: View {
 
     var body: some View {
         // Single snapshot so every section below sees a consistent bucketing.
-        let sections = DateSections.make(from: library.tasks)
+        let sections = DateSections.make(from: library.tasks, now: clock.today)
 
         // Summary line: the compact TXTodo-style sentence, or an all-clear note.
         // Rendered as a disabled Button so it reads as a non-interactive header
@@ -176,7 +179,7 @@ struct MenuBarContent: View {
     /// only when the task has a date, and the project suffix only when assigned.
     private func rowTitle(_ task: TaskItem) -> String {
         var line = task.displayTitle
-        let due = DueFormat.relative(task.due)
+        let due = DueFormat.relative(task.due, now: clock.today)
         if !due.isEmpty { line += " — \(due)" }
         if let project = task.projectIDs.lazy.compactMap({ library.project(id: $0) }).first {
             line += " (\(project.name))"

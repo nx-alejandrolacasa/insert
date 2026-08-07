@@ -13,6 +13,7 @@ struct InsertApp: App {
     @State private var library = Library.shared
     @State private var appState = AppState.shared
     @State private var settings = SettingsStore.shared
+    @State private var clock = DayClock.shared
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -20,6 +21,9 @@ struct InsertApp: App {
                 .environment(library)
                 .environment(appState)
                 .environment(settings)
+                // Today, so the date labels re-render when it turns over rather
+                // than waiting for an unrelated edit to rebuild the column.
+                .environment(clock)
                 // The user's highlight colour, threaded through SwiftUI's own
                 // channel so controls that resolve the *tint* — selection
                 // fills, `.glassProminent` confirm buttons — follow the Accent
@@ -66,9 +70,11 @@ struct InsertApp: App {
             MenuBarContent()
                 .environment(library)
                 .environment(appState)
+                .environment(clock)
         } label: {
             MenuBarLabel()
                 .environment(library)
+                .environment(clock)
         }
         .menuBarExtraStyle(.menu)
 

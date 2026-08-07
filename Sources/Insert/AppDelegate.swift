@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         MarkdownReturn.install()
         TaskReminder.shared.start()
+        DayClock.shared.start()
         Self.runHousekeeping()
         Self.normalizeSidebarWidth()
 

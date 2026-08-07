@@ -100,6 +100,7 @@ Sources/Insert/
   DirectoryWatcher.swift      debounced FS watcher (external edits)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
   TaskReminder.swift          the once-a-day "N tasks for today" notification
+  DayClock.swift              today, as observable state, so date labels age
   Formatting.swift            the locale the UI presents in (English)
   SpellChecking.swift         spell checking in the cards' titles and bodies
   BuildVariant.swift          dev vs release build, and what differs
@@ -559,6 +560,37 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   refused authorization or a rejected `add` is logged and the app is otherwise
   unaffected — but if the reminder never appears, the signature is the first thing to
   rule out, ahead of the schedule.
+- **Today is observable state (`DayClock`), because nothing else tells a view the
+  day turned over.** Several labels are a comparison against *now* made while a
+  view renders — the due badge's words and the red it turns when a task is
+  genuinely overdue, the card footer's compaction of a stamp to the time alone,
+  the tasks column's Overdue / Today / Tomorrow window, and the menu bar's
+  buckets. The passage of time reaches SwiftUI through nothing, so every one of
+  them was only as fresh as the last unrelated edit: a task due yesterday still
+  read "Today" the morning after until typing in some other card rebuilt the
+  column, which is how it was reported. The functions behind those labels already
+  took an injectable `now` — it is how they're tested — so the fix is to stop
+  letting it default at the call sites and pass `clock.today` instead, which
+  registers the read.
+  Two things about the shape. It publishes a **day, not an instant**, and that is
+  what makes it cheap: every label it feeds reduces `now` to `startOfDay` anyway,
+  so publishing the minute would re-render every card on screen sixty times an
+  hour to say the same words. And it **ticks every minute and asks** whether the
+  day changed rather than being aimed at midnight — `TaskReminder`'s argument, for
+  the same three reasons (a timer aimed at a moment has to be re-aimed on wake
+  from sleep, on a timezone change and on a clock change). The assignment is
+  guarded because `@Observable` publishes on *write*, not on change, so the 1,439
+  ticks a day that aren't midnight cost one comparison and re-render nothing.
+  It also asks **on app activation and on wake from sleep**, so the minute a tick
+  is worth is never the minute someone is reading the window. It takes both, and
+  the window is not the granularity: an app switched to from another one is what
+  activation covers, and a lid opened on an already-frontmost Insert — the case
+  this was reported from — activates nothing, so the workspace's wake is what
+  covers that. Extra ticks are free by the same guard.
+  `StorageLayoutTests` pins the plumbing half — that `Library.tasks(…, now:)`
+  really hands the day on to the date filter — because that parameter has a
+  default, so dropping it compiles, and nothing on a machine that never crosses
+  midnight with the app open would say the bug was back.
 - **Return continues a list — and a quote** — in any Markdown body (note card,
   task card),
   Return on `- `, `* `, `+ `, `1. `/`1) ` or `- [ ] ` opens the next item with the

@@ -354,6 +354,51 @@ final class StorageLayoutTests: XCTestCase {
         XCTAssertEqual(order(), ["Third", "First", "Second"])
     }
 
+    /// The tasks column measures its date window against `DayClock`'s day rather
+    /// than `Date()`, so a "Today" list is still today's after midnight instead of
+    /// yesterday's. That only holds if `tasks(…)` hands `now` on to the filter, and
+    /// the parameter has a default — so dropping it compiles, changes nothing on a
+    /// machine that never crosses midnight with the app open, and silently puts the
+    /// bug back. Hence a test rather than trust.
+    @MainActor
+    func testTaskDateWindowFollowsTheDayItIsGiven() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-dayclock-\(UUID().uuidString)", isDirectory: true)
+        let tasks = root.appendingPathComponent("Tasks", isDirectory: true)
+        try fm.createDirectory(at: tasks, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+
+        for (title, due) in [("Today's", today), ("Tomorrow's", tomorrow)] {
+            let task = TaskItem(title: title, due: due)
+            try MarkdownFiles.encode(task).write(
+                to: tasks.appendingPathComponent(MarkdownFiles.taskFilename(task)),
+                atomically: true, encoding: .utf8)
+        }
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        let library = Library.shared
+        library.setRoot(root)
+
+        func titles(dueIn window: TaskDateFilter, on day: Date) -> [String] {
+            library.tasks(forProject: nil, filter: .all, dateFilter: window,
+                          search: "", now: day)
+                .map(\.title)
+        }
+
+        XCTAssertEqual(titles(dueIn: .today, on: today), ["Today's"])
+        XCTAssertEqual(titles(dueIn: .tomorrow, on: today), ["Tomorrow's"])
+
+        // Midnight: the same two tasks, one day later. Everything moves up a window.
+        XCTAssertEqual(titles(dueIn: .today, on: tomorrow), ["Tomorrow's"])
+        XCTAssertEqual(titles(dueIn: .overdue, on: tomorrow), ["Today's"])
+        XCTAssertEqual(titles(dueIn: .tomorrow, on: tomorrow), [])
+    }
+
     /// The projects sidebar is ordered by hand, and `Projects.md`'s line order *is*
     /// that order — so a drag has to come back the same after a reload. This also
     /// pins the two ends of `moveProject`'s insert-*before* rule, which is where a
