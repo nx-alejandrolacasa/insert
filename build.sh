@@ -70,17 +70,22 @@ cp "$BIN" "$APP/Contents/MacOS/${APP_NAME}"
 cp "Resources/Info.plist" "$APP/Contents/Info.plist"
 
 # The SwiftPM resource bundle — the two OFL fonts Insert bundles (see
-# BundledFonts). SwiftPM emits it beside the executable and Bundle.module looks
-# in Bundle.main.resourceURL first, so copying it into Contents/Resources is all
-# the app needs; it is not optional, since Grotesk is the default face and an
-# unregistered family silently resolves to the system font.
+# BundledFonts). SwiftPM emits it beside the executable; Contents/Resources is
+# where it belongs in an app, and BundledFonts looks there first.
+#
+# Do NOT go back to trusting `Bundle.module` for this. Its generated accessor
+# looks beside Contents/ and then at an absolute .build path on the machine that
+# compiled the binary, so a CI-built 0.12.0 trapped at launch on every other Mac
+# while every local build worked. BundledFonts finds the bundle itself now.
+#
+# A hard failure rather than a warning: Grotesk is the default face, so a bundle
+# without this is a build that looks wrong everywhere and says nothing.
 RESOURCE_BUNDLE=".build/${CONFIG}/Insert_Insert.bundle"
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
-  ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
-else
-  echo "warning: no ${RESOURCE_BUNDLE} — the bundled fonts will be missing and"
-  echo "         the Grotesk typeface will fall back to the system font."
+if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
+  echo "error: no ${RESOURCE_BUNDLE} — SwiftPM did not emit the font resources." >&2
+  exit 1
 fi
+ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
 
 # App icon.
 #
@@ -198,6 +203,20 @@ else
   echo "         macOS will re-prompt for Documents access on each rebuild."
   echo "         See README → 'Sign once, grant once' to fix this permanently."
 fi
+
+# One check on the artifact itself, rather than on the pieces that went into it.
+# 0.12.0 shipped a DMG that trapped on launch, and every step of the build had
+# reported success — so the last word is a look inside the app that is about to
+# leave the machine.
+for required in \
+  "Contents/MacOS/${APP_NAME}" \
+  "Contents/Resources/Insert_Insert.bundle/Fonts/SpaceGrotesk-Variable.ttf" \
+  "Contents/Resources/Insert_Insert.bundle/Fonts/SpaceGrotesk-OFL.txt"; do
+  if [[ ! -e "$APP/$required" ]]; then
+    echo "error: assembled app is missing ${required}" >&2
+    exit 1
+  fi
+done
 
 echo "Built ${APP}"
 

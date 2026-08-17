@@ -35,7 +35,55 @@ import SwiftUI
 /// nothing special is needed for that — CoreText's own cascade substitutes
 /// per glyph, so a Cyrillic title under Grotesk falls through to the system face
 /// a character at a time rather than switching the whole string.
+/// Nothing but a class to ask `Bundle(for:)` about, so `resources` can find the
+/// bundle this code was loaded from.
+private final class BundleMarker {}
+
 enum BundledFonts {
+    /// The SwiftPM resource bundle holding `Fonts/`, found by looking rather than
+    /// through **`Bundle.module`** — which is generated, and which *traps*.
+    ///
+    /// This is what crashed 0.12.0 on launch for everyone who installed the DMG,
+    /// and it is worth the paragraph. SwiftPM's generated accessor tries exactly two
+    /// paths: `Bundle.main.bundleURL` + `Insert_Insert.bundle` — a **sibling of
+    /// `Contents/`**, not inside `Contents/Resources` — and then an absolute
+    /// hard-coded path into the `.build` directory of *the machine that compiled it*.
+    /// Neither can be right in a shipped app: the first is a place nothing may live
+    /// (a file beside `Contents/` is unsealed and breaks the signature), and the
+    /// second existed only on the developer's own Mac. Which is exactly why it was
+    /// never seen locally — a locally built app fell through to
+    /// `/Users/…/insert/.build/…` and worked, while the CI-built app carried
+    /// `/Users/runner/work/…` and hit `Swift.fatalError` in
+    /// `applicationWillFinishLaunching`, before a window existed.
+    ///
+    /// So: our own candidates, in the order they can be right, and **`nil` rather
+    /// than a trap** when none is. A missing resource bundle is a *font* problem —
+    /// `font(family:…)` already answers `nil` and every caller falls back to a
+    /// system face — and there is no version of it that should stop the app opening
+    /// someone's notes.
+    ///
+    /// - `Bundle.main.resourceURL` — `Contents/Resources` of the assembled app,
+    ///   where `build.sh` puts it and the only correct place in a signed bundle.
+    /// - `Bundle.main.bundleURL` — beside the executable, which is what a bare
+    ///   `swift run` produces (and what `Bundle.module` looks at for an app).
+    /// - the marker's own bundle and its parent — under `swift test` the resource
+    ///   bundle sits next to `InsertPackageTests.xctest` in `.build/<triple>/debug`,
+    ///   which is neither of the above.
+    private static let resources: Bundle? = {
+        let marker = Bundle(for: BundleMarker.self)
+        let bases = [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            marker.resourceURL,
+            marker.bundleURL.deletingLastPathComponent(),
+        ]
+        for base in bases.compactMap(\.self) {
+            let url = base.appendingPathComponent("Insert_Insert.bundle")
+            if let bundle = Bundle(url: url) { return bundle }
+        }
+        return nil
+    }()
+
     /// The families, by the names CoreText publishes once the files are
     /// registered — *not* the PostScript names, which are worth a warning. The
     /// variable file's members come back as `SpaceGrotesk-Light_Regular` and
@@ -58,7 +106,7 @@ enum BundledFonts {
     static func register() -> Bool { registered }
 
     private static let registered: Bool = {
-        guard let directory = Bundle.module.url(forResource: "Fonts", withExtension: nil),
+        guard let directory = resources?.url(forResource: "Fonts", withExtension: nil),
               let files = try? FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil)
         else { return false }
@@ -72,7 +120,7 @@ enum BundledFonts {
     /// bundle rather than pasted into a Swift literal so the file shipped and
     /// the text shown can't drift apart.
     static func licence(_ name: String) -> String {
-        guard let url = Bundle.module.url(forResource: "Fonts/\(name)", withExtension: "txt"),
+        guard let url = resources?.url(forResource: "Fonts/\(name)", withExtension: "txt"),
               let text = try? String(contentsOf: url, encoding: .utf8)
         else { return "" }
         return text

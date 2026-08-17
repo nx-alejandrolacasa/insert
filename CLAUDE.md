@@ -848,11 +848,31 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   rather than a Swift literal, so the text shown and the text shipped can't
   drift), because the OFL requires the notice to travel with the fonts.
   They are a **SwiftPM resource** (`resources: [.copy("Fonts")]`) rather than a
-  folder in `Resources/` beside `Info.plist`, so `Bundle.module` finds them in
-  both the assembled app and `swift test` — which is what lets `TypefaceTests`
-  pin the registration. `build.sh` copies the generated `Insert_Insert.bundle`
-  into `Contents/Resources`; without it Grotesk silently resolves to the system
-  font, so the script warns when the bundle isn't there.
+  folder in `Resources/` beside `Info.plist`, so they exist in both the assembled
+  app and `swift test` — which is what lets `TypefaceTests` pin the registration.
+  `build.sh` copies the generated `Insert_Insert.bundle` into
+  `Contents/Resources` and now **fails** if SwiftPM didn't emit it, since Grotesk
+  is the default face and a build without it looks wrong everywhere and says
+  nothing.
+  **`Bundle.module` must not be used to find it, and this is the bug that shipped
+  a crash.** 0.12.0's DMG trapped in `applicationWillFinishLaunching` — a
+  `Swift.fatalError` inside `Bundle.module`'s initialiser, before any window — on
+  every Mac except the one that built it. The generated accessor tries exactly two
+  paths: `Bundle.main.bundleURL` + `Insert_Insert.bundle`, which is a **sibling of
+  `Contents/`** rather than anything inside `Contents/Resources`, and then an
+  **absolute hard-coded path into the `.build` directory of the compiling
+  machine**. So a locally built app worked by falling through to
+  `/Users/<author>/…/.build/…`, while the CI-built one carried
+  `/Users/runner/work/…` and died. `BundledFonts.resources` does the lookup
+  itself, in the order a candidate can be right — `Bundle.main.resourceURL` (the
+  assembled app, and the only correct place in a signed bundle), then
+  `Bundle.main.bundleURL` (a bare `swift run`), then the marker class's bundle and
+  its parent (under `swift test` the resource bundle sits beside
+  `InsertPackageTests.xctest`) — and answers **`nil` rather than trapping**, since
+  a missing font bundle is a font problem that `font(family:…)` and its callers
+  already degrade to a system face. `build.sh` also checks the *assembled* app for
+  the fonts and the licence before it says "Built", because every step of the
+  0.12.0 build reported success.
   Four things about the bundled faces are load-bearing.
   Space Grotesk ships as the **variable** file, not the four statics: the
   published statics are Light / Regular / Medium / Bold with **no SemiBold**,
