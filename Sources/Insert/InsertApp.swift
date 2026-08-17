@@ -24,15 +24,15 @@ struct InsertApp: App {
                 // Today, so the date labels re-render when it turns over rather
                 // than waiting for an unrelated edit to rebuild the column.
                 .environment(clock)
-                // The user's highlight colour, threaded through SwiftUI's own
+                // The theme's primary, threaded through SwiftUI's own
                 // channel so controls that resolve the *tint* — selection
-                // fills, `.glassProminent` confirm buttons — follow the Accent
+                // fills, `.glassProminent` confirm buttons — follow the Theme
                 // setting without naming it. Note `Color.accentColor` does
                 // NOT read this (it is the app/system accent), which is why
-                // the checkbox and the `#project` dropdown read the setting
+                // the checkbox and the `@project` dropdown read the setting
                 // directly. AppKit's focus ring stays the system accent; that
                 // one has no supported override.
-                .tint(settings.accent.color)
+                .tint(settings.theme.primary)
                 // The heavy hammer the in-app Increase Contrast needs: the
                 // high-contrast variants live inside dynamic `NSColor`
                 // providers, and SwiftUI caches resolved colours per view —

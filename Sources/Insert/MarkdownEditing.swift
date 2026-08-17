@@ -45,6 +45,12 @@ struct MarkdownEditor: View {
     /// The card's face, as AppKit's. `Card.nsFont(_:)` is the same font the
     /// call sites' proxies measure with through `Card.font(_:)`.
     var font: NSFont
+    /// The colour the source draws in, so the editor matches the preview it
+    /// replaces — `AppTheme.bodyText`, which is `labelColor` in five of the six
+    /// themes and Dracula's own body value in the sixth. Passed in rather than
+    /// read here, like `font`: the call site reads it inside a view body, so the
+    /// `@Observable` access registers and a theme change repaints an open editor.
+    var textColor: NSColor = .labelColor
     /// Tab or ⇧Tab — the owner's field traversal (a card hands focus back to
     /// its title). Without it the text view answers Tab itself, as a literal
     /// tab character, and there is no key that leaves the body.
@@ -69,6 +75,7 @@ struct MarkdownEditor: View {
         MarkdownTextViewBridge(
             text: $text,
             font: font,
+            textColor: textColor,
             onTab: onTab,
             onEscape: onEscape,
             focused: $focused,
@@ -133,6 +140,7 @@ struct MarkdownEditor: View {
 private struct MarkdownTextViewBridge: NSViewRepresentable {
     @Binding var text: String
     var font: NSFont
+    var textColor: NSColor
     var onTab: (() -> Void)?
     var onEscape: (() -> Void)?
     @FocusState.Binding var focused: Bool
@@ -166,7 +174,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         view.autoresizingMask = [.width]
 
         view.font = font
-        view.textColor = .labelColor
+        view.textColor = textColor
 
         // Spelling — the reason this is a text view of ours at all. Set once;
         // nothing here ever takes it away again.
@@ -201,9 +209,14 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         }
 
         if view.font != font { view.font = font }
-        // The caret wears the accent, which is what `.tint()` gave the SwiftUI
-        // editor for free.
-        let caret = NSColor(SettingsStore.shared.accent.color)
+        // Assigned only when it really differs, like the font and the text
+        // itself: `textColor` on an `NSTextView` rewrites the whole storage's
+        // attributes, so setting it every update would be a full re-attribution
+        // per keystroke.
+        if view.textColor != textColor { view.textColor = textColor }
+        // The caret wears the theme's primary, which is what `.tint()` gave the
+        // SwiftUI editor for free.
+        let caret = NSColor(SettingsStore.shared.theme.primary)
         if view.insertionPointColor != caret { view.insertionPointColor = caret }
         // Followed live so the Settings toggle lands on an open card. Reading the
         // store here doesn't register a dependency — `SpellChecking` is what
@@ -286,7 +299,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 /// The text view itself, a subclass for exactly two jobs.
 ///
 /// **The keys it gets first.** Tab, ⇧Tab and Esc are answered by the text view
-/// before SwiftUI's `onKeyPress` sees them — the wall `ProjectHashField`
+/// before SwiftUI's `onKeyPress` sees them — the wall `ProjectMentionField`
 /// documents, and this is the side of it where the keys can simply be answered
 /// instead of intercepted. Return is *not* here: `MarkdownReturn` reads the first
 /// responder, so it keeps working unchanged.
@@ -344,13 +357,77 @@ final class MarkdownTextView: NSTextView {
     }
 }
 
+// MARK: - Tab, from the title into the body
+
+/// Hands focus from a card's **title** to its Markdown editor, in AppKit.
+///
+/// This exists because the SwiftUI route didn't work, twice. A card's two fields
+/// are two `@FocusState<Bool>`s, and Tab out of the title clears one and sets the
+/// other; the arriving half never landed, so the caret went nowhere. Writing the
+/// pair as a pair (clear the old flag before setting the new one) didn't fix it,
+/// and neither did deferring the arriving write by a main-actor turn — both were
+/// tried against the reported symptom and both left the title focused. What is
+/// *known* is that: the key reaches the handler (Esc from the same field, through
+/// the same monitor, leaves edit mode), and the reverse direction — Tab out of the
+/// **body** — has always worked, which is the asymmetry worth reading. The body is
+/// an `NSTextView` of ours, so it reports its own first-responder changes back
+/// into `@FocusState`; the title is a plain SwiftUI `TextField` with no hook of
+/// ours. Why the write is dropped is **not** established and shouldn't be
+/// repeated as fact.
+///
+/// So the handoff is made where focus actually lives. It is the same conclusion
+/// this file already reached for Return, Tab-in-the-body and Esc, and the same one
+/// `SpellChecking` and the window title reached: when SwiftUI won't say it, say it
+/// to AppKit. The owner's `@FocusState` still ends up correct, because
+/// `MarkdownTextView.becomeFirstResponder()` reports the change back out.
+///
+/// Finding the right editor is a **walk up from the current first responder**,
+/// stopping at the first ancestor that contains **exactly one** editor — that
+/// ancestor is the card. The count is the safety: a note card and a task card can
+/// both be open at once, and an ancestor holding several editors means the walk
+/// has gone past the card, so it stops rather than guessing. No match is a no-op
+/// and the caller falls back to the `@FocusState` route, which is the discipline
+/// `AppDelegate.flattenToolbarGlass()` follows for the same kind of reach.
+@MainActor
+enum CardFocus {
+    /// Focuses the Markdown editor sharing a card with whatever is focused now.
+    /// Returns `false` if there is nothing unambiguous to focus.
+    @discardableResult
+    static func moveToEditorBesideCurrentField() -> Bool {
+        guard let window = NSApp.keyWindow else { return false }
+        // A focused `TextField` makes the window's shared **field editor** first
+        // responder, not the field; the field is the editor's delegate, and it is
+        // the one actually in the view hierarchy.
+        var start = window.firstResponder as? NSView
+        if let fieldEditor = start as? NSTextView, fieldEditor.isFieldEditor {
+            start = fieldEditor.delegate as? NSView ?? fieldEditor.superview
+        }
+        var node = start
+        while let current = node {
+            let editors = editors(in: current)
+            if editors.count == 1 {
+                return window.makeFirstResponder(editors[0])
+            }
+            // More than one means this is the column, not the card.
+            if editors.count > 1 { return false }
+            node = current.superview
+        }
+        return false
+    }
+
+    private static func editors(in view: NSView) -> [MarkdownTextView] {
+        if let editor = view as? MarkdownTextView { return [editor] }
+        return view.subviews.flatMap { editors(in: $0) }
+    }
+}
+
 // MARK: - Return in a list
 
 /// Continues a Markdown list when Return is pressed in a note or task body.
 ///
 /// **One app-wide key-down monitor**, driven by the **first responder** — not one
 /// monitor per editor reading SwiftUI's `@FocusState` and `TextSelection`
-/// bindings, which is how it was written first (copying `ProjectHashField`).
+/// bindings, which is how it was written first (copying `ProjectMentionField`).
 /// Whether that version worked was never actually established: it was replaced
 /// while chasing a report of "nothing happens", which turned out to be Return
 /// pressed on lines that weren't list items. So treat "the bindings can't be
@@ -369,8 +446,8 @@ final class MarkdownTextView: NSTextView {
 ///
 /// **Field editors are skipped**, and that's the line between a multiline
 /// Markdown body and a single-line field where Return means submit — the note
-/// title and the `#project` field are the latter and keep their own behaviour
-/// (`ProjectHashField` has its own monitor for exactly that).
+/// title and the `@project` field are the latter and keep their own behaviour
+/// (`ProjectMentionField` has its own monitor for exactly that).
 @MainActor
 enum MarkdownReturn {
     private static var monitor: Any?

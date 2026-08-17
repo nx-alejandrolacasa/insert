@@ -48,18 +48,23 @@ struct TasksPanel: View {
 
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                header(appState: appState)
-                    .padding(.horizontal, Metrics.panelPadding)
-                    .padding(.top, Metrics.panelPadding)
-                    .padding(.bottom, 8)
-
-                // A segmented track mirroring the notes column's type filter,
-                // so both columns present their filters identically.
-                filterRow
-                    .padding(.horizontal, Metrics.panelPadding)
-                    // Same gap as the notes column, so both headers sit at an
-                    // identical distance from their first row of content.
-                    .padding(.bottom, Metrics.headerGap)
+                // The same band the notes column wears, with the state track
+                // and the date dropdown as its second row — the two columns
+                // present their headers identically, and now share a surface.
+                ColumnHeaderBand(
+                    title: "Tasks",
+                    count: tasks.count,
+                    primaryTitle: "New Task",
+                    primarySymbol: "plus",
+                    primaryHelp: "Create a new task",
+                    // Route through the same notification ⌘T / the menu posts,
+                    // so the local button and the global command open-and-focus
+                    // identically.
+                    primaryAction: {
+                        NotificationCenter.default.post(name: .newTask, object: nil)
+                    },
+                    filters: { filterRow }
+                )
 
                 if tasks.isEmpty {
                     emptyState
@@ -75,6 +80,11 @@ struct TasksPanel: View {
                                 .id(task.id)
                             }
                         }
+                        // Inside the scroller, and the same gap the notes column
+                        // uses, so the two bands sit an identical distance from
+                        // their first row — see `NotesPanel` for why it moved in
+                        // here.
+                        .padding(.top, Metrics.headerGap)
                         .padding(.horizontal, Metrics.panelPadding)
                         .padding(.bottom, Metrics.panelPadding)
                     }
@@ -116,33 +126,6 @@ struct TasksPanel: View {
             withAnimation(motionReduced ? nil : .easeInOut(duration: 0.25)) {
                 proxy.scrollTo(task.id, anchor: .top)
             }
-        }
-    }
-
-    // MARK: - Header
-
-    @ViewBuilder
-    private func header(appState: AppState) -> some View {
-        HStack(spacing: 10) {
-            Text("Tasks")
-                .font(.title2.weight(.bold))
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-
-            Button {
-                // Route through the same notification ⌘⇧N / the menu posts, so
-                // the local button and the global command open-and-focus
-                // identically.
-                NotificationCenter.default.post(name: .newTask, object: nil)
-            } label: {
-                Label("New Task", systemImage: "plus").fontWeight(.semibold)
-            }
-            // The accent pill, twinned with "New Note" — these two are one
-            // control in two columns; they change together or not at all.
-            .buttonStyle(.accentCapsule)
-            .controlSize(.large)
-            .help("Create a new task")
         }
     }
 
@@ -195,13 +178,27 @@ struct TasksPanel: View {
     }
 
     /// The date axis as a pill dropdown outside the track. Neutral at rest —
-    /// "All time" is the axis switched off — and accent-filled while a window
+    /// "All time" is the axis switched off — and primary-filled while a window
     /// is active, since a live filter is a selected state and selection is the
-    /// accent's job. The orange/green/purple it used to wear went with the
+    /// primary's job. The orange/green/purple it used to wear went with the
     /// rest of the metadata colour (CLAUDE.md decision 4): the rows it
     /// selects are grey now too, so the pair still tell the same story.
+    ///
+    /// At rest it is the **band's own track fill** — the same value the segmented
+    /// control beside it is painted in — and no hairline. It wore `Stone.chip`
+    /// and a `Stone.line` border first, on the theory that a translucent warm
+    /// wash would pick up whatever band it sat on; it doesn't, quite. A grey wash
+    /// over a violet band is a grey pill, so the two controls on one filter row
+    /// read as different materials, which the border then underlined. Sharing
+    /// `trackFill` is the cheaper and more honest fix: they are two halves of one
+    /// row, the fill is already solved against this band, and the chevron is what
+    /// says the right-hand one is pressable. The **label** can't be `.primary`
+    /// either — that resolves against the appearance, not against the surface,
+    /// where the plan's rule is to verify against what is actually painted — so it
+    /// is the band's heading colour, solved on this exact fill.
     private var dateMenu: some View {
         let active = appState.taskDateFilter != nil
+        let band = settings.theme.band
         return Menu {
             // Plain buttons rather than a `Picker`, matching `typeMenu`: the
             // pill itself says which window is current.
@@ -216,23 +213,16 @@ struct TasksPanel: View {
                     .font(.system(size: 8, weight: .bold))
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(active
-                ? AnyShapeStyle(settings.accent.foreground)
-                : AnyShapeStyle(.primary))
+            .foregroundStyle(active ? settings.theme.primaryLabel : band.text)
             .lineLimit(1)
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
             .chipHeight()
             .background(
                 Capsule().fill(active
-                    ? AnyShapeStyle(settings.accent.color)
-                    : AnyShapeStyle(Stone.chip))
+                    ? AnyShapeStyle(settings.theme.primary)
+                    : AnyShapeStyle(band.trackFill))
             )
-            .overlay {
-                if !active {
-                    Capsule().strokeBorder(Stone.line, lineWidth: 0.5)
-                }
-            }
             .contentShape(Capsule())
         }
         // See `AddProjectMenu`: `.button` + plain keeps the label as drawn,
@@ -308,7 +298,7 @@ struct TasksPanel: View {
 ///   unfold the full (rendered) notes in place. The whole row is a tap target
 ///   that opens it for editing.
 /// - **Edit mode** (the task is selected via `AppState.selectedTaskID`): the
-///   title becomes a `#project` field, the notes become a Markdown editor with
+///   title becomes a `@project` field, the notes become a Markdown editor with
 ///   a "Notes…" placeholder, and the assignment chips grow a ＋.
 ///
 /// Like `NoteCardView` it owns a mutable `draft` so typing is instant, and
@@ -419,7 +409,7 @@ private struct TaskCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 // The ⋯ menu rides the title row, as it does on a note card.
                 titleRow
-                    // The title's `#project` dropdown drops over the notes
+                    // The title's `@project` dropdown drops over the notes
                     // editor below; without this the editor — a later sibling —
                     // would sit on top of it and take its clicks.
                     .zIndex(1)
@@ -475,13 +465,14 @@ private struct TaskCardView: View {
         // whatever box each of them brings.
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             if isEditing {
-                // `#project` tags a project and is stripped from the title,
+                // `@project` tags a project and is stripped from the title,
                 // same as in the composer.
-                ProjectHashField(
-                    placeholder: "Task  (type # to tag a project)",
+                ProjectMentionField(
+                    placeholder: "Task  (type @ to tag a project)",
                     text: $draft.title,
                     assigned: $draft.projectIDs,
                     font: Card.font(.body, weight: .medium),
+                    color: settings.theme.titleText,
                     // Return commits the quick-capture flow: type, Return, done.
                     onSubmit: { exitEdit() },
                     onEscape: { exitEdit() },
@@ -497,7 +488,10 @@ private struct TaskCardView: View {
             } else {
                 Text(draft.title.isEmpty ? "Untitled" : draft.title)
                     .font(Card.font(.body, weight: .medium))
-                    .foregroundStyle(draft.done ? Color.secondary : Color.primary)
+                    // Done stays `.secondary` — a finished task is quieter than
+                    // the theme's title colour by design, and that is a state
+                    // rather than a palette.
+                    .foregroundStyle(draft.done ? Color.secondary : settings.theme.titleText)
                     .strikethrough(draft.done)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -522,11 +516,11 @@ private struct TaskCardView: View {
                 .font(.title2)
                 // Padded out to a comfortable target; the glyph keeps its size.
                 .frame(width: 28, height: 28)
-                // The Accent *setting*, not `Color.accentColor`: that reads
+                // The theme's primary, not `Color.accentColor`: that reads
                 // the app/system accent and ignores the `.tint()` the
                 // preference threads through, which left the tick system blue
                 // whatever the user chose.
-                .foregroundStyle(draft.done ? settings.accent.color : Color.secondary)
+                .foregroundStyle(draft.done ? settings.theme.primary : Color.secondary)
                 .contentShape(Rectangle())
         }
         .centredOnTextCap()
@@ -593,11 +587,15 @@ private struct TaskCardView: View {
                 Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due, now: clock.today))
             }
             .font(.caption.weight(isOverdue ? .semibold : .regular))
-            .foregroundStyle(isOverdue ? Semantic.overdue : Stone.metaText)
+            .foregroundStyle(isOverdue ? Semantic.overdue : settings.theme.metaText)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .chipHeight()
-            .background(Capsule().fill(Color.secondary.opacity(0.14)))
+            // `Stone.chip`, the same wash the project chips beside it wear, so a
+            // card's capsules are one material. It was `.secondary.opacity(0.14)`
+            // — near the same strength, but a cool system alpha next to the warm
+            // `Stone` neutral, and with no Increase Contrast step of its own.
+            .background(Capsule().fill(Stone.chip))
         }
         .buttonStyle(.plain)
         .help("Set due date")
@@ -777,6 +775,9 @@ private struct TaskCardView: View {
                 expandLabel: "Expand notes",
                 collapseLabel: "Collapse notes"
             )
+            // The note card's rule, on the other card: `labelColor` unless the
+            // theme names a body colour (`AppTheme.bodyText`).
+            .foregroundStyle(settings.theme.bodyText)
         }
     }
 
@@ -804,6 +805,7 @@ private struct TaskCardView: View {
             MarkdownEditor(
                 text: $draft.body,
                 font: Card.nsFont(.callout),
+                textColor: NSColor(settings.theme.bodyText),
                 onTab: { focusTitle() },
                 // Esc leaves the editor, matching the title field. A hook rather
                 // than `.onKeyPress`: the editor is an `NSTextView` and answers
@@ -861,6 +863,9 @@ private struct TaskCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
+                // The note card's ⋯ wears the same value, for the reason given
+                // there.
+                .foregroundStyle(settings.theme.metaText)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -904,14 +909,19 @@ private struct TaskCardView: View {
         }
     }
 
-    /// Tab traversal between the row's two fields — the note card's helpers,
-    /// including why these skip `focusForEntry()`'s one-turn delay.
-    private func focusTitle() { titleFocused = true }
+    /// Tab traversal, the note card's twin — body → title through `@FocusState`,
+    /// title → body through `CardFocus`, because that direction's focus write is
+    /// dropped. These two change together or not at all; the reasoning is on
+    /// `CardFocus` and on `NoteCardView`'s pair.
+    private func focusTitle() {
+        bodyFocused = false
+        titleFocused = true
+    }
 
     private func focusBody() {
-        // Alongside a programmatic focus is the one place the selection may be
-        // written; end of the text, same as entry.
         bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        if CardFocus.moveToEditorBesideCurrentField() { return }
+        titleFocused = false
         bodyFocused = true
     }
 

@@ -68,9 +68,9 @@ struct ProjectsSidebar: View {
                 }
             }
             .listStyle(.sidebar)
-            // The column's frosting is applied below, over the window's
-            // backdrop; without this the List paints its own opaque sidebar
-            // background on top of it and the gradient stops at the divider.
+            // The frosting belongs to the split view's sidebar column, not to
+            // this `List`, which paints its own opaque background on top of it
+            // and stops the material at the divider.
             .scrollContentBackground(.hidden)
             // ↑/↓ walk the same list the rows show, so keyboard and mouse agree
             // even while a search is filtering it.
@@ -89,33 +89,36 @@ struct ProjectsSidebar: View {
         // traffic lights rather than in a band below them. `header` insets
         // itself past the lights.
         .ignoresSafeArea(.container, edges: .top)
-        // The tint's stronger cut, painted over the window's base wash — the
-        // sidebar is where a flat tint actually reads (CLAUDE.md decision 1).
-        // A fill, not the Liquid Glass the gradients wore: glass earned its
-        // place by refracting a gradient's travel, and a flat colour has none
-        // to refract. With "Plain" there's nothing of ours to paint, so this
-        // drops out entirely and AppKit's own sidebar material (and its desktop
-        // translucency) is left alone.
+        // The sidebar is **transparent to the desktop, and carries no colour of
+        // its own** — see `SidebarVibrancy`, which is the whole of it, and note
+        // that its other half is in `RootView`: nothing of ours may be painted
+        // behind this column, or there is nothing to see through it.
         //
-        // The `if` lives *inside* the background builder on purpose. Branching
-        // around the column itself would give the `List` a new identity every time
-        // the setting changed, which tears down the split view's autosaved widths
-        // — the same trap `Backdrop.windowStyle` documents. Here only the
-        // background layer is rebuilt.
-        .background {
-            if let sidebarTint = settings.backdrop.sidebarColor {
-                // `.ignoresSafeArea()` is the whole reason this reads as one
-                // column. The sidebar's content already ignores the top safe area
-                // so the header can sit level with the traffic lights, but the
-                // *background* layer doesn't inherit that: left alone it starts
-                // below the toolbar's inset, and the titlebar band above it ends
-                // up one layer short. The join showed as a hard horizontal seam
-                // right under the traffic lights — which reads as two stacked
-                // panels, not as a sidebar.
-                sidebarTint
-                    .ignoresSafeArea()
-            }
-        }
+        // It briefly wore a translucent wash of the band's colour, which was the
+        // wrong idea twice over and is worth recording so it isn't proposed again.
+        // It made the sidebar a *painted* surface, when what the column wants is
+        // to be a pane you can see through; and a colour layer over a vibrancy
+        // material subtracts from that material one for one, so the tint and the
+        // transparency were fighting each other for the same pixels — at the 40%
+        // it started on, the sidebar read as flat tinted paint. There is no wash
+        // here now, and adding one back means giving up the effect. The
+        // `.withinWindow` pass that followed the wash was the same mistake with
+        // the paint moved one layer down; it is gone too.
+        //
+        // No `if` and nothing theme-dependent in this layer either, which also
+        // sidesteps the trap the old tint layer had to document: a conditional
+        // around the column gives the `List` a new identity whenever the setting
+        // changes and takes the split view's autosaved widths down with it.
+        // Anything conditional added later belongs *inside* a `.background { }`
+        // builder, never around the column.
+        //
+        // If a background layer is ever added back here, `.ignoresSafeArea()` on
+        // it is load-bearing and easy to lose: a background layer does **not**
+        // inherit the content's `.ignoresSafeArea(.container, edges: .top)` above,
+        // so without it the layer starts below the toolbar inset and leaves the
+        // titlebar band one layer short — a hard seam right under the traffic
+        // lights, reading as two stacked panels rather than one column.
+        .background { SidebarVibrancy() }
         // The "New Project" menu command (⌘N) posts this; open the same flow.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
             showingAdd = true
@@ -184,15 +187,21 @@ struct ProjectsSidebar: View {
             }
 
             // The heading proper, aligned with the rows it introduces. The top
-            // inset matches the notes/tasks panels' own `panelPadding`, so all
-            // three column titles share one baseline.
+            // inset matches the notes/tasks bands' own `bandTopPadding`, and the
+            // face is the same `Card` face their headings use, so all three
+            // column titles share one baseline — a different face at the same
+            // size has a different ascender, which would drift them apart by a
+            // point or two. This is the only place the typeface setting reaches
+            // the sidebar, and it is here for the alignment, not for the theme:
+            // the sidebar is otherwise untouched.
             Text("Projects")
-                .font(.title2.weight(.bold))
+                .font(Card.font(.title2, weight: .bold))
                 .padding(.leading, Metrics.sidebarTextInset)
-                .padding(.top, Metrics.panelPadding)
-                // Same 8pt gap the notes/tasks headers leave below their titles,
-                // so the three columns breathe identically.
-                .padding(.bottom, 8)
+                .padding(.top, Metrics.bandTopPadding)
+                // The same gap the notes/tasks bands leave between their heading
+                // and their filter rows, so the three columns breathe
+                // identically.
+                .padding(.bottom, Metrics.bandRowGap)
         }
         .padding(.trailing, Metrics.panelPadding)
     }
@@ -485,8 +494,14 @@ struct ProjectsSidebar: View {
         HStack(spacing: 10) {
             leading()
             VStack(alignment: .leading, spacing: 1) {
+                // The chosen face, like the "Projects" heading above and the two
+                // column headings across the window: a project *name* is content
+                // the user typed, not chrome, so it reads in the face the rest of
+                // their writing does. The `X notes · Y tasks` line under it stays
+                // on the system font — that one is a count Insert derived, not
+                // something anybody wrote.
                 Text(title)
-                    .font(.body)
+                    .font(Card.font(.body))
                     .lineLimit(1)
                 Text(subtitle)
                     .font(.caption)
@@ -808,5 +823,114 @@ private struct ProjectEditorPopover: View {
     private func commit() {
         guard !trimmedName.isEmpty else { return }
         onConfirm(trimmedName, symbol, tint)
+    }
+}
+
+// MARK: - Sidebar vibrancy
+
+/// Makes the sidebar **actually transparent** — the desktop behind the window
+/// shows through it, the way it does through a Finder sidebar.
+///
+/// This reverses the `.withinWindow` pass that came before it, and the reversal is
+/// the point rather than a tuning step, so here is the whole of it.
+/// `.withinWindow` samples the *window's own content* instead of the desktop, and
+/// on paper that is what a themed app wants — the colours Insert paints showing
+/// through its own panel. In this window it samples **nothing**: a
+/// `NavigationSplitView` lays the sidebar out as a **column**, so the notes and
+/// tasks columns are beside it and never under it, and the only thing behind the
+/// sidebar was the window's own page ground — one flat colour. A pane you can see
+/// one uniform colour through is indistinguishable from a slab painted that
+/// colour, which is exactly how it read. (macOS 26 adds no way to float the
+/// sidebar over the detail either; `NSSplitViewItem` gained safe-area and
+/// accessory API in Tahoe and nothing that overlaps the columns.)
+///
+/// So `blendingMode` is **`.behindWindow`**, the stock value, and the honesty of
+/// it is that there is now something real behind the panel to see. What that
+/// costs, and it is a genuine cost: nothing Insert draws can ever appear in the
+/// sidebar, whatever the material — a `.behindWindow` view samples the desktop and
+/// only the desktop — so the column no longer follows the theme's page ground. It
+/// is the system's frost over whatever is behind the window.
+///
+/// **The mode alone is not enough, and the other half lives in `RootView`.** An
+/// opaque window has nothing behind it to sample. The page ground is painted on
+/// the *detail* side only rather than as a `containerBackground` across the whole
+/// window, and `WindowProbe` clears the window's own background — see both call
+/// sites, which are load-bearing for this file and easy to undo separately.
+///
+/// `alphaValue` is **gone**, and its absence is deliberate. It was the lever while
+/// the material sat over the app's own colour: an `NSVisualEffectView` has no
+/// opacity of its own, so dropping the view's alpha was what blended the material
+/// with the content behind. Over the desktop it does the opposite of what it looks
+/// like — it lets the window's backing show through the frost and mixes a second
+/// surface into the blur, which mostly reads as the material getting weaker and
+/// dirtier. The material's own translucency is the transparency now.
+///
+/// This is the third of the three places in Insert that reach past the public API,
+/// and for the same kind of reason as the first
+/// (`AppDelegate.flattenToolbarGlass()`): the material belongs to
+/// `NavigationSplitView`'s sidebar column, which is AppKit's view and not ours,
+/// and SwiftUI exposes no way to reach the property. A zero-size probe in the
+/// sidebar's `.background` walks **up** to the enclosing effect view and sets one.
+///
+/// Deliberately minimal past that one, because every extra property is a way to
+/// break something the system is getting right:
+///
+/// - `material` is left alone. The stock `.sidebar` is the right material, and it
+///   always was. (An earlier pass set `.underWindowBackground` on the theory that
+///   the material was what stood between us and the desktop showing through; it
+///   was the blending mode both times, in one direction and then the other.)
+/// - `state` stays `followsWindowActiveState`, because the window is *meant* to
+///   settle down when it goes inactive — see "No shadows" in CLAUDE.md, where that
+///   flat inactive look is the one the whole design is tuned for. Forcing
+///   `.active` would keep the sidebar lit in a window that had otherwise gone
+///   quiet.
+/// - It walks **up**, so it can only ever find the effect view this sidebar is
+///   inside. A downward search from the window would also find the titlebar's, and
+///   the Settings window has a sidebar material of its own that nothing here
+///   should touch.
+/// - If no effect view is found the whole thing is a no-op: the sidebar keeps the
+///   stock look. It degrades to "not as transparent as asked for", never to a
+///   broken sidebar.
+///
+/// **Reduce Transparency needs nothing by hand any more**, which is the one
+/// simplification that came free: `NSVisualEffectView` opaques its own material
+/// for that setting, and with no `alphaValue` of ours layered on top there is
+/// nothing left for the system's switch to miss. The in-app switch rides along
+/// through `AccessibilityOverride`'s effect on the appearance rather than through
+/// a property here.
+private struct SidebarVibrancy: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // Re-applied on every update, not just on insertion: AppKit rebuilds the
+        // split view's columns (a divider drag, a collapse and reopen), and a
+        // rebuilt effect view comes back configured for a window that paints its
+        // own background.
+        (nsView as? Probe)?.apply()
+    }
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        func apply() {
+            var candidate = superview
+            while let view = candidate {
+                if let effect = view as? NSVisualEffectView {
+                    // Guarded: assigning re-invalidates the effect, and this runs
+                    // on every view update.
+                    if effect.blendingMode != .behindWindow {
+                        effect.blendingMode = .behindWindow
+                    }
+                    if effect.alphaValue != 1 {
+                        effect.alphaValue = 1
+                    }
+                    return
+                }
+                candidate = view.superview
+            }
+        }
     }
 }

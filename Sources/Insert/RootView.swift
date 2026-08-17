@@ -10,7 +10,7 @@ struct RootView: View {
     @Environment(Library.self) private var library
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Read for the backdrop alone.
+    /// Read for the theme's window surface and for Reduce Motion.
     @Environment(SettingsStore.self) private var settings
 
     @State private var keyMonitor: Any?
@@ -51,27 +51,7 @@ struct RootView: View {
                 // duplicate system one.
                 .toolbar(removing: .sidebarToggle)
         } detail: {
-            // No separator lines anywhere: the columns are told apart by their
-            // headers and the glass islands inside them, not by rules. The
-            // boundary between them is still draggable — a hover-revealed
-            // handle floats over it.
-            GeometryReader { geo in
-                let notesWidth = notesWidth(in: geo.size.width)
-                HStack(spacing: 0) {
-                    NotesPanel()
-                        .frame(width: notesWidth)
-                    TasksPanel()
-                        .frame(maxWidth: .infinity)
-                }
-                .overlay(alignment: .leading) {
-                    ColumnDivider(
-                        fraction: $notesSplit,
-                        notesWidth: notesWidth,
-                        totalWidth: geo.size.width
-                    )
-                    .offset(x: notesWidth - ColumnDivider.hitWidth / 2)
-                }
-            }
+            columns
             .toolbar {
                 // Only "show" lives out here; the sidebar carries its own "hide"
                 // button once it's open (Safari's arrangement). It stays in the
@@ -150,13 +130,6 @@ struct RootView: View {
             .navigationTitle(navigationTitle)
         }
         .navigationSplitViewStyle(.balanced)
-        // The chosen tint, painted behind the whole window — under the
-        // sidebar as well as the two panels, and up under the (background-less)
-        // toolbar, so it's one uninterrupted wash. Applied unconditionally:
-        // "Plain" resolves to `.windowBackground`, which is what the window
-        // would have drawn anyway. See `Backdrop.windowStyle` for why this
-        // isn't an `if`.
-        .containerBackground(settings.backdrop.windowStyle, for: .window)
         // Let the sidebar's material run the full height of the window instead
         // of starting below a title-bar strip: drop the toolbar's background
         // and make the title bar itself transparent (see WindowConfigurator),
@@ -172,6 +145,51 @@ struct RootView: View {
         .onChange(of: appState.sidebarVisible) { _, visible in
             syncShowButton(sidebarVisible: visible)
         }
+    }
+
+    /// The two detail columns and the page they sit on. Split out of `body`
+    /// rather than written inline because the type-checker gave up on the whole
+    /// expression once the page ground moved in here.
+    private var columns: some View {
+        // No separator lines anywhere: the columns are told apart by their
+        // headers and the islands inside them, not by rules. The boundary
+        // between them is still draggable — a hover-revealed handle floats over
+        // it.
+        GeometryReader { geo in
+            let notesWidth = notesWidth(in: geo.size.width)
+            HStack(spacing: 0) {
+                NotesPanel()
+                    .frame(width: notesWidth)
+                TasksPanel()
+                    .frame(maxWidth: .infinity)
+            }
+            .overlay(alignment: .leading) {
+                ColumnDivider(
+                    fraction: $notesSplit,
+                    notesWidth: notesWidth,
+                    totalWidth: geo.size.width
+                )
+                .offset(x: notesWidth - ColumnDivider.hitWidth / 2)
+            }
+        }
+        // The theme's **page ground** (see `AppTheme`), and it is painted here —
+        // on the detail side — rather than as a `containerBackground` across the
+        // whole window, which is what it was until the sidebar was made properly
+        // transparent. A window-wide background sits *behind the sidebar too*,
+        // and a `.behindWindow` material with the app's own opaque paint
+        // underneath it has nothing to show: see `SidebarVibrancy`. So the page
+        // stops at the columns that are made of pages, and the sidebar is left
+        // with the desktop behind it.
+        //
+        // `ignoresSafeArea` because the toolbar is transparent and the ground has
+        // to run up under it, which the container background did for free.
+        //
+        // Applied **unconditionally** — no `if` on the theme. Branching here
+        // would give the two cases different identities and tear down
+        // `NavigationSplitView`, and with it the autosaved column widths, on
+        // every change of the picker. Every theme brings a page ground, so there
+        // is no unthemed case left to branch on.
+        .background(settings.theme.windowFill.ignoresSafeArea())
     }
 
     /// The notes column's width for the stored split, with both columns held
@@ -331,7 +349,7 @@ private struct ColumnDivider: View {
                 Capsule()
                     .fill(Stone.surface)
                     // Fill plus hairline, no drop shadow: the window is shadowless
-                    // throughout (see the `#project` dropdown), and a 5pt capsule
+                    // throughout (see the `@project` dropdown), and a 5pt capsule
                     // that only appears under the pointer doesn't need lifting to
                     // be found.
                     .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
@@ -413,6 +431,16 @@ private final class WindowProbe: NSView {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
+        // The sidebar is transparent to the *desktop* (`SidebarVibrancy`), and a
+        // window that fills itself with an opaque colour first leaves its
+        // `.behindWindow` material nothing to sample. So the window paints
+        // nothing of its own: every region of it is covered by something that
+        // does — the detail's page ground on one side, the sidebar's material on
+        // the other — and where the sidebar is, what's underneath is the desktop.
+        // Both lines are needed; `isOpaque` alone still fills with
+        // `backgroundColor`.
+        window.isOpaque = false
+        window.backgroundColor = .clear
         // Note: *don't* touch `titleVisibility`. SwiftUI drives it from
         // `navigationTitle`, and forcing `.hidden` here (after the first layout)
         // left the toolbar with no title and the search field stretched across

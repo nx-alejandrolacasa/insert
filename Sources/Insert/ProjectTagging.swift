@@ -1,32 +1,48 @@
 import SwiftUI
 
-/// Shared `#project` tagging surfaces, used by both the task composer and the
+/// Shared `@project` tagging surfaces, used by both the task composer and the
 /// note card so tagging works and *reads* identically on either side of the
 /// window.
 
-// MARK: - Hash field
+// MARK: - Mention field
 
-/// A text field with inline `#project` autocomplete.
+/// A text field with inline `@project` autocomplete.
 ///
-/// Typing `#` opens a dropdown of projects (filtered as you keep typing): Tab
+/// Typing `@` opens a dropdown of projects (filtered as you keep typing): Tab
 /// takes the first match, Return the highlighted one, ↑/↓ move the highlight and
 /// Esc closes the list. Accepting a match appends the project to `assigned` and
-/// strips the `#token` from the text — the tag is only ever a command, never
+/// strips the `@token` from the text — the tag is only ever a command, never
 /// part of the title.
+///
+/// **The trigger was `#` and is now `@`**, which is a rename of one character and
+/// two placeholders — but it is the better character for the job on two counts.
+/// `#` is Markdown's heading marker, and these fields sit directly above a
+/// Markdown editor, so the same keystroke meant "tag a project" in the title and
+/// "make this a heading" one field down. And `@` is what mentioning something by
+/// name means everywhere else, where `#` is a topic or a tag. Nothing on disk
+/// carries either character — the token never survives the accept — so there is
+/// no migration and no old note to reinterpret.
 ///
 /// The keys are intercepted with a **local `NSEvent` monitor**, not `onKeyPress`:
 /// on macOS the field editor consumes Tab/Return/arrows/Esc before SwiftUI's
 /// key-press handlers see them, so `onKeyPress` versions of these never fired —
-/// Tab moved focus and Return submitted the raw `#token` as part of the title.
+/// Tab moved focus and Return submitted the raw `@token` as part of the title.
+/// (`@` itself needs no interception: it is an ordinary character, and the
+/// dropdown opens off the text rather than off the keystroke.)
 /// The monitor sees the event before the window dispatches it, handles it only
 /// while *this* field is focused, and passes everything else through, so
 /// Return/Tab keep their normal meaning the rest of the time; the owner supplies
 /// that meaning via `onSubmit` / `onEscape`.
-struct ProjectHashField: View {
+struct ProjectMentionField: View {
     let placeholder: String
     @Binding var text: String
     @Binding var assigned: [UUID]
     var font: Font = .body
+    /// What the typed text draws in — a card passes `AppTheme.titleText`, so the
+    /// title reads the same colour whether the card is open or closed. Defaults
+    /// to the system label colour, which is what five of the six themes resolve
+    /// to anyway.
+    var color: Color = Color(nsColor: .labelColor)
     /// Return with the dropdown closed.
     var onSubmit: () -> Void = {}
     /// Esc with the dropdown closed.
@@ -62,6 +78,7 @@ struct ProjectHashField: View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.plain)
             .font(font)
+            .foregroundStyle(color)
             .focused($focused)
             .background(
                 // Measure the field so the dropdown sits right beneath it
@@ -80,7 +97,7 @@ struct ProjectHashField: View {
             .onAppear { installKeyMonitor() }
             .onDisappear { removeKeyMonitor() }
             // Backstop for a Return the monitor didn't see: accept rather than
-            // let a `#token` leak into the submitted title.
+            // let a `@token` leak into the submitted title.
             .onSubmit {
                 if dropdownVisible {
                     acceptMatch(at: highlightedIndex)
@@ -159,16 +176,19 @@ struct ProjectHashField: View {
 
     // MARK: Matching
 
-    /// The `#`-token currently being typed, without the leading `#`, or `nil`
-    /// when the trailing token isn't a project command.
-    private var hashQuery: String? {
+    /// The `@`-token currently being typed, without the leading `@`, or `nil`
+    /// when the trailing token isn't a project mention.
+    private var mentionQuery: String? {
         let token = text[tokenStartIndex...]
-        guard token.hasPrefix("#") else { return nil }
+        guard token.hasPrefix(Self.trigger) else { return nil }
         return String(token.dropFirst())
     }
 
+    /// The one character the whole feature turns on, spelled once.
+    private static let trigger = "@"
+
     /// Start of the trailing whitespace-delimited token (used to read and strip
-    /// the `#command`).
+    /// the `@token`).
     private var tokenStartIndex: String.Index {
         if let lastBreak = text.lastIndex(where: { $0 == " " || $0 == "\n" }) {
             return text.index(after: lastBreak)
@@ -176,17 +196,25 @@ struct ProjectHashField: View {
         return text.startIndex
     }
 
-    /// Projects matching the current `#query` (all projects for a bare `#`),
+    /// Projects matching the current `@query` (all projects for a bare `@`),
     /// excluding those already assigned so the list only offers new tags.
     private var matches: [Project] {
-        guard let q = hashQuery else { return [] }
+        guard let q = mentionQuery else { return [] }
         return library.projects
             .filter { !assigned.contains($0.id) }
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
     }
 
     private var dropdownVisible: Bool {
-        focused && !dismissed && hashQuery != nil && !matches.isEmpty
+        focused && !dismissed && mentionQuery != nil && !matches.isEmpty
+    }
+
+    /// The highlighted row's wash. Pulled out of the row body because inlining
+    /// it there put the type checker past its budget for that expression.
+    private func highlight(_ index: Int) -> Color {
+        index == highlightedIndex
+            ? SettingsStore.shared.theme.primary.opacity(0.22)
+            : .clear
     }
 
     private var dropdown: some View {
@@ -207,11 +235,9 @@ struct ProjectHashField: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            // The Accent setting, not `Color.accentColor`,
+                            // The theme's primary, not `Color.accentColor`,
                             // which ignores `.tint()` — see the task checkbox.
-                            .fill(index == highlightedIndex
-                                ? SettingsStore.shared.accent.color.opacity(0.22)
-                                : Color.clear)
+                            .fill(highlight(index))
                     )
                     .contentShape(Rectangle())
                 }
@@ -234,7 +260,11 @@ struct ProjectHashField: View {
         .background {
             let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
             if transparencyReduced {
-                shape.fill(Color(nsColor: .windowBackgroundColor))
+                // The theme's page ground rather than the system's window grey:
+                // an opaque panel standing in for a material over a themed
+                // window should be the colour that window is painted in, or the
+                // switch trades transparency for a surface from another app.
+                shape.fill(settings.theme.windowFill)
             } else {
                 Color.clear.glassEffect(.regular, in: shape)
             }
@@ -245,7 +275,7 @@ struct ProjectHashField: View {
         }
     }
 
-    /// Accept the match at `index`: assign the project and strip the `#token`.
+    /// Accept the match at `index`: assign the project and strip the `@token`.
     private func acceptMatch(at index: Int) {
         guard matches.indices.contains(index) else { return }
         let project = matches[index]
@@ -384,7 +414,7 @@ struct AddProjectMenu: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
                     .frame(width: Metrics.chipHeight, height: Metrics.chipHeight)
-                    .background(Circle().fill(Color.secondary.opacity(0.14)))
+                    .background(Circle().fill(Stone.chip))
                     .contentShape(Circle())
             } else {
                 HStack(spacing: 4) {
@@ -396,7 +426,7 @@ struct AddProjectMenu: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .chipHeight()
-                .background(Capsule().fill(Color.secondary.opacity(0.14)))
+                .background(Capsule().fill(Stone.chip))
                 .contentShape(Capsule())
             }
         }

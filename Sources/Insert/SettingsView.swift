@@ -160,10 +160,18 @@ private struct GeneralSettingsTab: View {
     // so there is no injected environment here — read the shared store directly.
     @Bindable var settings = SettingsStore.shared
 
+    /// Which bundled licence the sheet is showing, or `nil` for closed.
+    @State private var licence: FontLicence?
+
     var body: some View {
         Form {
             Section("Appearance") {
-                Picker("Theme", selection: $settings.appearance) {
+                // Labelled "Appearance", not "Theme", since this pane now has a
+                // Theme section of its own and the two controls would otherwise
+                // both answer to the same word. The section header repeats the
+                // label rather than leaving the row unlabelled, which is what
+                // System Settings does with a lone control in a named group.
+                Picker("Appearance", selection: $settings.appearance) {
                     ForEach(Appearance.allCases) { option in
                         Text(option.label).tag(option)
                     }
@@ -172,34 +180,24 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
-                // Not `LabeledContent`: with a two-row grid for content it
-                // parked the label oddly against the row's corner. Top-aligned
-                // by hand, with the label padded down to the same inset the
-                // Accent row's centred label lands at (its 30pt swatch line
-                // centres a ~16pt label ≈ 7pt in), so the two rows read as one
-                // margin.
+                // Not `LabeledContent`: with a grid for content it parked the
+                // label oddly against the row's corner. Top-aligned by hand,
+                // padded down to where a centred label would land on the first
+                // row of swatches.
+                //
+                // **No section header**, unlike Appearance above: the row's own
+                // label already says "Theme", and a header repeating it printed
+                // the word twice, once as a heading and once beside the swatches.
+                // Appearance keeps its header because its control is a bare
+                // segmented picker whose row label is the only thing naming it.
                 HStack(alignment: .top) {
-                    Text("Tint")
-                        .padding(.top, 7)
+                    Text("Theme")
+                        .padding(.top, 9)
                     Spacer()
-                    BackdropPicker(selection: settings.backdrop) { settings.backdrop = $0 }
+                    ThemePicker(selection: settings.theme) { settings.theme = $0 }
                 }
-            } header: {
-                Text("Background")
             } footer: {
-                Text("A flat, low-chroma tint on the window surface — no gradient. Each one has a Light and Dark value, so it follows the theme above.")
-            }
-
-            Section {
-                // A plain HStack centres the label on the swatches, which
-                // `LabeledContent` didn't.
-                HStack {
-                    Text("Highlight colour")
-                    Spacer()
-                    AccentPicker(selection: settings.accent) { settings.accent = $0 }
-                }
-            } header: {
-                Text("Accent")
+                Text("The theme colours the column headers, the window behind the cards, the primary buttons and the note-type marks. Light and dark values are built in — Appearance decides which you see.")
             }
 
             Section {
@@ -207,7 +205,33 @@ private struct GeneralSettingsTab: View {
             } header: {
                 Text("Typeface")
             } footer: {
-                Text("The face notes and tasks are written in — titles and bodies, both while reading and while editing. The rest of the window keeps the system font, and code blocks stay monospaced.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("The face notes and tasks are written in — titles and bodies, both while reading and while editing. Column headings follow it too; the rest of the window keeps the system font, and code blocks stay monospaced.")
+                    // The OFL requires the copyright notice and licence to
+                    // travel with the fonts, so the bundled text is reachable
+                    // from the pane that offers them rather than only from the
+                    // files inside the bundle.
+                    //
+                    // The two links sit on their **own line under** the
+                    // sentence, not beside it: in one `HStack` they took half the
+                    // footer's width and wrapped the paragraph into a five-line
+                    // column against a single line of links. A footer is prose
+                    // with an action after it, so it reads as one.
+                    Text("Grotesk is Space Grotesk; counts and timestamps are IBM Plex Mono. Both are used under the SIL Open Font License 1.1.")
+                    // A middot between them, not just a gap: two blue phrases
+                    // side by side read as one long link with a space in it,
+                    // where a separator says they are two — the same job the
+                    // interpunct does in a card's meta row.
+                    HStack(spacing: 6) {
+                        ForEach(Array(FontLicence.allCases.enumerated()), id: \.element) { index, item in
+                            if index > 0 {
+                                Text("·")
+                            }
+                            Button(item.button) { licence = item }
+                                .buttonStyle(.link)
+                        }
+                    }
+                }
             }
 
             Section {
@@ -223,6 +247,65 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(item: $licence) { item in
+            FontLicenceSheet(licence: item) { licence = nil }
+        }
+    }
+}
+
+/// The two bundled faces, for the licence sheet.
+enum FontLicence: String, CaseIterable, Identifiable {
+    case spaceGrotesk = "SpaceGrotesk-OFL"
+    case plexMono = "IBMPlexMono-OFL"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .spaceGrotesk: "Space Grotesk"
+        case .plexMono: "IBM Plex Mono"
+        }
+    }
+
+    /// The link's wording, short because two of them sit inline in a footer.
+    var button: String {
+        switch self {
+        case .spaceGrotesk: "Space Grotesk licence"
+        case .plexMono: "IBM Plex Mono licence"
+        }
+    }
+}
+
+/// One bundled font licence, in full.
+///
+/// The text is **read from the bundled file** rather than pasted into a Swift
+/// literal, so the licence shipped and the licence shown cannot drift apart —
+/// which is the whole obligation. Monospaced and selectable, because a licence
+/// is a document to be copied, not prose to be styled.
+private struct FontLicenceSheet: View {
+    let licence: FontLicence
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(licence.title)
+                .font(.headline)
+
+            ScrollView {
+                Text(BundledFonts.licence(licence.rawValue))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 520, height: 320)
+
+            HStack {
+                Spacer()
+                Button("Done", action: onDismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
     }
 }
 

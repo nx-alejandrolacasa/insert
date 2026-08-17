@@ -10,7 +10,7 @@
 
 - **Projects** on the left — your projects and topics, each with an emoji and a live `X notes · Y tasks` count. Drag them into whatever order you like, add/rename/delete.
 - **Notes** in the middle — shown as scrollable "islands", each with a title, emoji and a Markdown body. Pick a type (Note, Meeting, Feedback, Staffing… or your own) with colored pills. Sort by created/updated and filter by type.
-- **Tasks** on the right — tick them off, give them due dates, and tag one or more projects by typing `#`. Filter by all / pending / done.
+- **Tasks** on the right — tick them off, give them due dates, and tag one or more projects by typing `@`. Filter by all / pending / done.
 
 The search field in the toolbar filters all three columns at once, and hiding the
 sidebar gives notes and tasks half the window each.
@@ -125,7 +125,19 @@ there the next time Insert reads the folder.
 
 - **⌘ + (key left of 1)** — show / hide the projects sidebar
 - **⌘N** — new note · **⌘T** — new task · **⇧⌘N** — new project
-- Type **`#`** in a task to tag a project (Tab picks the first match)
+- Type **`@`** in a task to tag a project (Tab picks the first match)
+
+## Fonts
+
+Insert bundles two typefaces, both used under the [SIL Open Font License
+1.1](https://openfontlicense.org):
+
+- **Space Grotesk** © Florian Karsten — the "Grotesk" typeface option and the
+  default face for cards and column headings.
+- **IBM Plex Mono** © IBM Corp. — the counts, timestamps and type labels.
+
+The full licences ship inside the app and are readable from
+**Settings → General → Typeface**. Nothing else in Insert is third-party.
 
 ---
 

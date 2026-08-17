@@ -60,174 +60,28 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
 
     /// A slightly stronger fill for pills/chips.
     var chip: Color { accent.opacity(0.20) }
-
-    /// The highlighter band a note title wears (CLAUDE.md decision 2): the
-    /// tint blended into the card face — 45% of `accent` over white in Light,
-    /// a quieter 34% over the dark card in Dark. The mock's 60% was tried and
-    /// softened by request: under a saturated tint (the base blue Note worst
-    /// of all) the full-strength band crowded the glyphs sitting on it, and a
-    /// highlighter should read as light behind the words, not a bar through
-    /// them.
-    ///
-    /// Blended to an **opaque** colour rather than applied as an alpha wash so
-    /// what sits behind the title can never show through the band, and derived
-    /// from `accent` rather than tabled per type so a custom type's marker
-    /// falls out of its tint like everything else. The title's own contrast
-    /// survives by construction: the worst case (purple) leaves black type at
-    /// 10:1 in Light and white type at 8:1 in Dark, and the band only covers
-    /// the bottom third of the glyphs anyway.
-    var marker: Color {
-        let a = ramp.accent
-        return Color(nsColor: NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let highContrast = AccessibilityOverride.increaseContrast
-                || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-            let base: Double = dark ? 0.118 : 1.0
-            // Under Increase Contrast the band goes *quieter*, not louder —
-            // the accessible direction for pigment behind glyphs is less of
-            // it, so the title stands off a paler stroke.
-            let fraction: Double = switch (dark, highContrast) {
-            case (false, false): 0.45
-            case (false, true): 0.25
-            case (true, false): 0.34
-            case (true, true): 0.20
-            }
-            func mix(_ c: Double) -> Double { c * fraction + base * (1 - fraction) }
-            return NSColor(srgbRed: mix(a.r), green: mix(a.g), blue: mix(a.b), alpha: 1)
-        })
-    }
 }
 
-// MARK: - Accent
+// The `marker` role — the highlighter band a note title used to wear (the July
+// 2026 refresh's decision 2) — lived here and is gone, along with `MarkerTitle`.
+// It was the refresh's answer to "where does a note's type show", and the
+// answer was wrong in a way no value fixed: a coloured band behind the glyphs
+// fights the letters at any opacity, and it forced every title onto a tinted
+// ground. The strength had already been walked from the handoff's 60% down to
+// 45% for exactly that reason and it was still the wrong shape. A note's type is
+// now a 3pt capsule mark *beside* the title (`TypeMarkTitle`) in the type's
+// `ink`, which costs the title nothing — see `AppTheme`.
 
-/// The app's one interactive colour — primary buttons, the selected filter
-/// segment's dot, selection rings in the Settings pickers — chosen in
-/// Settings → General → Accent ("Highlight colour"). Blue by default.
-///
-/// One accent, everywhere, is the refresh's colour discipline (CLAUDE.md
-/// decision 4): project colour only ever appears as a dot, metadata is grey,
-/// and this is the only hue that means "interactive". Exactly these four
-/// options.
-///
-/// Most options **are their tint's `deep`** — the same palette the projects
-/// wear, deliberately. The refresh's own tokens (oklch 52% 0.11) were tried
-/// first and read flat and corporate beside the tint family; borrowing `deep`
-/// keeps the accent in the app's one palette and brings the solved contrast
-/// along for free (≥4.5:1 under white, ≥7:1 with Increase Contrast, unchanged
-/// between Light and Dark — white-on-fill doesn't depend on what's behind the
-/// fill). Two depart from `deep`, both by request. **Orange** is brighter than
-/// the tint's fill — oklch 58% 0.16 at hue 45, which is the most chromatic
-/// orange that still clears 4.5:1 under white; anything more playful than
-/// this has to give up the white label. **Gray** did exactly that: it *is*
-/// `Stone.chip`, the wash every chip wears, so a Gray primary button and the
-/// pills beside it are one colour by construction — and no grey that light can
-/// carry white type, so it is the one accent whose `foreground` isn't white
-/// (near-black on the light chip, near-white on the dark one). It replaced
-/// *both* earlier greys (a dark warm "Graphite" and a cool silver "Light
-/// Gray"): one grey option, and it's the palette's.
-enum AccentColor: String, CaseIterable, Identifiable {
-    case blue
-    case green
-    case orange
-    case lilac
-    case gray
-
-    var id: String { rawValue }
-
-    /// The greys this one replaced, for installs that saved them.
-    static func migratedFromRetired(_ raw: String) -> AccentColor? {
-        raw == "graphite" || raw == "lightGray" ? .gray : nil
-    }
-
-    var name: String {
-        switch self {
-        case .blue: "Blue"
-        case .green: "Green"
-        case .orange: "Orange"
-        case .lilac: "Lilac"
-        case .gray: "Gray"
-        }
-    }
-
-    /// A fill that carries `foreground` type, or a selection ring on neutral
-    /// ground.
-    var color: Color {
-        switch self {
-        case .blue: Tint.blue.deep
-        case .green: Tint.green.deep
-        // The purple family's fill — "Lilac" names where it sits beside the
-        // backdrop tint of the same name, but the fill has to be `deep`: the
-        // pastel lilac `accent` is a 3.4:1 under white, nowhere near a label.
-        case .lilac: Tint.purple.deep
-        case .orange: dynamic(
-            light: RGB(r: 0.77, g: 0.33, b: 0.06), dark: RGB(r: 0.77, g: 0.33, b: 0.06),
-            lightHC: RGB(r: 0.62, g: 0.21, b: 0.04), darkHC: RGB(r: 0.62, g: 0.21, b: 0.04))
-        // **Literally the chip's own paint**, so a Gray "New Task" and the
-        // "All time" chip beside it are THE SAME colour (the maintainer's
-        // words) — by construction, not by matching numbers. Two attempts at
-        // an opaque equivalent measured a few 255ths off on screen every
-        // time: an sRGB literal and a 15%-alpha wash composited on a P3
-        // display don't resolve identically, so the only exact match is the
-        // same translucent fill over the same ground. It also means both warm
-        // to a tinted backdrop together.
-        case .gray: Stone.chip
-        }
-    }
-
-    /// What type on the fill wears: white everywhere except Gray, whose fill
-    /// is the chip colour — near-black on the light chip, near-white on the
-    /// dark one (≥10:1 both ways).
-    var foreground: Color {
-        switch self {
-        case .gray:
-            Color(nsColor: NSColor(name: nil) { appearance in
-                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                    ? NSColor(srgbRed: 0.92, green: 0.92, blue: 0.93, alpha: 1)
-                    : NSColor(srgbRed: 0.13, green: 0.13, blue: 0.14, alpha: 1)
-            })
-        default: .white
-        }
-    }
-}
-
-/// The Accent row's four swatches (Settings → General): a filled circle per
-/// option, the selected one ringed in its own colour, System Settings style.
-struct AccentPicker: View {
-    let selection: AccentColor
-    let onSelect: (AccentColor) -> Void
-
-    var body: some View {
-        HStack(spacing: 9) {
-            ForEach(AccentColor.allCases) { accent in
-                let selected = accent == selection
-                Button {
-                    onSelect(accent)
-                } label: {
-                    Circle()
-                        .fill(accent.color)
-                        .frame(width: 22, height: 22)
-                        // The hairline every swatch in Settings wears; only
-                        // Light Gray visibly needs it, but one odd swatch out
-                        // would read as a state.
-                        .overlay(Circle().strokeBorder(Stone.line, lineWidth: 0.5))
-                        .overlay {
-                            Circle()
-                                .strokeBorder(accent.color, lineWidth: 1.5)
-                                .padding(-3.5)
-                                .opacity(selected ? 1 : 0)
-                        }
-                        // Room for the ring, and a comfortable click target.
-                        .padding(4)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(accent.name)
-                .accessibilityLabel(accent.name)
-                .accessibilityAddTraits(selected ? [.isSelected] : [])
-            }
-        }
-    }
-}
+// `AccentColor` and `AccentPicker` — Settings → General → Accent ("Highlight
+// colour"), five swatches, blue by default — lived here. Both are gone: the
+// accent is no longer chosen beside the window's colour, it *is* the window's
+// colour, one of the six `AppTheme`s setting its band and its primary
+// together. What the accent got right survives in `AppTheme.primary`: one hue,
+// for interactive and selected state only (CLAUDE.md decision 4). What it got
+// wrong is that it had no relationship to the tint it sat next to, so two
+// separate settings could be combined into something neither had been solved
+// for. A saved accent still decides the migration where a saved tint doesn't —
+// see `AppTheme.migrated(tint:accent:)`.
 
 // MARK: - Semantic colours
 
@@ -439,14 +293,18 @@ enum Stone {
     /// Hairline borders.
     static let line = wash(0.18, hc: 0.45)
 
-    /// Metadata type — timestamps, chip names, the due badge's resting state.
+    /// Metadata type on the app's **neutral** surfaces — which since the themes
+    /// grew their own grounds means the `@project` dropdown, and nothing on a
+    /// card: a card's metadata is `AppTheme.metaText`, the page hue at 50% L,
+    /// solved on the face its theme paints.
     ///
     /// Not `.secondary`: `secondaryLabelColor` is an alpha of the label colour
     /// that lands around 3.9:1 on a white card, under the refresh's 4.5:1
     /// floor for text below 14px (CLAUDE.md decision 5). This is a solid
     /// grey solved against the card faces instead — 7.4:1 in Light, 6.7:1 in
     /// Dark — so metadata is quiet by being grey, not by being faint. Under
-    /// Increase Contrast it steps most of the way to the label colour.
+    /// Increase Contrast it steps most of the way to the label colour, and
+    /// `AppTheme.metaText`'s own HC pair makes the same move for the same reason.
     static let metaText = Color(nsColor: NSColor(name: nil) { appearance in
         let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let highContrast = AccessibilityOverride.increaseContrast
@@ -462,18 +320,20 @@ enum Stone {
 
 // MARK: - The reading typeface
 
-/// The typeface note and task **cards** read and write in — one of the four
-/// `Typeface` options, Rounded by default: the system font in its **rounded**
-/// design (SF Pro Rounded), whose lowercase `a` is the single-storey round one —
-/// the shape Apple Notes uses, and the reason this exists.
+/// The typeface note and task **cards** read and write in — one of the five
+/// `Typeface` options, Grotesk on a new install and Rounded on an existing one.
 ///
-/// Every option is a *system design*, not a bundled face — `Font.system(_:design:)`
-/// and `NSFontDescriptor.withDesign(_:)` — so it costs no resource, tracks the
-/// system's own weights and sizes, and keeps the "no third-party dependencies"
-/// rule intact.
+/// Four of the five are *system designs* — `Font.system(_:design:)` and
+/// `NSFontDescriptor.withDesign(_:)` — so they cost no resource and track the
+/// system's own weights and sizes. Grotesk is the bundled Space Grotesk, reached
+/// by family name instead (`Typeface.bundledFamily` → `BundledFonts`), which is
+/// the one branch below.
 ///
-/// Scope is deliberate: the **content** of a card, meaning its title and its
-/// body, in both the rendered and the source view. The window's chrome — panel
+/// Scope is *nearly* the **content** of a card, meaning its title and its
+/// body, in both the rendered and the source view — the exception being the
+/// column header bands' headings, which the theme system brought into it because
+/// the band is the app's identity surface and Grotesk being the default is most
+/// of what a new install's character is. The rest of the chrome — panel
 /// headers, chips, pills, the due badge, the metadata footer — stays on the
 /// default design, so the rounded face reads as "this is the writing" rather
 /// than as a restyle of the app.
@@ -524,7 +384,33 @@ enum Card {
         typeface: Typeface
     ) -> NSFont {
         let base = NSFont.preferredFont(forTextStyle: style)
-        let sized = weight.map { NSFont.systemFont(ofSize: base.pointSize, weight: $0) } ?? base
+        return nsFont(size: base.pointSize, weight: weight, typeface: typeface, base: base)
+    }
+
+    /// The same face at an **explicit point size**, for the one caller that has a
+    /// size rather than a text style: `AppDelegate.restyleWindowTitle()`, which
+    /// re-fonts a title AppKit has already sized and must not resize it.
+    ///
+    /// `base` is the font to start from when the typeface is a system design —
+    /// the style's `preferredFont` where there is one, so a card keeps tracking
+    /// Dynamic Type, and the plain system font at this size otherwise.
+    static func nsFont(
+        size: CGFloat,
+        weight: NSFont.Weight? = nil,
+        typeface: Typeface,
+        base: NSFont? = nil
+    ) -> NSFont {
+        // A bundled family is reached by name at the requested point size, not by
+        // transforming the system font's descriptor — `withDesign(_:)` has no
+        // idea Space Grotesk exists. Falls through to the system face if the
+        // resource bundle isn't there, which is the one way this can be asked
+        // for a family that isn't registered.
+        if let family = typeface.bundledFamily,
+           let bundled = BundledFonts.font(family: family, size: size, weight: weight) {
+            return bundled
+        }
+        let start = base ?? NSFont.systemFont(ofSize: size)
+        let sized = weight.map { NSFont.systemFont(ofSize: size, weight: $0) } ?? start
         var descriptor = sized.fontDescriptor
         if let design = typeface.design, let styled = descriptor.withDesign(design) {
             descriptor = styled
@@ -532,7 +418,15 @@ enum Card {
         if typeface.prefersOneStoreyA {
             descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
         }
-        return NSFont(descriptor: descriptor, size: sized.pointSize) ?? sized
+        return NSFont(descriptor: descriptor, size: size) ?? sized
+    }
+
+    /// The face the cards are set in, at an explicit size — the `@MainActor`
+    /// partner of the overload above, reading the setting the way `nsFont(_:)`
+    /// does.
+    @MainActor
+    static func nsFont(size: CGFloat, weight: NSFont.Weight? = nil) -> NSFont {
+        nsFont(size: size, weight: weight, typeface: SettingsStore.shared.typeface)
     }
 
     /// The italic partner of a card font: the design's real italic face where it
@@ -600,9 +494,26 @@ enum Card {
 /// Shared spacing / radius constants so panels feel like one system.
 enum Metrics {
     static let panelPadding: CGFloat = 14
-    /// Gap between a panel header and the first content below it. Shared so the
-    /// notes and tasks columns line up exactly.
+    /// Gap between a column's header band and the first card below it. Shared so
+    /// the notes and tasks columns line up exactly — and applied **inside** each
+    /// column's scroller, so it travels with the content rather than holding a
+    /// strip of window colour under the band for good.
     static let headerGap: CGFloat = 10
+    /// The column header band's two rows and their gap (`ColumnHeaderBand`).
+    /// The band is the one surface a theme paints in the window, so its
+    /// vertical rhythm is stated here rather than at the two call sites: the
+    /// notes and tasks bands must be the same height to the point, or their
+    /// first cards sit on different lines.
+    ///
+    /// The top inset and the row gap are the values the loose header and filter
+    /// rows used before the band enclosed them — `panelPadding` and 8 — because
+    /// the sidebar's own "Projects" heading is inset to match, and all three
+    /// column titles share one baseline. Only the bottom is new: a slab needs
+    /// room under its last row, where a loose filter row only needed the gap to
+    /// the first card (which is still `headerGap`, now inside the scroller).
+    static let bandRowGap: CGFloat = 8
+    static let bandTopPadding: CGFloat = panelPadding
+    static let bandBottomPadding: CGFloat = 12
     /// 12pt, down from 16: the refresh puts every container in the 10–12pt
     /// band (CLAUDE.md decision 6 — "round means pressable", and a card is
     /// not pressable-shaped). Task rows were already there at `rowRadius`.
@@ -656,9 +567,15 @@ enum Metrics {
     /// The sidebar's resize range. 200pt is both the width a window opens at and
     /// the narrowest it can be dragged: enough for a project row's name and its
     /// `X notes · Y tasks` subtitle to read in full, and no wider, because every
-    /// point here is one the notes and tasks columns don't get. Neither value
-    /// survives a *stale* autosaved column width on its own — see
-    /// `AppDelegate.sanitizeSidebarWidth()`.
+    /// point here is one the notes and tasks columns don't get. 460 is the widest
+    /// worth having: past it the sidebar is taking space from the columns the work
+    /// is in.
+    ///
+    /// **None of the three is enforced by passing it to
+    /// `navigationSplitViewColumnWidth`.** A stale autosaved width outlives the
+    /// minimum (`AppDelegate.sanitizeSidebarWidth()`), and a dragged divider outlives
+    /// both bounds (`AppDelegate.constrainSidebarWidth()`); the modifier is what sets
+    /// the ideal and nothing more.
     static let minSidebarWidth: CGFloat = 200
     static let idealSidebarWidth: CGFloat = 200
     static let maxSidebarWidth: CGFloat = 460
@@ -756,7 +673,7 @@ struct TintPicker: View {
 ///
 /// The capsules are on their third look, and the reason for each change is worth
 /// keeping. `.glassProminent` went because it paints the *system accent*, the one
-/// colour in the window drawn from neither `Tint` nor a `Backdrop`, so it was the
+/// colour in the window drawn from neither `Tint` nor the theme, so it was the
 /// loudest thing on screen and fought whatever gradient sat behind it. Plain
 /// `.buttonStyle(.glass)` then went because **Liquid Glass draws its own drop
 /// shadow** and there is no API to turn it off: with the window otherwise
@@ -843,18 +760,18 @@ extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
     static var actionCapsule: Self { .init(shape: Capsule(), sizing: .padded) }
 }
 
-/// The accent-filled capsule each column's primary action wears ("New Note",
-/// "New Task") — white label on the user's highlight colour.
+/// The capsule each column's primary action wears ("New Note", "New Task") —
+/// the theme's `primary` fill under its `primaryLabel`.
 ///
 /// This *reverses* the earlier retreat from `.glassProminent`, knowingly. The
-/// prominence went because system blue was drawn from neither `Tint` nor a
-/// `Backdrop` and fought whatever gradient sat behind it; the refresh
-/// (CLAUDE.md decision 4) retires the gradients and makes the accent a real
-/// preference, so the colour now belongs to the design — and one filled pill
-/// per column is exactly the ration `.glassProminent` was held to. Flat rather
+/// prominence went because system blue was drawn from neither `Tint` nor the
+/// window's own colour and fought whatever gradient sat behind it; the theme
+/// system makes the fill *the theme's*, solved against the band the button sits
+/// on (≥5:1 for every label, both appearances) — and one filled pill per column
+/// is exactly the ration `.glassProminent` was held to. Flat rather
 /// than glass for the standing reason: glass casts a drop shadow and the window
-/// doesn't. Hover and press deepen the fill with a black wash, since white
-/// atop it rules out the `.primary` wash `FlatButtonStyle` uses.
+/// doesn't. Hover and press deepen the fill with a black wash, since a label
+/// that may be white rules out the `.primary` wash `FlatButtonStyle` uses.
 struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Surface(configuration: configuration)
@@ -870,20 +787,21 @@ struct AccentButtonStyle: ButtonStyle {
             let large = controlSize >= .large
             // Read here, in a view body, so the `@Observable` access
             // registers and every button follows a Settings change.
-            let accent = SettingsStore.shared.accent
+            let theme = SettingsStore.shared.theme
             configuration.label
-                .foregroundStyle(accent.foreground)
+                .foregroundStyle(theme.primaryLabel)
                 .padding(.horizontal, large ? 14 : 11)
                 .padding(.vertical, large ? 8 : 6)
                 .background {
-                    Capsule().fill(accent.color)
+                    Capsule().fill(theme.primary)
                     Capsule().fill(.black.opacity(wash))
                 }
                 // The hairline every flat control wears (`FlatButtonStyle`,
-                // the chips, the search capsule). On the vivid accents it
-                // disappears into the fill's own edge; it exists for the light
-                // Gray accent, where a borderless pill read as a different
-                // material from the bordered controls beside it.
+                // the chips, the search capsule). On the deep primaries it
+                // disappears into the fill's own edge; it earns its place on
+                // the bright ones (Moss's chartreuse, Ember's amber), where a
+                // borderless pill on a pale band read as a different material
+                // from the bordered controls beside it.
                 .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
                 .contentShape(Capsule())
                 .animation(.easeInOut(duration: 0.12), value: hovering)
@@ -927,7 +845,10 @@ private struct PopoverSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         if systemReduceTransparency || settings.appReduceTransparency {
-            content.presentationBackground(Color(nsColor: .windowBackgroundColor))
+            // The theme's page ground, for the reason the `@project` dropdown's
+            // own fallback gives: the opaque stand-in should be the colour of
+            // the window it covers.
+            content.presentationBackground(settings.theme.windowFill)
         } else {
             content
         }
@@ -942,15 +863,19 @@ extension View {
     /// columns' scroll views clipped at their edges and which pooled into a grubby
     /// band wherever cards stacked.
     ///
-    /// Every island is **plain paper** — `textBackgroundColor`, white in Light
-    /// and near-black in Dark. Opaque and *neutral*, deliberately: not the warm
-    /// `Stone` neutral, which made the tasks column a stack of faintly grey
-    /// slabs, and not transparent, which let the backdrop run under the text.
-    /// The card is white; colour is the backdrop's job. (A `tint:` parameter
-    /// used to layer a translucent wash over an opaque base here — first for
-    /// the note types, then only for the "Color tasks by due date" row wash —
-    /// and left when that feature did: with due badges gone grey, a setting
-    /// named after their colours no longer described anything.)
+    /// Every island is the **theme's card ground** (`AppTheme.cardFace`) — pure
+    /// white in Light for all six themes, the theme's own hue at ~25% L in Dark.
+    /// Opaque, deliberately: not translucent, which would let the window's colour
+    /// run under the text, and never a *type* wash. Colour arrives here only as
+    /// the page ground's hue, and the type is the title's capsule mark. (A
+    /// `tint:` parameter used to layer a translucent wash over an opaque base
+    /// here — first for the note types, then only for the "Color tasks by due
+    /// date" row wash — and left when that feature did: with due badges gone
+    /// grey, a setting named after their colours no longer described anything.)
+    ///
+    /// The hairline is the theme's too, for the reason Dracula's was when it was
+    /// the only themed face: `Stone`'s warm wash over a tinted card reads as a
+    /// smudge rather than as an edge.
     func island(radius: CGFloat = Metrics.islandRadius) -> some View {
         modifier(IslandSurface(radius: radius))
     }
@@ -961,13 +886,14 @@ private struct IslandSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        // Read in a view body, like `Card`'s typeface, so the `@Observable`
+        // access registers and every card repaints on a theme change with
+        // nothing to thread through.
+        let theme = SettingsStore.shared.theme
         return content
-            // Paper, not the window's grey: `textBackgroundColor` is the white
-            // a document surface uses, and it flips to near-black in Dark on
-            // its own.
-            .background(shape.fill(Color(nsColor: .textBackgroundColor)))
+            .background(shape.fill(theme.cardFace))
             // A hairline keeps the card's edge readable now that there's no
             // shadow separating it from the background.
-            .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
+            .overlay { shape.strokeBorder(theme.cardBorder, lineWidth: 0.5) }
     }
 }

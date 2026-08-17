@@ -5,9 +5,14 @@ import SwiftUI
 /// Chrome is not affected; see `Card`, which is the only thing that resolves
 /// this.
 ///
-/// All four are *system designs* (`NSFontDescriptor.withDesign(_:)`), so nothing
-/// is bundled and the no-dependencies rule is untouched. That is also the only
-/// way to reach two of them: the serif is **New York**, which ships with macOS at
+/// Four of the five are *system designs* (`NSFontDescriptor.withDesign(_:)`), so
+/// they cost no resource. **Grotesk is the exception** — Space Grotesk, bundled,
+/// and the default for a new install (see `BundledFonts` for what the bundling
+/// costs and why the rule bends for two font files). Existing installs keep
+/// whatever they had, since a saved value wins over the default.
+///
+/// Being a system design is also the only
+/// way to reach two of the four: the serif is **New York**, which ships with macOS at
 /// `/System/Library/Fonts/NewYork.ttf` but is a hidden system font — asking for
 /// `.NewYork-Regular` by name returns nil and asking for the PostScript name
 /// hands back *Times New Roman*, which CoreText logs as a substitution. The
@@ -25,6 +30,7 @@ import SwiftUI
 enum Typeface: String, CaseIterable, Identifiable {
     case standard
     case rounded
+    case grotesk
     case serif
     case monospaced
 
@@ -34,6 +40,7 @@ enum Typeface: String, CaseIterable, Identifiable {
         switch self {
         case .standard: "Standard"
         case .rounded: "Rounded"
+        case .grotesk: "Grotesk"
         case .serif: "Serif"
         case .monospaced: "Monospace"
         }
@@ -41,14 +48,23 @@ enum Typeface: String, CaseIterable, Identifiable {
 
     /// `nil` for Standard — the plain system font, the same face the window's
     /// chrome is drawn in. (Not quite the same *glyphs*: Standard also asks for
-    /// the one-storey `a` — see `prefersOneStoreyA`.)
+    /// the one-storey `a` — see `prefersOneStoreyA`.) Also `nil` for Grotesk,
+    /// which isn't a system design at all — `bundledFamily` is what resolves it.
     var design: NSFontDescriptor.SystemDesign? {
         switch self {
-        case .standard: nil
+        case .standard, .grotesk: nil
         case .rounded: .rounded
         case .serif: .serif
         case .monospaced: .monospaced
         }
+    }
+
+    /// The bundled family this option is, or `nil` for the four system designs.
+    /// `Card` branches on this before it touches a descriptor, because a
+    /// bundled family is reached by name and a system design by
+    /// `withDesign(_:)` — two different resolutions, not two arguments to one.
+    var bundledFamily: String? {
+        self == .grotesk ? BundledFonts.grotesk : nil
     }
 
     /// Whether to ask for the round single-storey `a` (see `Card.oneStoreyA`).
@@ -63,11 +79,12 @@ enum Typeface: String, CaseIterable, Identifiable {
     /// genuine no-op there: shaping the same word with and without it produced
     /// identical glyph ids, no fallback and no substitution. So this could be
     /// `true` for every case and behave the same; it names the designs the
-    /// alternate actually exists in.
+    /// alternate actually exists in. Grotesk is `false` for a different reason:
+    /// its `a` is single-storey as drawn, so there is nothing to select.
     var prefersOneStoreyA: Bool {
         switch self {
         case .standard, .rounded: true
-        case .serif, .monospaced: false
+        case .grotesk, .serif, .monospaced: false
         }
     }
 }
@@ -75,8 +92,8 @@ enum Typeface: String, CaseIterable, Identifiable {
 // MARK: - Picker
 
 /// A row of specimens, one per `Typeface` — 52pt swatches with the hairline
-/// and accent selection ring the `BackdropPicker` beside it uses, because the
-/// two sit in the same pane and a font choice is as visual as a tint. A
+/// and selection ring `ThemePicker` beside it uses, because the
+/// two sit in the same pane and a font choice is as visual as a theme. A
 /// `Picker` would have to name the faces without showing them, and the names
 /// are the least useful thing about them.
 ///
@@ -90,8 +107,9 @@ enum Typeface: String, CaseIterable, Identifiable {
 /// two-storey one. Each swatch draws in *its own* face rather than the selected
 /// one, which is what `Card.font(_:weight:typeface:)` exists for.
 ///
-/// Four 62pt columns plus 10pt gaps is 278pt against the pane's ~420, so unlike
-/// the backdrop row this one has room to grow.
+/// Five 62pt columns plus 10pt gaps is 350pt against the pane's ~420, which is
+/// where the row it had room to grow into stops: a sixth face would have to
+/// become a grid, as `ThemePicker` already is.
 struct TypefacePicker: View {
     let selection: Typeface
     let onSelect: (Typeface) -> Void
@@ -101,8 +119,8 @@ struct TypefacePicker: View {
     /// The column is as wide as the widest *label*, not as the swatch: "Monospace"
     /// measures 55.6pt at caption size against the swatch's 52, so held to the
     /// swatch it hyphen-wrapped to "Mono-/space" and left this row a line taller
-    /// than the backdrop row beside it. Widening the column instead keeps the
-    /// swatch itself at the 52pt both pickers share.
+    /// than the theme grid beside it. Widening the column instead keeps the
+    /// swatch itself at 52pt.
     private static let columnWidth: CGFloat = 62
 
     var body: some View {
@@ -129,12 +147,12 @@ struct TypefacePicker: View {
                     .frame(width: Self.swatchWidth, height: Self.swatchHeight)
                     .background(Stone.chip, in: shape)
                     .overlay { shape.strokeBorder(Stone.line, lineWidth: 0.5) }
-                    // The accent ring every picker in this pane wears now; the
-                    // caption below going `.primary` when selected is the
+                    // The theme's primary, ringing every picker in this pane;
+                    // the caption below going `.primary` when selected is the
                     // second cue.
                     .overlay {
                         Capsule()
-                            .strokeBorder(SettingsStore.shared.accent.color, lineWidth: 1.5)
+                            .strokeBorder(SettingsStore.shared.theme.primary, lineWidth: 1.5)
                             .padding(-3)
                             .opacity(selected ? 1 : 0)
                     }

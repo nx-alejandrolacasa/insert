@@ -45,14 +45,22 @@ struct NotesPanel: View {
 
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                header
-                    .padding(.horizontal, Metrics.panelPadding)
-                    .padding(.top, Metrics.panelPadding)
-                    .padding(.bottom, 8)
-
-                typeFilter
-                    .padding(.horizontal, Metrics.panelPadding)
-                    .padding(.bottom, Metrics.headerGap)
+                // The heading, the count, "New Note" and the type filter, all
+                // inside the themed band — see `ColumnHeaderBand`.
+                ColumnHeaderBand(
+                    title: "Notes",
+                    count: notes.count,
+                    primaryTitle: "New Note",
+                    primarySymbol: "plus",
+                    primaryHelp: "Create a new note (⌘N)",
+                    // The button needs the scroll proxy to focus the new note,
+                    // so it re-uses the notification the reader already listens
+                    // for.
+                    primaryAction: {
+                        NotificationCenter.default.post(name: .newNote, object: nil)
+                    },
+                    filters: { typeFilter }
+                )
 
                 if notes.isEmpty {
                     emptyState
@@ -70,6 +78,13 @@ struct NotesPanel: View {
                                 .id(note.id)
                             }
                         }
+                        // The gap to the band is **inside** the scroller, so it
+                        // scrolls away with the first card instead of holding a
+                        // permanent strip of window colour under the band. It
+                        // sat outside while the header was a loose heading that
+                        // needed separating from the list; the band separates
+                        // itself, so the space belongs to the content.
+                        .padding(.top, Metrics.headerGap)
                         .padding(.horizontal, Metrics.panelPadding)
                         .padding(.bottom, Metrics.panelPadding)
                     }
@@ -96,52 +111,27 @@ struct NotesPanel: View {
         .onChange(of: settings.noteSort) { pins = NotePins() }
     }
 
-    // MARK: - Header
-
-    @ViewBuilder
-    private var header: some View {
-        HStack(spacing: 10) {
-            // Always "Notes": the window title already names the selected
-            // project, so restating it here just made the column heading
-            // flicker on every selection change.
-            Text("Notes")
-                .font(.title2.weight(.bold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 8)
-
-            Button {
-                // The button needs the scroll proxy to focus the new note, so
-                // it re-uses the notification the reader already listens for.
-                NotificationCenter.default.post(name: .newNote, object: nil)
-            } label: {
-                Label("New Note", systemImage: "plus")
-                    .fontWeight(.semibold)
-            }
-            // The accent-filled pill the refresh gives each column's primary
-            // action — see `AccentButtonStyle` for why the prominence this
-            // once gave up came back with the flat tints.
-            .buttonStyle(.accentCapsule)
-            .controlSize(.large)
-            .help("Create a new note (⌘N)")
-        }
-    }
-
     // MARK: - Type filter
 
-    /// A second header row: the type filter as one segmented track — "All",
+    /// The band's second row: the type filter as one segmented track — "All",
     /// then a segment per note type, each carrying its type's colour dot so
-    /// the row ties to the marker stroke on the cards it selects. Single-
+    /// the row ties to the capsule mark on the cards it selects. Single-
     /// select, matching the tasks column. Still inside a horizontal scroller:
     /// types are user-extensible, and a track wider than the column should
     /// slide rather than crush its segments.
+    ///
+    /// The dots take the *themed* type colour — `typeMark`, the same value the
+    /// capsule marks draw in, so the row and the cards it selects agree — and
+    /// each theme authors its own four, so the row follows the palette.
     private var typeFilter: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             SegmentedFilter<String?>(
                 segments: [SegmentedFilter.Segment(id: nil, label: "All")]
                     + settings.noteTypes.map {
-                        SegmentedFilter.Segment(id: $0.id, label: $0.name, dot: $0.tint.accent)
+                        SegmentedFilter.Segment(
+                            id: $0.id,
+                            label: $0.name,
+                            dot: settings.theme.typeMark($0.tint))
                     },
                 selection: appState.noteTypeFilter,
                 onSelect: { appState.noteTypeFilter = $0 }
@@ -308,7 +298,7 @@ private struct NoteCardView: View {
     private var tappableIsland: some View {
         VStack(alignment: .leading, spacing: 8) {
             titleRow
-                // The title's `#project` dropdown drops over the body editor
+                // The title's `@project` dropdown drops over the body editor
                 // below; without this the editor — a later sibling — would sit
                 // on top of it and take its clicks.
                 .zIndex(1)
@@ -325,18 +315,21 @@ private struct NoteCardView: View {
             }
         }
         .padding(12)
-        // White paper, whatever the type: the type moved off the card wash and
-        // onto the title's marker stroke and the meta row's label (CLAUDE.md
-        // decision 2), so body-text contrast is the same on every card and the
-        // wash no longer fights the chips inside it.
+        // Plain paper, whatever the type: the type is the title's capsule mark
+        // and the meta row's label, so body-text contrast is the same on every
+        // card and nothing on the face fights the chips inside it.
         .island()
         .overlay {
             if isEditing {
-                // The accent, not the type's colour: this ring means "open for
+                // The theme's ring, not the type's colour: this means "open for
                 // editing", which is an interactive state, and interactive is
-                // the accent's one job (CLAUDE.md decision 4).
+                // the primary's one job (CLAUDE.md decision 4). At full
+                // strength, not the 0.55 the accent wore — `ring` is already
+                // solved as an outline (it is where Ember's amber, Moss's
+                // chartreuse and Bone's ink each deepen a step in Light), and
+                // fading it was compensating for a colour that wasn't.
                 RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous)
-                    .strokeBorder(settings.accent.color.opacity(0.55), lineWidth: 1.5)
+                    .strokeBorder(settings.theme.ring, lineWidth: 1.5)
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous))
@@ -387,24 +380,31 @@ private struct NoteCardView: View {
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 10) {
             if isEditing {
-                // `#project` tags a project and is stripped from the title,
+                // `@project` tags a project and is stripped from the title,
                 // same as in the task composer.
-                ProjectHashField(
-                    placeholder: "Title  (type # to tag a project)",
+                ProjectMentionField(
+                    placeholder: "Title  (type @ to tag a project)",
                     text: $draft.title,
                     assigned: $draft.projectIDs,
                     font: Card.font(.title3, weight: .bold),
+                    // The colour the view-mode title draws in, so the flip into
+                    // edit mode changes the face's weight and nothing else.
+                    color: settings.theme.titleText,
                     onEscape: { exitEdit() },
                     onTab: { focusBody() },
                     focused: $titleFocused
                 )
             } else {
-                // No type glyph in either mode: the marker stroke and the meta
-                // row's label already say the type twice (CLAUDE.md decision
-                // 2), and the symbols were removed from notes outright — which
-                // is also what keeps the title from sliding sideways as the
-                // card opens: both modes start it at the card's edge.
-                MarkerTitle(text: draft.displayTitle, marker: type.tint.marker)
+                // No type glyph in either mode: the capsule mark and the meta
+                // row's label already say the type twice, and the symbols were
+                // removed from notes outright. The mark costs the title 11pt of
+                // leading inset that the editor doesn't have, which is the one
+                // place the two modes no longer start at the same x — accepted,
+                // because the alternative is indenting the editor to match and
+                // losing a line of writing width to a decoration.
+                TypeMarkTitle(
+                    text: draft.displayTitle,
+                    mark: settings.theme.typeMark(type.tint))
             }
 
             Spacer(minLength: 8)
@@ -509,6 +509,13 @@ private struct NoteCardView: View {
     /// the dropdown costs a badge. Nothing is lost but the second glance —
     /// which type is set is still on show, only the alternatives moved behind a
     /// click.
+    ///
+    /// It is the one place a type's colour is **not** the themed one, and that is
+    /// a floor rather than an oversight: `AppTheme.typeMark`/`typeLabel` are
+    /// *foregrounds*, solved against the card faces, so several of them are bright
+    /// values that could not carry white type as a fill. `Tint.deep` is the role
+    /// that is solved for exactly this — a fill under white at 4.5:1 — so the
+    /// dropdown keeps it, and the divergence only shows while a card is open.
     private var typeMenu: some View {
         Menu {
             // Plain buttons rather than a `Picker`: the pill itself says which
@@ -585,6 +592,10 @@ private struct NoteCardView: View {
                 expandLabel: "Show the whole note",
                 collapseLabel: "Collapse note"
             )
+            // `labelColor` in five of the six themes; only Dracula names a body
+            // colour of its own. On the container, so every block inherits it and
+            // the runs that set their own colour (code, the quote bar) still win.
+            .foregroundStyle(settings.theme.bodyText)
         }
     }
 
@@ -620,6 +631,7 @@ private struct NoteCardView: View {
             MarkdownEditor(
                 text: $draft.body,
                 font: Card.nsFont(.body),
+                textColor: NSColor(settings.theme.bodyText),
                 onTab: { focusTitle() },
                 // Esc leaves the Markdown editor, matching the title field. A
                 // hook rather than `.onKeyPress`: the editor is an `NSTextView`
@@ -653,6 +665,11 @@ private struct NoteCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
+                // The theme's metadata colour: this is the card's quietest
+                // control, and an interactive glyph needs 4:1 where text needs
+                // 4.5 (CLAUDE.md decision 5), so the value already solved for
+                // the timestamps beside it clears it with room.
+                .foregroundStyle(settings.theme.metaText)
                 // 26×22 was under a comfortable click target; the glyph is
                 // unchanged, only the area around it grew.
                 .frame(width: 28, height: 28)
@@ -718,16 +735,35 @@ private struct NoteCardView: View {
         }
     }
 
-    /// Tab traversal between the card's two fields. Written directly, without
-    /// `focusForEntry()`'s one-turn delay: both fields already exist — the card
-    /// is open, and nothing about the view tree changes with the focus — so
-    /// there is no registration to wait for.
-    private func focusTitle() { titleFocused = true }
+    /// Tab traversal between the card's two fields, and the two directions are
+    /// **not** symmetrical — see `CardFocus` for what was tried in SwiftUI first
+    /// and what is actually known about why the arriving `@FocusState` write is
+    /// dropped going the other way.
+    ///
+    /// Each direction still clears the other field's flag before setting its own:
+    /// the two fields are two separate `@FocusState<Bool>`s, so setting one true
+    /// doesn't make the other false — nothing enforces "one of two".
+    ///
+    /// Body → title, the direction that has always worked: the editor reports its
+    /// own resignation, so clearing `bodyFocused` and setting `titleFocused` is
+    /// enough. Written directly, without `focusForEntry()`'s one-turn delay —
+    /// both fields already exist.
+    private func focusTitle() {
+        bodyFocused = false
+        titleFocused = true
+    }
 
+    /// Title → body, the direction that needed AppKit. `CardFocus` makes the
+    /// card's editor first responder, which the editor then reports back into
+    /// `bodyFocused`; the `@FocusState` pair is the fallback for a hierarchy this
+    /// can't read. See `CardFocus` for what was tried first and what is actually
+    /// known about why it failed.
     private func focusBody() {
-        // Alongside a programmatic focus is the one place the selection may be
-        // written; end of the text, same as entry.
+        // Before the focus, since the editor applies the selection as it arrives;
+        // alongside a programmatic focus is the one place it may be written.
         bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        if CardFocus.moveToEditorBesideCurrentField() { return }
+        titleFocused = false
         bodyFocused = true
     }
 

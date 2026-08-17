@@ -39,18 +39,19 @@ final class SettingsStore {
         }
     }
 
-    /// The flat tint behind the main window — decoration only, and off by
-    /// default. Adapts to `appearance` on its own (see `Backdrop`), so this
-    /// needs no re-apply step the way the theme does.
-    var backdrop: Backdrop {
-        didSet { defaults.set(backdrop.rawValue, forKey: Keys.backdrop) }
-    }
-
-    /// The highlight colour — primary buttons, selected filter segments,
-    /// selection rings. Blue by default, matching what the accent was before
-    /// it became a choice.
-    var accent: AccentColor {
-        didSet { defaults.set(accent.rawValue, forKey: Keys.accent) }
+    /// One of six named themes: the colour of each column's header band, the
+    /// filter track on it, the window and card grounds under it, the primary
+    /// buttons and the note-type marks. **Indigo by default** — not the first of
+    /// the six, which is Bone; see `AppTheme`'s declaration order for why those
+    /// are two different things now.
+    ///
+    /// It replaced two settings, `backdrop` (Background → Tint) and `accent`
+    /// (Accent → Highlight colour); an install that had either is mapped onto a
+    /// theme once, here in `init`. Every value adapts to `appearance` on its
+    /// own through a dynamic `NSColor`, so there is nothing to re-apply — unlike
+    /// `appearance` itself, and unlike `appIncreaseContrast`.
+    var theme: AppTheme {
+        didSet { defaults.set(theme.rawValue, forKey: Keys.theme) }
     }
 
     /// The face note and task cards are written in. Read by `Card` during every
@@ -149,8 +150,7 @@ final class SettingsStore {
 
     private enum Keys {
         static let appearance = "appearance"
-        static let backdrop = "backdrop"
-        static let accent = "accent"
+        static let theme = "theme"
         static let typeface = "typeface"
         static let noteTypes = "noteTypes"
         static let noteSort = "noteSort"
@@ -171,6 +171,12 @@ final class SettingsStore {
         // them, never written.
         static let showCreatedDate = "showCreatedDate"
         static let showUpdatedDate = "showUpdatedDate"
+        // The two settings `theme` replaced — the window's flat tint and the
+        // highlight colour. Read once, to choose a theme for an install that
+        // had them, then never again; they are not written back, so the theme
+        // key is the only one that matters after the first launch.
+        static let backdrop = "backdrop"
+        static let accent = "accent"
         // Superseded by notePreviewLines ("Collapse long notes" was ten lines
         // or nothing); still read once to seed it, never written.
         static let collapseLongNotes = "collapseLongNotes"
@@ -185,28 +191,42 @@ final class SettingsStore {
         // asked keeps everything.
         doneTaskRetention = DoneTaskRetention(rawValue: defaults.string(forKey: Keys.doneTaskRetention) ?? "") ?? .never
         appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
-        // Plain window background unless asked otherwise, so an install that
-        // never opens Settings looks exactly as it did before backdrops existed.
-        // A gradient saved before the flat tints replaced them maps to its
-        // nearest tint by family, and the mapping is persisted at once —
-        // `didSet` doesn't fire during init — so it runs exactly once.
-        let savedBackdrop = defaults.string(forKey: Keys.backdrop) ?? ""
-        if let current = Backdrop(rawValue: savedBackdrop) {
-            backdrop = current
-        } else if let migrated = Backdrop.migratedFromGradient(savedBackdrop) {
-            backdrop = migrated
-            defaults.set(migrated.rawValue, forKey: Keys.backdrop)
+        // A saved theme wins; failing that, the install's retired tint and
+        // accent choose one for it (see `AppTheme.migrated(tint:accent:)`), and
+        // the result is written straight back — `didSet` doesn't fire during
+        // init — so the mapping runs exactly once and the old keys are never
+        // consulted again. An install that never touched either lands on
+        // `AppTheme.default`, which is what that function's fall-through gives.
+        if let saved = AppTheme(rawValue: defaults.string(forKey: Keys.theme) ?? "") {
+            theme = saved
         } else {
-            backdrop = .plain
+            let migrated = AppTheme.migrated(
+                tint: defaults.string(forKey: Keys.backdrop) ?? "",
+                accent: defaults.string(forKey: Keys.accent) ?? "")
+            theme = migrated
+            defaults.set(migrated.rawValue, forKey: Keys.theme)
         }
-        // Blue, which is the only accent the app had before this was a choice.
-        // The two retired greys (graphite, lightGray) collapse onto Gray.
-        let savedAccent = defaults.string(forKey: Keys.accent) ?? ""
-        accent = AccentColor(rawValue: savedAccent)
-            ?? AccentColor.migratedFromRetired(savedAccent)
-            ?? .blue
-        // Rounded, which is the only face the cards had before this was a choice.
-        typeface = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") ?? .rounded
+        // Grotesk for a **new** install — the bundled Space Grotesk is most of
+        // what the theme refresh's character is, and the reference mock is set
+        // in it. An existing install keeps Rounded, the default it has been
+        // reading all along, and keeps it *explicitly*: a default that changes
+        // under someone is the one migration that never announces itself, since
+        // there is no setting they chose for you to point at.
+        //
+        // "New" is read off `noteTintMigrated`, which is written unconditionally
+        // on the first launch (below) rather than only when a setting changes —
+        // so its absence here, before that write, is the only reliable "this
+        // process is the first one this install has ever run". `didSet` doesn't
+        // fire during init, hence the explicit write.
+        let firstLaunch = defaults.object(forKey: Keys.noteTintMigrated) == nil
+        if let saved = Typeface(rawValue: defaults.string(forKey: Keys.typeface) ?? "") {
+            typeface = saved
+        } else if firstLaunch {
+            typeface = .grotesk
+        } else {
+            typeface = .rounded
+            defaults.set(Typeface.rounded.rawValue, forKey: Keys.typeface)
+        }
         showMenuBar = defaults.object(forKey: Keys.showMenuBar) as? Bool ?? true
         // On unless turned off: underlining a typo is what a text editor does
         // here, and it changes nothing on disk.

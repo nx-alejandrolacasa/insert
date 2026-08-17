@@ -30,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var housekeepingTimer: Timer?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Before anything measures or draws in a bundled face — Grotesk is the
+        // default for a new install, and an unregistered family resolves to the
+        // system font, so a late registration would have the first frame laid
+        // out in the wrong metrics.
+        BundledFonts.register()
         // Before any window exists, so the split view restores the corrected value
         // and the first frame drawn is already the right width.
         Self.sanitizeSidebarWidth()
@@ -68,8 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// taking and losing focus — and on an appearance change or a second window.
     ///
     /// `applicationDidUpdate` fires after each event, so this is on the hot path.
-    /// It's kept cheap by walking only the titlebar (a few dozen views, and the
-    /// content view is skipped outright) and by touching nothing already flat.
+    /// It's kept cheap by walking only the titlebar for the glass and the title (a
+    /// few dozen views, and the content view is skipped outright), by stopping the
+    /// sidebar walk at the first split view — which sits just inside the content
+    /// view — and by touching nothing already flat, already fonted or already
+    /// constrained.
     ///
     /// Spell checking rides the same tick for a related reason: focus moves
     /// between a card's title and its body, and between one card and the next,
@@ -77,14 +85,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// first responder and writes only what's about to change.
     func applicationDidUpdate(_ notification: Notification) {
         Self.flattenToolbarGlass()
+        Self.restyleWindowTitle()
+        Self.constrainSidebarWidth()
         SpellChecking.applyToFocusedEditors()
+    }
+
+    /// Draws the toolbar's title — the selected project's name — in the chosen
+    /// card face, so the three column headings and the window's own title agree.
+    ///
+    /// It has to happen out here because that title is **not ours to style**:
+    /// `RootView` supplies it as a `String` through `.navigationTitle`, and AppKit
+    /// draws it in the titlebar. There is no SwiftUI modifier for its font, and the
+    /// obvious workarounds are both worse — hiding it and adding a `Text` in a
+    /// toolbar item costs the window its real title (menus, Window menu, Mission
+    /// Control, and the `titleVisibility` trap `RootView.WindowProbe` documents),
+    /// while interpolating the name into a toolbar item alongside gives two titles.
+    /// Re-fonting the field AppKit already made keeps the title a title.
+    ///
+    /// It rides `applicationDidUpdate` for the same reason `flattenToolbarGlass()`
+    /// does: AppKit rebuilds the titlebar as the toolbar lays out, the search field
+    /// expands and the title changes with the selection, and there is no
+    /// notification for any of it. Kept cheap the same way too — the content view
+    /// is skipped, so this walks a few dozen views, and it assigns nothing that is
+    /// already right.
+    ///
+    /// Three things keep it from touching what it shouldn't. **Search fields are
+    /// excluded** (`NSSearchField` is an `NSTextField` subclass, so it would
+    /// otherwise match, and the search field is meant to stay the system's — the
+    /// same exclusion `SpellChecking` makes for the same reason). **The Settings
+    /// window is excluded**, since its toolbar has a pane name of its own that is
+    /// chrome, not content. And **only the size is preserved, never set**: the
+    /// weight is read off the font AppKit chose and handed back, so this changes
+    /// the face and nothing else. If no field matches, nothing happens and the
+    /// title keeps the system font — benign, like the glass coming back.
+    ///
+    /// Nothing here is contractual, and that is the trade `flattenToolbarGlass()`
+    /// already makes: it matches on `NSTextField`, which is at least the class a
+    /// label is, and assumes no depth. If a macOS release draws the title some
+    /// other way, the title simply stays on the system font.
+    @MainActor
+    private static func restyleWindowTitle() {
+        let face = SettingsStore.shared.typeface
+        for window in NSApp.windows where window.toolbar != nil {
+            guard !SettingsWindowController.shared.owns(window),
+                  let frame = window.contentView?.superview
+            else { continue }
+            restyleTitles(in: frame, skipping: window.contentView, typeface: face)
+        }
+    }
+
+    @MainActor
+    private static func restyleTitles(
+        in view: NSView,
+        skipping content: NSView?,
+        typeface: Typeface
+    ) {
+        if view === content { return }
+        if let field = view as? NSTextField, !(field is NSSearchField) {
+            apply(typeface, to: field)
+        }
+        for subview in view.subviews {
+            restyleTitles(in: subview, skipping: content, typeface: typeface)
+        }
+    }
+
+    /// Swaps one label's family, keeping its size and weight.
+    ///
+    /// Idempotent by **comparing the resolved font to the one already set**, not by
+    /// remembering what has been done: the fields are AppKit's and get rebuilt, so
+    /// there is nothing durable to mark. Assigning on every tick would re-invalidate
+    /// the titlebar sixty times a second, so the comparison is what makes riding
+    /// `applicationDidUpdate` affordable.
+    ///
+    /// It settles after one pass for every option. Under a *system design* the
+    /// second pass resolves the design from the face it just set and gets the same
+    /// font back; under **Standard** it resolves to the plain system font, which is
+    /// what is already there, so the title is left alone — meaning Standard's one
+    /// stylistic difference from the chrome (the one-storey `a`) doesn't reach the
+    /// title. That is the right trade rather than a gap: the alternative is
+    /// assigning a same-named font forever to change one glyph in one short string.
+    @MainActor
+    private static func apply(_ typeface: Typeface, to field: NSTextField) {
+        guard let current = field.font else { return }
+        // The weight AppKit picked, read back off the descriptor rather than
+        // guessed: the window title is not the plain system weight, and resolving
+        // it as regular would make the title lighter as well as differently faced.
+        let traits = current.fontDescriptor.object(forKey: .traits)
+            as? [NSFontDescriptor.TraitKey: Any]
+        let weight = (traits?[.weight] as? CGFloat).map(NSFont.Weight.init(rawValue:))
+        let resolved = Card.nsFont(
+            size: current.pointSize, weight: weight, typeface: typeface, base: current)
+        if resolved.fontName != current.fontName {
+            field.font = resolved
+        }
     }
 
     /// Replaces the Liquid Glass platter behind the toolbar's search field with a
     /// flat capsule, because the glass draws an elevation the window has nowhere
     /// else (see the shadows note in CLAUDE.md).
     ///
-    /// **This is the one place in the app that reaches past the public API**, and
+    /// **This was the first of the three places in the app that reach past the
+    /// public API** — the others being `restyleWindowTitle()` above and
+    /// `SidebarVibrancy`, both of which borrow the reasoning below — and
     /// what's worth knowing is *why it has to*. `NSGlassEffectView` is public in
     /// macOS 26 and offers `cornerRadius`, `tintColor` and a `style` — and nothing
     /// about elevation. The shadow isn't a `CALayer` shadow either: dumping the whole
@@ -183,8 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// It runs in two modes, and the reason is that the default moved. On the launch
     /// after a new `idealSidebarWidth` ships, every saved width is reset; afterwards
-    /// only widths below the minimum are corrected, so a divider the user drags
-    /// stays where they put it.
+    /// only widths *outside* the range are corrected, so a divider the user drags
+    /// stays where they put it. Out-of-range is now both ends: a build before
+    /// `constrainSidebarWidth()` could autosave a sidebar dragged to 1,100pt, and
+    /// letting that restore would give a correct window one wrong first frame.
     ///
     /// This is the *first* half of the fix and not the reliable one — see
     /// `normalizeSidebarWidth()`, which sets the flag.
@@ -201,10 +305,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 $0.trimmingCharacters(in: .whitespaces)
             }
             guard fields.count >= 4, let width = Double(fields[2]) else { continue }
-            guard firstRun || width < Metrics.minSidebarWidth else { continue }
-            guard width != Metrics.idealSidebarWidth else { continue }
 
-            fields[2] = String(format: "%f", Metrics.idealSidebarWidth)
+            // Too narrow goes back to the default; too wide is clamped to the
+            // maximum instead, because a wide sidebar is a width someone chose and
+            // only the excess needs taking off.
+            let corrected: Double
+            if firstRun || width < Metrics.minSidebarWidth {
+                corrected = Metrics.idealSidebarWidth
+            } else if width > Metrics.maxSidebarWidth {
+                corrected = Metrics.maxSidebarWidth
+            } else {
+                continue
+            }
+            guard width != corrected else { continue }
+
+            fields[2] = String(format: "%f", corrected)
             frames[0] = fields.joined(separator: ", ")
             defaults.set(frames, forKey: key)
         }
@@ -256,6 +371,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
             normalizeSidebarWidth(attemptsLeft: attemptsLeft - 1)
+        }
+    }
+
+    /// Holds the sidebar's resize range on the live split view, because the
+    /// `min:`/`max:` of `navigationSplitViewColumnWidth` don't police the *divider*.
+    ///
+    /// Observed: with `min: 200, ideal: 200, max: 460` on `ProjectsSidebar`, the
+    /// divider could still be dragged out to most of the window's width, leaving the
+    /// notes and tasks columns a few characters wide. The `min:` is already known not
+    /// to police a restored width (`sanitizeSidebarWidth()`); this is the same gap
+    /// met from the other side, and the modifier stays because it is still what sets
+    /// the *ideal*. Why SwiftUI's values don't reach the divider is untested — don't
+    /// repeat a mechanism for it.
+    ///
+    /// `NSSplitViewItem`'s two thicknesses are the AppKit lever, and they're the
+    /// right kind of one: they become layout constraints, so a drag *stops* at the
+    /// bound instead of snapping back from past it.
+    ///
+    /// It rides `applicationDidUpdate` for the reason `flattenToolbarGlass()` does —
+    /// so a second window, or a SwiftUI update that resets the item, is covered
+    /// without needing to know when either happens. Whether once would do was not
+    /// established. It's idempotent by comparison rather than by remembering, since
+    /// assigning a thickness re-runs the split view's layout.
+    @MainActor
+    private static func constrainSidebarWidth() {
+        for window in NSApp.windows {
+            guard let split = splitView(in: window.contentView),
+                  let controller = split.delegate as? NSSplitViewController,
+                  let sidebar = controller.splitViewItems.first
+            else { continue }
+
+            if sidebar.minimumThickness != Metrics.minSidebarWidth {
+                sidebar.minimumThickness = Metrics.minSidebarWidth
+            }
+            if sidebar.maximumThickness != Metrics.maxSidebarWidth {
+                sidebar.maximumThickness = Metrics.maxSidebarWidth
+            }
         }
     }
 

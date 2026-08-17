@@ -39,12 +39,28 @@ struct CardDatesFooter: View {
                     segment(icon: "pencil", date: updated)
                 }
             }
-            .font(.caption2)
-            // `Stone.metaText`, not `.tertiary`: a timestamp is metadata, and
-            // the refresh's floor for text under 14px is 4.5:1 against the
-            // card it's painted on (CLAUDE.md decision 5) — tertiary label
-            // colour is nowhere near it.
-            .foregroundStyle(Stone.metaText)
+            // Mono (see `Mono`), because a timestamp is a *value*: the minute
+            // ticks over under you, and in a proportional face "11:59" is
+            // narrower than "12:00", so the whole footer shuffles sideways as
+            // it changes. The same face draws the band's counts and the type
+            // labels, for the same reason.
+            //
+            // The **format is unchanged**, deliberately, and this is the one
+            // place the plan was not followed: it specifies `DD.MM HH:mm`, which
+            // would undo the footer's own compaction — today is the time alone,
+            // this year drops the year, another year spells it out — and lose
+            // the year on an old note entirely. The mono face was the part of
+            // that spec that was about the face; the rest was about a format
+            // this app had already solved (see `dayPart(of:now:)` and
+            // `CardDateCompactionTests`).
+            .font(Mono.font(.caption2))
+            // The theme's metadata colour, not `.tertiary`: a timestamp is
+            // metadata, and the refresh's floor for text under 14px is 4.5:1
+            // against the card it's painted on (CLAUDE.md decision 5) — tertiary
+            // label colour is nowhere near it. Themed, because the card ground
+            // is: it is the page hue at 50% L in Light and 70% in Dark, solved
+            // on the face it lands on (`AppTheme.metaText`).
+            .foregroundStyle(settings.theme.metaText)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spokenLabel)
         }

@@ -17,10 +17,19 @@ import SwiftUI
 /// new segment instead of travelling.
 ///
 /// A segment can carry a **dot**: the notes row gives every type segment its
-/// type's colour, tying the filter to the marker stroke on the cards it
+/// type's colour, tying the filter to the capsule mark on the cards it
 /// selects; the tasks row gives every state its long-standing colour (grey
 /// All, orange Pending, green Done — `TaskFilter.tint`). Dots ride the label
 /// layer, above the glass, so they keep their colour over it.
+///
+/// It now lives **on the column header band**, which is what finally makes the
+/// glass worth having: an indicator refracts what is under it, and under a
+/// neutral panel there was nothing to refract. So the track and both label
+/// states come from the band's own tones (`BandColors`) rather than from
+/// `Stone`, each solved against the band it is painted on — the third of the
+/// refresh's contrast rules, verified against the surface actually painted
+/// (CLAUDE.md decision 5). Every unselected label clears 6.1:1 on its track and
+/// every selected one 10.9:1 on the raised pill.
 ///
 /// Selection is reported through a callback rather than a binding, matching
 /// how the panels drive their `AppState` filters.
@@ -45,6 +54,9 @@ struct SegmentedFilter<ID: Hashable>: View {
     private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
     private var transparencyReduced: Bool { reduceTransparency || settings.appReduceTransparency }
 
+    /// The band's tones, since that is what the track is painted on.
+    private var band: BandColors { settings.theme.band }
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(segments) { segment in
@@ -53,9 +65,25 @@ struct SegmentedFilter<ID: Hashable>: View {
         }
         .padding(3)
         // The recess: quiet on purpose, so it can't compete with the glass
-        // indicator inside it.
-        .background(Capsule().fill(Stone.surface))
-        .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
+        // indicator inside it. The band's hue at ~92% L in Light, the band
+        // itself lifted 10% toward white in Dark.
+        .background(Capsule().fill(band.trackFill))
+        .overlay {
+            // Dark mode only: a recess in a dark band needs an upper lip to
+            // read as one, and the same highlight on a light band is invisible.
+            if band.trackHighlight {
+                Capsule()
+                    .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                    // The lip is the *top* edge; masking the stroke to the
+                    // upper half is what keeps it from becoming an outline.
+                    .mask(alignment: .top) {
+                        LinearGradient(
+                            colors: [.white, .clear],
+                            startPoint: .top,
+                            endPoint: .bottom)
+                    }
+            }
+        }
     }
 
     private func segmentButton(_ segment: Segment) -> some View {
@@ -78,7 +106,10 @@ struct SegmentedFilter<ID: Hashable>: View {
                 Text(segment.label)
             }
             .font(.caption.weight(selected ? .semibold : .regular))
-            .foregroundStyle(.primary)
+            // Not `.primary`: a label on a themed track has to be solved
+            // against that track, and the selected one sits on a near-white
+            // pill where the band's own fill is what reads.
+            .foregroundStyle(selected ? band.segmentLabelSelected : band.segmentLabel)
             .lineLimit(1)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
@@ -112,8 +143,12 @@ struct SegmentedFilter<ID: Hashable>: View {
     @ViewBuilder
     private var indicator: some View {
         if transparencyReduced {
+            // The opaque raised pill the plan specifies as the fallback: the
+            // band's own `segmentFill` — pure white in Light, the band's hue at
+            // 97% L in Dark — which is what the glass approximates anyway, so
+            // the two states read as the same control.
             Capsule()
-                .fill(Color(nsColor: .textBackgroundColor))
+                .fill(band.segmentFill)
                 .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))
         } else {
             Color.clear

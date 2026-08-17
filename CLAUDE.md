@@ -86,7 +86,8 @@ Sources/Insert/
   InsertApp.swift             @main App: WindowGroup + MenuBarExtra + Settings
   AppDelegate.swift           regular activation policy + task housekeeping
   RootView.swift              3-column layout, toolbar, search, ⌘§ sidebar toggle
-  ProjectsSidebar.swift       left column: projects list, sort, add/edit/delete
+  ProjectsSidebar.swift       left column: projects list, add/edit/delete/reorder,
+                              SidebarVibrancy (see-through to the window)
   NotesPanel.swift            center: note islands, type pills, sort/filter, edit
   TasksPanel.swift            right: tasks, checkboxes, # project autocomplete
   MenuBar.swift               menu-bar extra: pending tasks at a glance
@@ -107,11 +108,16 @@ Sources/Insert/
   MarkdownText.swift          compact Markdown renderer for bodies + the shared
                               collapsible preview (CollapsibleMarkdown)
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
+  AppTheme.swift              the six themes: band / track / primary tones, the
+                              page and card grounds, the metadata colour, the
+                              per-theme type palette, the migration, the picker
+  ColumnHeaderBand.swift      the themed slab at the top of each column
   Appearance.swift            Auto / Light / Dark preference
-  Backdrop.swift              the seven flat window tints + their Settings picker
   SegmentedFilter.swift       the filter rows' glass segmented control
-  CardMeta.swift              marker title, type label, dot chips + overflow
-  Typeface.swift              the four card faces + their Settings picker
+  CardMeta.swift              marked title, type label, dot chips + overflow
+  Typeface.swift              the five card faces + their Settings picker
+  BundledFonts.swift          registers the two OFL faces; the Mono numeral face
+  Fonts/                      Space Grotesk + IBM Plex Mono, and their licences
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)
 Resources/AppIcon.icon/       generated layered icon (icon.json + SVG layers)
 Resources/AppIcon.icns        generated flat icon, the fallback
@@ -131,6 +137,18 @@ data loss rather than a wrong pixel; between them they caught three real bugs th
 reading the code had not. `swift build` skips the test target, so neither `build.sh`
 nor CI is affected.
 
+`TypefaceTests` also covers the **bundled** faces, and they need it more than the
+system ones: a system font asked for wrongly is *substituted*, where a bundled one
+can be missing outright — it lives in a SwiftPM resource bundle, so a build that
+forgets to copy it resolves to the system font and looks like nothing happened,
+which with Grotesk as the default face is the whole app quietly wearing something
+else. Pinned: that both families register, that Grotesk resolves every weight
+including the SemiBold only the variable axis has, that a symbolic bold trait
+still reaches a heavier face (see the Typeface bullet — the trap that broke
+`**bold**`), that `Mono` really is Plex Mono and defers to the card face under
+Monospace, and that both OFL texts are in the bundle, which is a licensing
+requirement rather than a cosmetic one.
+
 Four more suites cover the pure functions the UI is built on, for the reason given
 under "Return continues a list": the interesting logic there is arithmetic over
 offsets, dates or font descriptors, and none of that needs a view.
@@ -145,28 +163,137 @@ really slants, because both fail *silently*: a system font asked for by name is
 substituted (New York becomes Times), and a missing italic face falls back to the
 upright one, so "it renders" and "it renders right" are different claims.
 
+`ThemePaletteTests` is the odd one out — it measures **colour**, and it is here for
+the same "fails silently" reason. `AppTheme`'s table is 400-odd generated sRGB
+literals across six themes and two appearances, so a band tone off by a step, a
+type label that stops clearing its floor on a card, or an accent that drifts into
+the hue one of its own note types wears would show up in no build, no test and no
+screenshot of whichever theme you happen to use. It resolves each `Color` through
+its dynamic `NSColor` inside an explicit `NSAppearance` — so what it measures is
+what gets painted, not the literal — and asserts the plan's acceptance list: every
+band and card pairing against its floor, the 25° accent-vs-type-hue rule, that a
+label is darker than its mark, that light cards are pure white in all six, that a
+custom type's tint falls back to `Tint.ink`, that title and body colour are the
+**system's** in five of the six and Dracula's own in the sixth — the check that
+keeps "text is not themed" honest — and that Increase Contrast really reaches
+7:1.
+
 ## Design intent
 
 Behaviour that isn't obvious from the code, and shouldn't drift:
 
+- **The August 2026 theme system** is the current word on the app's colour, and
+  it *reverses* three parts of the July refresh below. Read this bullet before
+  that one. Two things had gone wrong with the refresh: the highlighter stroke
+  behind note titles hurt readability, and with the gradients gone and colour
+  reduced to dots the app had gone flat. Both have the same fix — move colour out
+  of the content and into **one band at the top of each column**, and make that
+  band a named **theme**. Content stays neutral and readable; personality lives
+  where it is never behind text. What changed:
+  - **Theme replaces both Background → Tint and Accent → Highlight colour.**
+    Six themes — Bone, Moss, Ember, Rosewood, Indigo, Dracula — each with a Light
+    and a Dark value, in `AppTheme`. A theme is *three grounds, one accent and its
+    own note-type palette*: band / page / card, the primary (buttons, rings,
+    selected states), and four authored type hues, with the glass track derived
+    from the band rather than a token set of its own. **Indigo is the default**,
+    and it is *not* the first case — see the Theme bullet. The old tint and accent
+    keys are read **once**, to choose a theme for an install that had them
+    (`AppTheme.migrated(tint:accent:)`: tint by family, else the accent's hue,
+    else the default), then never again — and **nothing migrates to Dracula**,
+    which is an identity rather than a shade and has to be picked. Pinned by
+    `ThemeMigrationTests`, including a sweep asserting no input reaches Dracula,
+    and by `ThemePaletteTests`, which measures every value in the table.
+  - **The column header band** (`ColumnHeaderBand`) replaces the heading row and
+    the loose filter row in both columns: heading, a count in a mono pill, the
+    primary button, then the filter track. Full column width, flush under the
+    toolbar, **no radius of its own** — the window's corner clips it, which is
+    what makes two adjacent bands read as one strip. Light bands take a hairline
+    on the bottom edge; dark ones separate from the cards on their own.
+  - **The highlighter stroke is gone** — a 3×16pt capsule mark *beside* the
+    title instead (`TypeMarkTitle`), in the type's themed colour. See the Notes
+    bullet.
+  - **The second cut of the set is what shipped, and it is the interesting
+    revision.** The first six (Slate, Graphite, Pine, Amber, Indigo, Dracula)
+    themed the band and nothing under it, so five of them read as a *preference*
+    and only Dracula read as a theme — because Dracula was the only one bringing
+    its own window and card grounds and its own type hues. Rather than add a
+    seventh, every theme was held to what Dracula was already doing: **grounds for
+    all six** (page ~98.5% L in Light and ~20% in Dark, card pure white in Light
+    and ~25% in Dark, both at the band's hue), **a note-type palette per theme**,
+    and an accent that may not repeat one of its own type hues. The names went
+    with it. The band-is-where-colour-goes finding from the first cut stands
+    unchanged; what was wrong was stopping there.
+  - **Two bundled typefaces**: Space Grotesk as a fifth face ("Grotesk", the
+    default for new installs) and IBM Plex Mono as the app's numeral and label
+    face. See the Typeface bullet.
+  - **The sidebar is transparent to the *desktop*, and carries no colour of its
+    own** — a pane you can see through, not a slab. That is `SidebarVibrancy`, a
+    zero-size probe in the sidebar's `.background` that walks **up** to the
+    enclosing `NSVisualEffectView` and keeps `blendingMode` at the stock
+    **`.behindWindow`** with `alphaValue` at 1. What that costs, honestly:
+    a `.behindWindow` view samples the desktop and only the desktop, so nothing
+    Insert draws can ever appear in the sidebar and the column does **not** follow
+    the theme's page ground — it is the system's frost over whatever is behind the
+    window.
+    **The mode alone isn't enough, and the other half lives in `RootView`.** An
+    opaque window has nothing behind it to sample, so the page ground is painted on
+    the **detail side only** (`.background(settings.theme.windowFill…)` on the two
+    columns) rather than as a window-wide `containerBackground`, and `WindowProbe`
+    sets `isOpaque = false` *and* `backgroundColor = .clear` — both, since
+    `isOpaque` alone still fills with `backgroundColor`. Undo any one of those three
+    and the sidebar goes back to a slab.
+    `material` is left at the stock `.sidebar`, and `state` at
+    `followsWindowActiveState`, because the window is *meant* to settle down when
+    inactive — see "No shadows". Walking *up* means it can only find this sidebar's
+    effect view, never the titlebar's and never the Settings window's; no match is
+    a no-op. **Reduce Transparency needs nothing by hand**, unlike the app's other
+    glass: the effect view opaques its own material, and with no `alphaValue` of
+    ours layered on top there is nothing left for the system switch to miss.
+    **Three rejected approaches, so they aren't re-proposed.** A translucent wash of
+    the band's colour over the sidebar: wrong because it makes the column a
+    *painted* surface when what it wants is to be transparent, and because a
+    colour layer over a vibrancy material subtracts from it one for one, so the
+    tint and the transparency fight for the same pixels (at the 40% it shipped
+    at, the sidebar read as flat tinted paint). `blendingMode = .withinWindow` plus
+    an `alphaValue` of 0.6, which was that same wash moved one layer down: a
+    `NavigationSplitView` lays the sidebar out as a **column**, so the notes and
+    tasks columns are beside it and never under it, and the only thing behind the
+    sidebar was the window's own flat page ground — a pane you see one uniform
+    colour through is indistinguishable from a slab painted that colour. And
+    setting `material` to `.underWindowBackground`: that was solving a problem
+    nobody had, on the theory that the material was what stood between us and
+    what's behind — it's the blending mode, in one direction and then the other.
+  - **Not followed, deliberately:** the plan specifies the card timestamp as
+    `DD.MM HH:mm`. Only the *face* changed (to Plex Mono). The format would have
+    undone the footer's own compaction — today is the time alone, this year drops
+    the year, another year spells it out — and lost the year on an old note
+    entirely; that part of the spec was solving a problem this app had already
+    solved. See `CardDatesFooter`.
+  Everything else in the refresh below still stands: meta row order, `+N`
+  overflow, the contrast floor, "round means pressable", grey metadata with red
+  only when overdue, project dots, no emoji.
 - **The July 2026 visual refresh** restyled the surfaces without touching
   behaviour, and several bullets below changed with it. The handoff document and
   its two HTML mocks are **gone** — the refresh shipped, so the code is the
   record now, and the oklch tables the handoff carried are baked into
-  `Backdrop`/`Theme` with their derivations in the comments there. What outlived
+  `AppTheme`/`Theme` with their derivations in the comments there. What outlived
   them is this bullet, ending in the numbered decision log the source comments
   cite as "decision N". The shape of it: the five window *gradients* became
   flat **tints** (Plain + Linen / Clay / Blush / Sage / Mist / Lilac, with
-  Seafoam added after the refresh — saved gradients migrate by family, dark
-  values derived, one L/C per role with hue the only variable); a note's type moved
+  Seafoam added after the refresh — one L/C per role with hue the only
+  variable) — **since replaced by the themes above**, and the tints' own
+  gradient migration went with them; a note's type moved
   off the card wash onto a **marker stroke** behind the title plus a small-caps
-  label in the meta row, so every card face is plain paper; metadata went
+  label in the meta row, so every card face is plain paper — **the stroke has
+  since been retired** for the capsule mark, the label stayed; metadata went
   **grey with red reserved for genuinely overdue** (`Semantic.overdue`,
   `Stone.metaText` — both solved for the refresh's ≥4.5:1 floor on sub-14px
   text); the filter rows became **glass segmented tracks** (`SegmentedFilter`);
   the **accent became a preference** (`AccentColor`, Settings → General →
   Accent, threaded through `.tint()` and read directly by the primary buttons
-  and selection rings); and controls are pills while containers keep a 10–12pt
+  and selection rings) — **since folded into the theme**, which sets the accent
+  rather than offering it beside the window's colour; and controls are pills
+  while containers keep a 10–12pt
   radius — round means pressable. Judgment calls made during the port, so they
   aren't re-litigated: the Settings window's sidebar kept the system's own
   selection shape (the mock's pill sidebar there was never signed off); the
@@ -189,14 +316,28 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
      margins and the sidebar, and each one needed its Light and Dark ends
      solved per region; a flat tint means text contrast is identical
      everywhere, so it's verified once per theme. The tint paints the window
-     base and the sidebar, never the cards.
+     base and the sidebar, never the cards. *(Superseded: the tints are gone
+     too. The reasoning survived them — one lightness and chroma, hue the only
+     variable, verify once — and is what makes a new `AppTheme` a hue rather
+     than a design. What didn't survive is the premise that a window
+     **surface** is where colour belongs: at the low chroma a surface behind
+     text has to sit at, it reads as almost nothing, which is why the colour
+     moved into the band.)*
   2. **Note type is a marker stroke, not a card wash** — colour where the eye
      already is, body-text contrast constant, and no wash left to fight the
      chips inside the card. The band sits *behind* the glyphs, and title
      contrast is never reduced to accommodate it. Three treatments were
      rejected on the way and shouldn't be re-proposed: a coloured left rule
      (generic), a filing-tab treatment, and a no-card "ledger" layout with a
-     monospaced gutter (too space-hungry).
+     monospaced gutter (too space-hungry). *(Superseded: the stroke is retired
+     for a capsule mark beside the title. The wash was still the wrong answer —
+     that half stands — but so was the stroke: pigment behind glyphs fights
+     them at any opacity, which is why the strength had already come down from
+     60% to 45%, and it forced every title onto a tinted ground. The one thing
+     the two share is that the type's second voice is still the meta row's
+     small-caps label. Note the rejected left rule is **not** what replaced it:
+     a 3pt mark 16pt tall beside the first line is a mark on the card, not a
+     rule down its side.)*
   3. **The meta row is one line** — type label · hairline · chips · timestamp,
      each chip a colour dot plus a name and no icon, held to two plus `+N`.
      Chosen over letting the chips wrap onto their own line, which was mocked
@@ -206,7 +347,11 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
      only; project colour appears only as a dot (the sidebar's own icons
      aside); metadata is grey; red means genuinely overdue and nothing else.
      The accent is a preference of exactly four — blue, green, orange,
-     graphite — and adding a fifth is a decision, not a tweak.
+     graphite — and adding a fifth is a decision, not a tweak. *(Superseded in
+     one clause: the accent is no longer chosen at all, it comes from the
+     `AppTheme`. "One accent, for interactive and selected state only" stands
+     unchanged and is exactly what `AppTheme.primary` is; adding a sixth theme
+     is the decision this used to be about.)*
   5. **The contrast floor is three rules, not one.** Text under 14px ≥4.5:1;
      interactive glyphs (the ⋯ menu, the chevrons) ≥4:1; and both verified
      against the surface actually painted behind them — a tint or a card face,
@@ -244,7 +389,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   one turn, because providers cache per appearance and nothing else makes
   AppKit ask them again when only the flag changes. What the switches cover:
   Reduce Transparency opaques the window's two glass surfaces of ours (the
-  filter indicator and the `#project` dropdown; the Plain sidebar's material is
+  filter indicator and the `@project` dropdown; the Plain sidebar's material is
   the system's and only the system switch touches it). Increase Contrast flips
   the tinted fills to their ≥7:1 variants **and hardens the `Stone` neutrals**
   — hairlines 0.18→0.45, washes up a step, `metaText` most of the way to the
@@ -268,10 +413,29 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `cfprefsd` afterwards and overwrites ours, which is why a corrected width still
   came back at the old value. Both run once per install per default width, keyed on
   `sidebarWidthNormalized-<width>`, which self-invalidates when
-  `idealSidebarWidth` changes; after that only widths below the minimum are
+  `idealSidebarWidth` changes; after that only widths outside the range are
   corrected, so a divider the user drags stays put. **Changing the constant is
   therefore enough** — but expect the *first* launch after it to be the one that
   moves an existing window, not the build itself.
+  **The `max:` doesn't police the divider either**, which is the same gap from the
+  other side and was reported as a screenshot: with `min: 200, max: 460` on the
+  sidebar, the divider dragged out to most of the window and left notes and tasks a
+  few characters wide. So the range is held in AppKit too —
+  `constrainSidebarWidth()` sets `NSSplitViewItem.minimumThickness` /
+  `maximumThickness` on the sidebar item, which become layout constraints, so a drag
+  *stops* at the bound rather than snapping back from past it. It rides
+  `applicationDidUpdate` for `flattenToolbarGlass()`'s reason — a second window or a
+  SwiftUI update that resets the item is covered without knowing when either
+  happens — and is idempotent by comparison, since assigning a thickness re-runs the
+  split view's layout. Two things are **not** established and shouldn't be written
+  down as if they were: why SwiftUI's values don't reach the divider, and whether
+  setting the thicknesses once would hold. `sanitizeSidebarWidth()` gained the upper
+  bound with it, because a build from before this could have autosaved 1,100pt and
+  restoring that would give an otherwise-correct window one wrong first frame; it
+  clamps a too-wide width to the maximum rather than resetting it to the default,
+  since a wide sidebar is a width someone chose and only the excess needs taking off.
+  The modifier stays — it is still what sets the *ideal* — but none of its three
+  values is what enforces the range.
 - **Search** — the toolbar field filters all three columns at once (projects,
   notes and tasks), not just the focused one.
 - **Projects** — each row shows its emoji, name and a live `X notes · Y tasks`
@@ -351,17 +515,39 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `pin(_:)` is a no-op on an already-pinned note — re-pinning on a second edit
   would hand back exactly the jump this prevents. Covered by
   `StorageLayoutTests`.
-  **In view mode a note's type shows twice and only twice** (the refresh's
-  card anatomy): a highlighter band behind the title — `MarkerTitle`, drawing
-  the type's `Tint.marker` over the bottom ~34% of *each line box*, because a
-  single bottom-aligned background under a wrapped title strokes only the last
-  line — and a small-caps `TypeCapsLabel` leading the meta row, in the type's
-  `ink`. The card face itself is plain paper for every type, and the view-mode
-  type glyph is gone: marker + label already say it twice, and a third voice
-  was the wash's mistake in miniature. The meta row is one line — type ·
-  hairline · project chips · timestamp — with the chips held to **two plus a
-  `+N` overflow** whose hidden names are a click popover (`ProjectChipsRow`),
-  so a card's height doesn't grow with its assignments.
+  **In view mode a note's type shows twice and only twice**: a 3×16pt capsule
+  mark before the title (`TypeMarkTitle`) and a small-caps `TypeCapsLabel`
+  leading the meta row, in the type's themed mark and label colours
+  (`AppTheme.typeMark(_:)` / `typeLabel(_:)`). The card face is the theme's own
+  paper and never a type wash,
+  and the view-mode type glyph is gone: mark + label already say it twice, and a
+  third voice was the wash's mistake in miniature. The meta row is one line —
+  type · hairline · project chips · timestamp — with the chips held to **two
+  plus a `+N` overflow** whose hidden names are a click popover
+  (`ProjectChipsRow`), so a card's height doesn't grow with its assignments.
+  The mark replaced `MarkerTitle`'s **highlighter band** — the refresh's
+  decision 2, and the one part of it undone rather than tuned; see the theme
+  bullet for why. Four things about the mark are decided, not incidental. It is
+  **fixed at 16pt and top-aligned** to the title's first line rather than
+  stretched to the text's height, so a two-line title doesn't grow a 40pt bar —
+  it marks the card, it isn't a rule down the side. It declares its own baseline
+  through `centredOnTextCap()`, because the title row is
+  `.firstTextBaseline`-aligned and a shape has none of its own. The colour is
+  the mark's **own** value at 3:1, a few points brighter than the label naming
+  the same type — the two were one number while the palette was shared, and
+  splitting them is what lets the mark stay visible while the label carries the
+  4.5:1 a word needs — one gap is known and left open here: the plan also asks
+  that the four marks be distinguishable in *greyscale*, and its own tables put
+  three of the four at one lightness (worst pair 1.00–1.07:1 by luminance), which
+  would take re-authoring the palettes rather than converting them. And it costs
+  the title 11pt of leading inset the **editor
+  doesn't have** — the one place the two modes no longer start at the same x.
+  That's accepted: indenting the editor to match would spend a line of writing
+  width on a decoration.
+  The type colours are per-appearance and **per theme** (see the Theme bullet):
+  each theme authors its own four, arranged so none is within 25° of its own
+  accent, and a type on any other `Tint` falls back to the app's own `Tint.ink`
+  so a **custom** type added in Settings still gets a themed mark.
   A note's **type** is, while editing, a pill-shaped dropdown in that type's
   colour at the trailing end of the chips row. It replaced a row of one filter
   pill per type, whose selected state is where the `deep`-and-white comes
@@ -412,9 +598,17 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   contraction with its `.replace` turn still playing — where on the first line
   it holds still, flush on the ⋯'s own trailing axis.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
-  task can be assigned to several projects. Typing `#` opens a project
-  autocomplete; Tab picks the first match; the `#word` is *not* kept in the
-  task text, it only adds the assignment. Assignments appear as chips below and
+  task can be assigned to several projects. Typing `@` opens a project
+  autocomplete; Tab picks the first match; the `@word` is *not* kept in the
+  task text, it only adds the assignment. **The trigger was `#` until August
+  2026**, and the swap is one character plus two placeholders, but it was the
+  wrong character twice over: `#` is Markdown's heading marker and these fields
+  sit directly above a Markdown editor, so one keystroke meant "tag a project" in
+  the title and "make this a heading" one field down; and `@` is what mentioning
+  something by name means everywhere else. `ProjectMentionField` is named for it
+  (it was `ProjectHashField`). Nothing on disk carried either character — the
+  token never survives the accept — so there was no migration.
+  Assignments appear as chips below and
   are removed by double-clicking them (or via the chip's context menu — the
   double-click is deliberately hard to trigger, so it can't be the only route).
   **A task's notes are Markdown, exactly as a note's body is** — including the
@@ -615,7 +809,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `onKeyPress` and not an invisible `keyboardShortcut` button: an unmodified
   Return carries no key equivalent, and the text view consumes it as
   `insertNewline(_:)` before SwiftUI's key-press handlers see it — the wall
-  `ProjectHashField` documents for Tab and Return, hit again here.
+  `ProjectMentionField` documents for Tab and Return, hit again here.
   The monitor is **one, app-wide**, installed from `AppDelegate`, not one per
   editor, and it reads the **first responder** rather than `@FocusState` and the
   `TextSelection` binding. It was written the other way first, and the rewrite
@@ -631,12 +825,66 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the `text` binding, which is what gives it native undo and lets SwiftUI pull
   the new string back the same way it does for typing.
   **Field editors are skipped**, which is the line between a multiline body and a
-  single-line field where Return submits — the note title and the `#project`
+  single-line field where Return submits — the note title and the `@project`
   field keep their own behaviour. The event is swallowed *only* when `listReturn`
   returns an edit, so Return is ordinary everywhere else.
-- **Cards read in one of four faces, Rounded by default** — Settings → General
-  offers Standard / Rounded / Serif / Monospace (`Typeface.swift`, resolved by
-  `Card` and nowhere else). All four are *system designs*, so nothing is bundled;
+- **Cards read in one of five faces** — Settings → General offers Standard /
+  Rounded / **Grotesk** / Serif / Monospace (`Typeface.swift`, resolved by
+  `Card` and nowhere else). **Grotesk is the default for a new install**;
+  an existing install keeps Rounded and keeps it *explicitly* — a default that
+  changes under someone is the one migration that can't announce itself, since
+  there is no setting they chose for you to point at. "New" is read off
+  `noteTintMigrated`, the one key written on **every** launch rather than only
+  when its setting changes, so its absence during `SettingsStore.init` is the
+  only reliable "this is the first process this install has ever run".
+  **Grotesk and the numeral face are the app's only bundled files, and the only
+  ones that aren't Apple's** — Space Grotesk and IBM Plex Mono, both SIL Open
+  Font License 1.1, in `Sources/Insert/Fonts/` and registered `.process`-scoped
+  by `BundledFonts` so they exist for this app and are never installed on the
+  user's Mac. This bends "no third-party dependencies — system frameworks only":
+  the rule is about *code*, and these are font files with no build step, no
+  package manager and nothing executable. The licences are bundled beside them
+  and shown from Settings → General (`FontLicenceSheet` reads the shipped file
+  rather than a Swift literal, so the text shown and the text shipped can't
+  drift), because the OFL requires the notice to travel with the fonts.
+  They are a **SwiftPM resource** (`resources: [.copy("Fonts")]`) rather than a
+  folder in `Resources/` beside `Info.plist`, so `Bundle.module` finds them in
+  both the assembled app and `swift test` — which is what lets `TypefaceTests`
+  pin the registration. `build.sh` copies the generated `Insert_Insert.bundle`
+  into `Contents/Resources`; without it Grotesk silently resolves to the system
+  font, so the script warns when the bundle isn't there.
+  Four things about the bundled faces are load-bearing.
+  Space Grotesk ships as the **variable** file, not the four statics: the
+  published statics are Light / Regular / Medium / Bold with **no SemiBold**,
+  which is the weight the card titles want, and the `wght` axis gives a real 600
+  instance (verified — a distinct face, not Bold). It is **Latin-only**
+  (measured: no Cyrillic, Greek or CJK) and nothing handles that, because
+  CoreText's own cascade substitutes per *glyph*, so a Cyrillic title falls
+  through a character at a time rather than switching the whole string.
+  **Pinning the variable axis freezes the weight against every later symbolic
+  trait**, which is the trap here and a silent one: a descriptor carrying
+  `wght: 400` answers `withSymbolicTraits(.bold)` with the regular face again,
+  no error — and `MarkdownText` resolves `**bold**` through exactly that lookup,
+  so every bold run in a Grotesk body rendered as body text. Hence
+  `BundledFonts.font` has three routes to a weight: regular gets the family
+  **alone**, semibold-on-Grotesk gets the axis (the only case that needs it),
+  everything else gets the ordinary weight trait. Pinned by
+  `testSymbolicBoldStillReachesAHeavierGroteskFace`.
+  And the PostScript names are **not** usable: the variable file's members come
+  back as `SpaceGrotesk-Light_Regular` and Plex Mono's as `IBMPlexMono-Medm` /
+  `-SmBld`, so `NSFont(name: "SpaceGrotesk-SemiBold")` and
+  `NSFont(name: "IBMPlexMono-Medium")` are both nil. Everything goes through the
+  family plus a weight.
+  **IBM Plex Mono is not a body option** — it is the app's *numeral and label*
+  face (`Mono`): the bands' counts, the cards' timestamps, and the uppercase type
+  labels. Those three because they are read as **values** rather than as prose,
+  and a proportional face makes them jitter sideways as they change ("11:59" is
+  narrower than "12:00" in SF); the uppercase type label joins them because it is
+  a tag, not a word. **Except under Monospace**, where the card's own face is
+  already SF Mono and a second mono voice would be two faces saying different
+  things, so the body face covers it — the one place `Mono` reads the typeface
+  setting, and it reads it the way `Card` does, inside a view update.
+  The four remaining options are *system designs*;
   the serif is **New York**, which ships with macOS at
   `/System/Library/Fonts/NewYork.ttf` but is a hidden system font reachable
   **only** through `withDesign(.serif)`. Asking for it by name is a trap worth
@@ -693,8 +941,39 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `Text(AttributedString)` still works; that was checked with `ImageRenderer`
   rather than assumed.
   Scope is the **content** of a card — title and body, rendered and source,
-  headings included. Chrome stays on the default design: panel headers, chips,
-  pills, the due badge, the metadata footer. Fenced code stays monospaced.
+  headings included — plus everything else that is **a name somebody typed**:
+  the three column headings (the band is the app's identity surface, and Grotesk
+  being the default is most of what a new install's character is; the sidebar's
+  "Projects" comes along because all three titles share one baseline and a
+  different face at the same size has a different ascender), the **project names
+  in the sidebar rows**, and the **window title**, which is the selected
+  project's name. The line the scope follows is authored text versus derived
+  text: a project's name is the user's, so it takes their face, while the
+  `X notes · Y tasks` under it is a count Insert worked out and stays on the
+  system font. The rest of the chrome does too — chips, pills, the due badge, the
+  metadata footer. Fenced code stays monospaced, and the numerals and type labels
+  are `Mono`, not the card face.
+  **The window title is re-fonted in AppKit**, by `AppDelegate.restyleWindowTitle()`
+  on the `applicationDidUpdate` tick that already flattens the toolbar's glass.
+  It has to be: `RootView` supplies the title as a `String` through
+  `.navigationTitle` and AppKit draws it, there is no modifier for its font, and
+  both obvious workarounds are worse — hiding it and adding a `Text` toolbar item
+  costs the window its real title (menus, the Window menu, Mission Control, plus
+  the `titleVisibility` trap `WindowProbe` documents), and adding one alongside
+  gives two titles. So the field AppKit already made is re-fonted instead, which
+  keeps a title a title. Three exclusions keep it off what it shouldn't touch:
+  **search fields** (`NSSearchField` is an `NSTextField` subclass, and the search
+  field stays the system's — the same exclusion `SpellChecking` makes), the
+  **Settings window** (its pane name is chrome, not content), and the **size and
+  weight**, which are read off the font AppKit chose and handed straight back, so
+  only the face changes. It is idempotent by comparing the resolved font to the
+  one already set rather than by remembering — the fields get rebuilt, so there is
+  nothing durable to mark, and assigning every tick would re-invalidate the
+  titlebar continuously. One consequence of that comparison: under **Standard**
+  the resolved font *is* the plain system font, so the title is left alone and
+  Standard's one-storey `a` doesn't reach it. Nothing here is contractual, the
+  same trade `flattenToolbarGlass()` makes; if a release draws the title another
+  way, it stays on the system font.
   `Card` hands out **both** a SwiftUI `Font` and the matching `NSFont`, and both
   are needed: the `NSFont` is what `MarkdownText` measures `blankLine` from and
   what the cards' hidden sizing proxies lay out in, so taking the `Font` alone
@@ -783,20 +1062,45 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
 - **Tab walks an open card's fields.** Tab or ⇧Tab moves focus between a card's
   title and body, both directions the same because two fields make a loop of
   two. Without it there is no key out of a body: the editor's text view answers
-  Tab itself, as a literal tab character — the `ProjectHashField` wall again
+  Tab itself, as a literal tab character — the `ProjectMentionField` wall again
   (the field editor and the text view both consume Tab before `onKeyPress`
   sees it), solved its way both times. The title side is a new `onTab` on
-  `ProjectHashField`'s existing monitor, firing only with the dropdown closed —
+  `ProjectMentionField`'s existing monitor, firing only with the dropdown closed —
   dropdown open, Tab still means "first match", which stays the override. The
   body side was a focus-gated monitor of the same shape inside `MarkdownEditor`
   and is now an `insertTab(_:)`/`insertBacktab(_:)` override on the editor's own
   text view (`onTab`, optional so an owner without a second field leaves Tab
   alone) — the same behaviour, answered where the key lands rather than
-  intercepted before it. The
-  focus writes are direct, *not* `focusForEntry()`'s deferred turn: that delay
-  exists because entry creates the fields in the same update, and here both
-  fields already exist when the key fires, so there is no registration to wait
-  for.
+  intercepted before it.
+  **The two directions are not symmetrical, and that is the finding.** Body →
+  title is a plain `@FocusState` pair (`bodyFocused = false; titleFocused = true`),
+  written directly rather than through `focusForEntry()`'s deferred turn, and it
+  has always worked — the body is an `NSTextView` of ours, so
+  `MarkdownTextViewBridge` reports its own resignation back out. Title → body
+  through the same mechanism **never landed**: the caret went nowhere and the
+  title kept focus. Three things were tried and are recorded so they aren't tried
+  again: setting `bodyFocused = true` alone; clearing `titleFocused` first so the
+  pair reads as one exclusive choice; and deferring the arriving write by a
+  main-actor turn. All three left the title focused.
+  So the handoff is made in **AppKit** — `CardFocus.moveToEditorBesideCurrentField()`
+  makes the card's editor first responder, and the editor reports the change back
+  into `bodyFocused`, so SwiftUI's state still ends up right. It is the conclusion
+  Return, Esc and Tab-in-the-body had already reached in that file, and the one
+  `SpellChecking` and the window title reached: when SwiftUI won't say it, say it
+  to AppKit. The `@FocusState` pair stays as the fallback for a hierarchy the walk
+  can't read.
+  Two details in that walk. It starts from the **field editor's delegate**,
+  because a focused `TextField` makes the window's shared field editor first
+  responder rather than the field itself, and the field is what's in the view
+  tree. And it climbs to the first ancestor holding **exactly one**
+  `MarkdownTextView` — that ancestor is the card; more than one means it has
+  climbed past the card into the column (a note card and a task card can both be
+  open at once), so it stops rather than guessing.
+  What is **known** here is only the behaviour: the key reaches the handler (Esc
+  from the same field, through the same monitor, leaves edit mode), the body → title
+  direction works, and title → body did not through any `@FocusState` spelling.
+  *Why* the write is dropped was never instrumented — don't repeat a mechanism for
+  it as fact.
 - **Spelling is marked, never corrected — and the body editor is an
   `NSTextView` because of it.** Settings → General → "Check spelling while
   typing" (on by default) underlines misspellings in a card's **title and
@@ -835,7 +1139,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `makeNSView` and nothing takes it away. What that cost, and what it bought
   back, is under "The editor is ours" below.
   **The titles are why `SpellChecking` still exists.** A title is a `TextField`
-  (`ProjectHashField`) with no text view of its own: it borrows the window's one
+  (`ProjectMentionField`) with no text view of its own: it borrows the window's one
   shared **field editor**, and so do the toolbar's search field and Settings'
   text fields. What that editor is given follows it to the next field, so it's
   told on every focus change what the field it is *currently* attached to wants —
@@ -915,7 +1219,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   task card opening slid its title down 5pt and its body down 10pt, out from under
   the cursor that had just clicked it. Measured, both before and after — the
   title-to-body gap is now 29pt collapsed against 30pt open, and the 1pt left over
-  is `ProjectHashField` sitting a point above centre where a `Text` is centred
+  is `ProjectMentionField` sitting a point above centre where a `Text` is centred
   exactly. The note card dodged the fault for as long as its 26pt symbol well set
   that height as a side effect; when the type symbols were removed the note card
   gained the same explicit floor. The cost is 10pt on every collapsed task row,
@@ -969,12 +1273,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   just written. Both are covered by `StorageLayoutTests`.
 - **Colour** — `Tint` exposes colours by *role*, not by shade, and every value is
   solved against WCAG AA: `deep` is a fill that carries white type (≥4.5:1),
-  `ink` is a foreground for glyphs on the app's own surfaces, `accent` is
-  decorative, and `marker` (added by the refresh) is the note title's
-  highlighter band, derived by blending `accent` into the card face — 45% over
-  white in Light, a quieter 34% in Dark; the mock's 60% crowded the title under
-  saturated tints and was softened by request — so a custom type's marker falls
-  out of its tint automatically. `deep` and `ink` are separate because they invert
+  `ink` is a foreground for glyphs on the app's own surfaces, and `accent` is
+  decorative. (A `marker` role — the note title's highlighter band, blended from
+  `accent` — was added by the refresh and left with the stroke it drew.) `ink`
+  is the **fallback** for a note type's mark and label: every theme overrides the
+  four tints the default types wear, so `ink` is what a **custom** type on any
+  other tint draws in. `deep` and `ink` are separate because they invert
   relative to each other in Dark Mode — don't collapse them back into one
   "deep". Both adapt to Light/Dark and Increase Contrast through one dynamic
   `NSColor`, so call sites stay plain `Color`. **Within the tint family,
@@ -984,15 +1288,21 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   use outline rings, and that isn't the same case — the `AccentColor` ring sits
   on *neutral* ground (a Form row, `Stone.chip`), where it can carry it.
   The refresh added two more solved colours with one job each:
-  `Semantic.overdue` (the only red, ≥4.5:1 on the card faces both modes) and
-  `Stone.metaText` (timestamps, chip names, the resting due badge — a solid
-  grey at ~7:1, because `.secondary`/`.tertiary` are alpha washes that land
-  under the refresh's 4.5:1 floor for sub-14px text). `AccentColor` is the
-  user's highlight colour: four options, each ≥4.5:1 under white and past 7:1
-  with Increase Contrast, threaded app-wide with `.tint()` from `InsertApp` and
-  read directly (inside view bodies, so the `@Observable` access registers) by
-  `AccentButtonStyle` and the pickers' rings. Project and type colour never
-  appears on a card except as a **dot** or the marker; metadata is grey; red
+  `Semantic.overdue` (the only red, ≥4.5:1 on every theme's card faces, both
+  modes — re-measured when the cards became themed) and `Stone.metaText`, a
+  solid grey at ~7:1 rather than `.secondary`/`.tertiary`, which are alpha
+  washes landing under the refresh's 4.5:1 floor for sub-14px text. On a **card**
+  that job now belongs to `AppTheme.metaText`, which is the same argument at the
+  page's own hue; `Stone.metaText` stayed for the neutral surfaces, which today
+  means the `@project` dropdown. The interactive colour is
+  `AppTheme.primary`, threaded app-wide with `.tint()` from `InsertApp` and read
+  directly (inside view bodies, so the `@Observable` access registers) by
+  `AccentButtonStyle`, the pickers' rings, the task checkbox, the tasks column's
+  active date pill, the `@project` dropdown's highlight and the editor's caret —
+  the six places that need the value rather than the environment, because
+  `Color.accentColor` reads the *app/system* accent and ignores `.tint()`.
+  Project and type colour never
+  appears on a card except as a **dot** or the type's mark; metadata is grey; red
   means overdue and nothing else.
 - **Appearance** — Settings → General has a Theme picker: Auto / Light / Dark,
   the same control prtscn has (`Appearance.swift` is a copy of its enum). Auto
@@ -1006,59 +1316,148 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   Every colour in `Tint`/`Stone` resolves through a dynamic `NSColor`, so setting
   `NSApp.appearance` is all it takes — nothing reads `Locale`-style globals or
   caches a resolved shade.
-- **Backdrop** — Settings → General offers seven flat tints for the main window —
-  Linen, Clay, Blush, Sage, Seafoam, Mist, Lilac — plus "Plain", which stays the
-  default. (Seafoam came after the handoff's six, filling the wheel's one empty
-  family — cyan, the widest gap in the set — by the "not reachable from an
-  existing one" rule.)
-  These replaced the five gradient washes in the July 2026 refresh; a saved
-  gradient migrates to its nearest tint by family (`migratedFromGradient`:
-  cloud→mist, stone→linen, dawn→blush, dusk→clay, grove→sage), persisted once
-  from `SettingsStore.init`. The gradients' own selection lessons (a member
-  earns its place by not being reachable from an existing one, and by being
-  quiet enough to sit behind text all day) still govern any new tint, and the
-  spec makes them mechanical: **one lightness and chroma per role, hue the only
-  variable** (light oklch L 97.5 / C 0.014–0.016; dark derived at L 23.5–27),
-  so switching tint never changes contrast and a new entry is a hue, not a
-  design. Sage and Mist are kept at the set's low chroma so green and blue read
-  as scenery, not as the status colours those hues mean elsewhere.
-  A tint paints **three strengths**: the window base at ~55% of the tint's
-  chroma (near-white, so cards keep their edge), the sidebar at ~90% where the
-  tint actually reads, and the Settings swatch at ~125% — the tint's *identity*
-  rather than either surface, because a 52pt swatch of the base colour previews
-  nothing. Those fractions started at 30/62/100 and were raised by request
-  ("the tints are almost invisible"); if they move again, regenerate the whole
-  table from the oklch spec rather than nudging one entry, or the set stops
-  being one lightness and chroma. The picker is a `LazyVGrid` of four columns — seven
-  entries at 52pt is exactly past where the old single row stopped fitting —
-  and not smaller swatches, since below about 46pt a swatch stops previewing.
-  A backdrop is **one** tint, not two: hue fixed per name, only the value
-  changing between Light and Dark through the same dynamic `NSColor` trick
-  `Tint` uses, so the choice follows the Theme picker with nothing to re-apply,
-  and both halves clear AAA against the text on them — no Increase Contrast
-  variants needed. Two things here are easy to get wrong: the window style is
-  applied **unconditionally** (`Plain` resolves to `.windowBackground`),
-  because branching on it in the view builder gives the two cases different
-  identities and tears down `NavigationSplitView` — and with it the autosaved
-  column widths — on every change of the picker. And the sidebar's tint layer
-  needs its **own** `.ignoresSafeArea()` — the sidebar's content ignores the
-  top safe area so the header can sit level with the traffic lights, but a
-  background layer doesn't inherit that, so it started below the toolbar inset
-  and left the titlebar band one layer short: a hard seam under the traffic
-  lights, reading as two stacked panels. The `if` around that layer sits
-  *inside* the `.background { }` builder for the identity reason above. The
-  sidebar's fill is a **flat colour now, not Liquid Glass**: the glass earned
-  its place by refracting a gradient's travel, and a flat tint has none — with
-  "Plain" the layer drops out and AppKit's own sidebar material (and its
-  desktop translucency) is untouched.
+- **Theme** — Settings → General offers six, in this order: **Bone** (warm
+  near-neutral band, and an accent that is *ink* rather than a hue — near-black on
+  light, near-white on dark), **Moss** (olive band, chartreuse primary),
+  **Ember** (cream / warm near-black band, amber primary — the one warm theme),
+  **Rosewood** (wine band, coral primary), **Indigo** (violet band, periwinkle
+  primary) and **Dracula**.
+  **Declaration order is the picker's order, and the default is a different
+  thing** — Bone leads and **Indigo is the default**. The order runs muted → hued
+  → identity: the quiet one first, then the four that are a colour, then Dracula,
+  which belongs at the end of a list you scan for a hue. The default is the theme
+  with the most point of view, because that is what a new install should open
+  wearing. The previous set had these two collapsed into one rule ("the first
+  swatch is what you're already wearing"), so both are now pinned by
+  `testBoneLeadsThePickerAndIndigoIsTheDefault` — reordering the enum for any
+  other reason would silently move either.
+  Each has a Light and a Dark value and follows the Appearance picker with nothing
+  to re-apply, through the same dynamic `NSColor` trick `Tint` uses. The row label
+  is **"Theme"** and the Auto/Light/Dark control above it is labelled
+  **"Appearance"**, which is the collision that had to be resolved: the two would
+  otherwise both answer to "theme". The Theme section carries **no header of its
+  own** — the row's label already says the word, and a header repeated it as a
+  heading directly above itself; Appearance keeps its header because its row label
+  is the only thing naming a bare segmented picker.
+  **A theme is three grounds, one accent and a palette, and each of the three is
+  load-bearing.** The *band* is `ColumnHeaderBand`; the *page* is `windowFill`
+  (and so the sidebar, which is see-through to it); the *card* is `cardFace` —
+  **pure white in Light for all six**, so body-text contrast is identical
+  everywhere and verified once, and the page hue at ~25% L in Dark. The accent is
+  `primary`, for interactive and selected state only. And the palette is four
+  authored type hues, `typeMark`/`typeLabel`.
+  A band is **thirteen tones per appearance** and only seven are chosen — the
+  rest are *derived from the band's hue*, which is what keeps a new theme a hue
+  rather than a design: the count chip and the dark track are white at 12% / 10%
+  over the band (composited offline to opaque values, so nothing layers alpha at
+  draw time), the light track is the hue at 92% L, the segment labels at 87% L
+  dark / 42% L light, and the raised pill at 93% L or pure white. The selected
+  segment's label is the band's **text** in Light, where the pill is white, and
+  the band's own **fill** in Dark, where the pill is near-white and the label
+  reads as the band inverted — either way it is a value that was already solved.
+  The rule for a seventh theme: band `96% L / ≤0.026 C` in Light and ~20–27% L in
+  Dark, band text `26% L` at the same hue, light hairline `89% L`, page `98.5% L`
+  / card white in Light, and a primary that clears **4.5:1 against both bands** —
+  if it can't, invert it to white-on-deep, which is what Rosewood and Indigo do in
+  Light. Regenerate the whole table from the oklch spec rather than nudging one
+  entry. Every theme's worst *text* pairing, either appearance, clears the
+  **4.5:1** floor — ≥5.0:1 for all six except Dracula's own named metadata value
+  at 4.52:1 — measured across seven pairings each: band text on the band, count
+  text on the count chip, primary label on the primary fill, an unselected segment
+  label on the track, a selected one on the raised pill, the metadata colour on
+  the card, and each type label on the card. Graphics — the marks and the dots —
+  are held to 3:1 and clear it (worst 3.24:1). All of it runs, in
+  `ThemePaletteTests`, resolved through the dynamic `NSColor` under an explicit
+  `NSAppearance`, because the table is data that can only be wrong quietly.
+  **Two rules keep a palette from fighting its own accent.** No type hue may sit
+  within **25°** of the theme's primary — automated, and it is why Moss has no
+  green in its types (Staffing goes teal, Feedback mauve), why Ember's Meeting is
+  a gold-olive and why Indigo's Feedback is rose. A primary under 0.03 chroma is
+  exempt, which is Bone: its accent is ink, so a hue distance against it means
+  nothing. And **mark and label are two values, not one** — the label is 5–8
+  points darker, because the mark is a graphic at 3:1 and the label is text at
+  4.5:1; collapsing them was the previous set's compromise, and pinning the
+  ordering (`testLabelsAreDarkerThanTheirMarksInLight`) is what stops it coming
+  back.
+  **A theme sets exactly one text colour, and Dracula is the exception**:
+  `metaText` — the page hue at 50% L Light / 70% Dark, for timestamps, chip names,
+  the resting due badge and the `···` menu, solved on the card face it lands on
+  (~6:1) with an Increase Contrast pair stepping to ≥7:1. `titleText` and
+  `bodyText` exist, and in five of the six themes they are **`labelColor`** —
+  unthemed, full contrast, the system's business. That is the rule, not an
+  omission: the title and the body are the writing, read at length, and their
+  contrast should not become a function of a colour preference; metadata is
+  different in kind, already quiet, and a tinted grey is what makes it read as
+  part of the theme. **Dracula keeps all three**, because it is a text palette by
+  origin — `#f8f8f2` / `#cfd2e0` / `#9098b8` dark, `#2c2145` / `#463d63` /
+  `#6b6288` light, its body deliberately a step softer than its title, and no
+  Increase Contrast variants needed since the softest of them is already 8.6:1.
+  Its metadata is also the **tightest text pairing in the file** — 4.52:1 in Dark,
+  where the five derived ones are near 6:1 — so it clears the floor with nothing
+  to spare, and a card face nudged lighter would take it under.
+  `testTitleAndBodyAreUnthemedExceptInDracula` is what keeps "text is not themed"
+  true, since the tempting next step from a themed metadata colour is a themed
+  body and nothing on screen would announce it.
+  The **note-type palettes are keyed by `Tint`**, not by note-type id, because the
+  type list is user-extensible: the four defaults wear blue / yellow / purple /
+  green, a theme overrides those four, and a custom type on any other tint falls
+  through to `Tint.ink`. A table keyed by the four built-in ids would have left a
+  custom type unthemed — and a type whose tint the user *changed* wearing a colour
+  that no longer matched. The Increase Contrast variants are **derived** (±8–9
+  points of lightness at the same hue), not solved, since the plan gives none and
+  stepping lightness is the one move that can't change which colour a type is.
+  The one place a type's colour is *not* the themed one is the edit-mode type
+  dropdown, which keeps `Tint.deep`: the themed values are foregrounds, and
+  several are too bright to carry white type as a fill.
+  **Dracula is unchanged, and is now the theme the others were built to match.**
+  It brings its own grounds (`#282a36` / `#2f313f` dark, `#faf7ff` / white light)
+  and its own note-type hues, because a Dracula that keeps the app's white card is
+  not Dracula; it shipped in **both** appearances by request, though it is
+  dark-first by origin. Its type values needed solving rather than copying: the
+  plan's light ones land at 4.1–4.3:1 on white, fine for a capsule and short for a
+  label, so mark and label were each darkened in oklch until they cleared their
+  floor. Its metadata colour is the only one in the set that departs from the
+  derivation — 72% L rather than 70 — because its card is the lightest of the six
+  and 70% landed at 4.8:1 on it; stepped up by the generator until it cleared 5:1,
+  not chosen by eye. `Semantic.overdue` was re-measured on all six card faces
+  rather than assumed.
+  Dracula also changes which colour a **new** project is auto-assigned
+  (`AppTheme.projectTintOrder`, red/yellow/cyan/purple/orange first). Only the
+  auto-assignment: a colour the user picked is data, in `Projects.md`, and
+  switching theme must never rewrite it.
+  **The Settings swatch shows one half — the appearance in effect** — drawn with
+  the same dynamic `band.fill` and `band.primary` the window uses, so the swatch
+  and the band can't disagree. Stacking the light and dark halves in one swatch
+  was tried and reversed on sight: the argument for it (a theme carries both
+  values, so previewing one hides half the choice) is real, but at 74pt wide two
+  22pt slabs read as two slabs rather than as one preview. The footer caption
+  carries that information instead — "Light and dark values are built in —
+  Appearance decides which you see" — which is a sentence doing a job no small
+  rectangle could. Three columns, not six across: below about 46pt a swatch stops
+  previewing anything, which is the line the seven-swatch tint picker had already
+  hit.
+  Two things are easy to get wrong. The window style is applied
+  **unconditionally**, because branching on it in the view builder gives the two
+  cases different identities and tears down `NavigationSplitView` — and with it
+  the autosaved column widths — on every change of the picker. And if the sidebar
+  is ever given a wash of the band's hue on top of the page ground, its layer
+  needs its **own** `.ignoresSafeArea()`: the sidebar's content ignores the top
+  safe area so the header can sit level with the traffic lights, but a background
+  layer doesn't inherit that, so it starts below the toolbar inset and leaves the
+  titlebar band one layer short — a hard seam under the traffic lights, reading as
+  two stacked panels. Any `if` around such a layer sits *inside* the
+  `.background { }` builder, for the identity reason above.
 
-  `.island()` is **plain paper, full stop** — `textBackgroundColor`, white in
-  Light and near-black in Dark, opaque and neutral on every card; colour is
-  the backdrop's job. Its `tint:` parameter (a translucent wash over an opaque
-  base, the layering the gradients forced) left with the last thing using it,
-  the "Color tasks by due date" wash — see the refresh bullet. `Stone.surface`
-  survives only on the column divider's handle and the `SegmentedFilter`
-  track.
+  `.island()` is the **theme's card ground** — white in Light for every theme,
+  the theme's hue at ~25% L in Dark, opaque, with the theme's own hairline
+  (`Stone`'s warm wash over a tinted card reads as a smudge rather than an edge).
+  Its `tint:` parameter (a translucent wash over an opaque base, the layering the
+  gradients forced) left with the last thing using it, the "Color tasks by due
+  date" wash — see the refresh bullet. Colour still never arrives on a card as a
+  *type* wash; what changed is that the paper itself belongs to the theme.
+  `Stone.surface` survives only on the column divider's handle, and
+  `Stone.metaText` only in the `@project` dropdown, which is a floating control
+  rather than a card.
 - **Language** — the app is **English only**, and that includes dates. Every UI
   string is an English literal, so formatting dates in the *system* locale gave
   interfaces in two languages at once: a Spanish Mac showed a due badge reading
@@ -1071,32 +1470,39 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   rows and pills in the
   content layer use `.island()` and the flat `Stone`/`Tint` washes instead (glass
   islands also pooled their shadows — see `Theme.swift`). Two things outside plain
-  controls take it: a transient floating control, the `#project` autocomplete
+  controls take it: a transient floating control, the `@project` autocomplete
   dropdown — the exception HIG allows — and the **`SegmentedFilter` indicator**,
   the refresh's one new glass surface: the moving selection pill refracts the
-  track and the tint under it and travels on the platform spring, with Reduce
-  Transparency swapping in an opaque paper pill and Reduce Motion cutting the
-  travel. (The projects sidebar *was* the third — glass over the gradient — and
-  gave it up with the gradients; a flat tint has nothing to refract.) Those plus
+  track and the band under it and travels on the platform spring, with Reduce
+  Transparency swapping in the band's own opaque raised pill and Reduce Motion
+  cutting the travel. The band is what finally makes that glass worth having —
+  an indicator refracts what is *under* it, and under a neutral panel there was
+  nothing to refract, which is why the track and both label states now come from
+  `BandColors` rather than `Stone`, each solved against the band actually painted
+  behind them. (The projects sidebar *was* the third glass surface — glass over
+  the gradient — and gave it up with the gradients; a flat colour has nothing to
+  refract. AppKit's own sidebar material is still there, and is the system's, not
+  ours.) Those plus
   the toolbar's search field are the window's glass surfaces, and they're meant
   to read as the same material; don't give one of them a `Material` and call it
   close enough.
-  **Primary buttons are accent pills again** (`AccentButtonStyle`), and that is
+  **Primary buttons are colour pills again** (`AccentButtonStyle`), and that is
   a deliberate reversal with its history attached: "New Note" / "New Task" once
   wore `.glassProminent`, gave it up because the *system* accent belonged to
   nothing in the design and fought the gradients, then wore the flat neutral
-  capsule with a semibold label. The refresh re-arms the colour by making it
-  the design's own — an `AccentColor` preference, one filled pill per column —
+  capsule with a semibold label. The colour came back by becoming
+  the design's own — now `AppTheme.primary`, one filled pill per column, solved
+  against the band it sits on —
   while keeping both standing objections honoured: it's flat (glass casts a
   drop shadow; see "No shadows"), and one prominent control per surface is
   still the ration. `.glassProminent` survives only on each popover's confirm
-  button, which `.tint()` now paints in the chosen accent rather than system
+  button, which `.tint()` now paints in the theme's primary rather than system
   blue.
 - **No shadows, anywhere.** Not a gap: the window is deliberately flat, the look it
   wears when it goes inactive and every glass surface settles down, which is the
   look it's tuned for. Separation is a **hairline** (`Stone.line`) plus, on glass,
   the material's own refraction — that's what `.island()` swapped its shadow for and
-  what the `#project` dropdown and the column-divider handle now use too. There is
+  what the `@project` dropdown and the column-divider handle now use too. There is
   no elevation scale to add a level to, and adding one lifted element would make it
   the only thing in the window casting light.
   Which is also why the window's **buttons are no longer glass**: Liquid Glass draws
@@ -1114,7 +1520,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   The toolbar's **search field stays the system's** (`.searchable(placement:
   .toolbar)`) — a hand-built field costs ⌘F, Escape-to-clear and the search item's
   collapse behaviour — so its glass is dealt with in AppKit instead, by
-  `AppDelegate.flattenToolbarGlass()`, the one place in the app that reaches past the
+  `AppDelegate.flattenToolbarGlass()`, the first of the three places in the app that
+  reach past the
   public API. What's worth knowing:
   its shadow is **not a `CALayer` shadow**. Dumping the whole titlebar's view *and*
   layer tree found no `shadowOpacity` anywhere in it — the only shadowed layers in
@@ -1192,7 +1599,10 @@ at-a-glance pending-task behaviour.
 
 ## Conventions
 
-- Pure native, **no third-party dependencies** — system frameworks only.
+- Pure native, **no third-party *code*** — system frameworks only, no package
+  manager, no build step beyond `build.sh`. The two bundled OFL font files are
+  the sole exception and a knowing one (see the Typeface bullet); they are data,
+  not dependencies.
 - Shared state is `@MainActor @Observable` (`Library`, `AppState`, `SettingsStore`),
   created once in `InsertApp` and injected via `.environment(…)`; views read them
   with `@Environment(Type.self)`.

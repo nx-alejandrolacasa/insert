@@ -474,13 +474,18 @@ final class Library {
         return project
     }
 
-    /// The palette entry fewest projects wear, in `Tint.allCases` order so the
-    /// choice is stable rather than random.
+    /// The palette entry fewest projects wear, walked in the **theme's** order so
+    /// the choice is stable rather than random — and so a Dracula install's new
+    /// projects come out in Dracula's own hues (`AppTheme.projectTintOrder`).
+    ///
+    /// Only this auto-assignment follows the theme. A colour the user picked is
+    /// *data*, in `Projects.md`, and switching theme must never rewrite it.
     private func leastUsedTint() -> Tint {
         var counts: [Tint: Int] = [:]
         for project in projects { counts[project.tint, default: 0] += 1 }
-        return Tint.allCases.min { (counts[$0] ?? 0, Tint.allCases.firstIndex(of: $0)!)
-                                 < (counts[$1] ?? 0, Tint.allCases.firstIndex(of: $1)!) } ?? .blue
+        let order = SettingsStore.shared.theme.projectTintOrder
+        return order.min { (counts[$0] ?? 0, order.firstIndex(of: $0)!)
+                         < (counts[$1] ?? 0, order.firstIndex(of: $1)!) } ?? .blue
     }
 
     func updateProject(_ project: Project) {

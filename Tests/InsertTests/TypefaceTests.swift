@@ -65,6 +65,115 @@ final class TypefaceTests: XCTestCase {
         XCTAssertFalse(name.lowercased().contains("times"), "substituted a fallback: \(name)")
     }
 
+    /// The bundled face, and the one option that can be missing *entirely*
+    /// rather than substituted: it lives in a resource bundle, so a build that
+    /// forgot to copy it resolves to the system font and looks like nothing
+    /// happened. Grotesk is the default for a new install, which makes that the
+    /// whole app quietly wearing the wrong face.
+    func testGroteskIsTheBundledSpaceGrotesk() {
+        XCTAssertTrue(BundledFonts.register(), "the bundled fonts did not register")
+        let font = Card.nsFont(.body, typeface: .grotesk)
+        XCTAssertEqual(font.familyName, BundledFonts.grotesk, "got \(font.fontName)")
+        XCTAssertNotEqual(font.fontName, NSFont.preferredFont(forTextStyle: .body).fontName)
+    }
+
+    /// Why the *variable* file ships rather than the four statics: the statics
+    /// are Light / Regular / Medium / Bold with no SemiBold, and SemiBold is the
+    /// weight the card titles ask for. Through the `wght` axis it has to be a
+    /// real instance — distinct from both neighbours, not silently rounded to
+    /// Bold, which is exactly what the `.traits`/`.weight` route did.
+    func testGroteskResolvesEveryWeightIncludingSemibold() {
+        let weights: [NSFont.Weight] = [.regular, .medium, .semibold, .bold]
+        let names = weights.map { Card.nsFont(.title3, weight: $0, typeface: .grotesk).fontName }
+        XCTAssertEqual(Set(names).count, weights.count, "weights collapsed: \(names)")
+    }
+
+    /// The trap the variable font sets, and the reason `BundledFonts.font` has
+    /// three routes to a weight instead of one: a descriptor carrying an
+    /// explicit `wght` variation answers `withSymbolicTraits(.bold)` with **the
+    /// same face again**, no error. Since that trait lookup is how
+    /// `MarkdownText` resolves `**bold**`, pinning the axis at 400 for the body
+    /// face made every bold run in a Grotesk card render as body text. Pinned
+    /// here rather than left to `testBoldItalicKeepsItsWeight`, which only found
+    /// it by accident.
+    func testSymbolicBoldStillReachesAHeavierGroteskFace() {
+        let body = Card.nsFont(.body, typeface: .grotesk)
+        let bolded = NSFont(
+            descriptor: body.fontDescriptor.withSymbolicTraits(
+                body.fontDescriptor.symbolicTraits.union(.bold)),
+            size: body.pointSize
+        )
+        XCTAssertNotNil(bolded)
+        XCTAssertNotEqual(
+            bolded?.fontName, body.fontName,
+            "the body face is pinned against the bold trait: **bold** would draw as regular"
+        )
+    }
+
+    /// Space Grotesk is Latin-only. Nothing in the app handles that — CoreText's
+    /// own cascade substitutes per glyph — so this pins the assumption rather
+    /// than a behaviour: if the family ever *did* claim Cyrillic, a title in it
+    /// would start rendering in a face nobody chose.
+    func testGroteskLeavesNonLatinToTheSystemCascade() {
+        let font = Card.nsFont(.body, typeface: .grotesk)
+        XCTAssertTrue(font.coveredCharacterSet.contains("A"))
+        XCTAssertFalse(font.coveredCharacterSet.contains("д"))
+    }
+
+    // MARK: The numeral and label face
+
+    /// `Mono` draws the bands' counts, the cards' timestamps and the type
+    /// labels, and it must really be Plex Mono rather than the proportional
+    /// system font — a count that isn't tabular is the thing this exists to
+    /// prevent.
+    func testMonoIsTheBundledPlexMono() {
+        XCTAssertTrue(BundledFonts.register())
+        for typeface in Typeface.allCases where typeface != .monospaced {
+            let font = Mono.nsFont(.caption2, typeface: typeface)
+            XCTAssertEqual(
+                font.familyName, BundledFonts.mono,
+                "\(typeface.label) resolved \(font.fontName) for the numeral face"
+            )
+        }
+    }
+
+    /// The one opt-out: under Monospace the card's own face is already SF Mono,
+    /// and two monospaced faces on one card would be two voices. So it defers to
+    /// the body face there instead of adding a second.
+    func testMonoDefersToTheCardFaceUnderMonospace() {
+        let mono = Mono.nsFont(.caption2, typeface: .monospaced)
+        XCTAssertEqual(mono.fontName, Card.nsFont(.caption2, weight: .medium, typeface: .monospaced).fontName)
+        XCTAssertNotEqual(mono.familyName, BundledFonts.mono)
+    }
+
+    /// Same point size as the style it is asked for, whichever typeface is
+    /// selected: the footer sits in a line of the card's own metrics, and a
+    /// numeral face a point out of step shifts the row it is in.
+    func testMonoMatchesTheTextStyleSize() {
+        for style in [NSFont.TextStyle.caption2, .caption1, .body] {
+            let expected = NSFont.preferredFont(forTextStyle: style).pointSize
+            for typeface in Typeface.allCases {
+                XCTAssertEqual(
+                    Mono.nsFont(style, typeface: typeface).pointSize, expected,
+                    "\(typeface.label) at \(style.rawValue)"
+                )
+            }
+        }
+    }
+
+    /// The OFL obliges Insert to distribute the licence with the fonts, so an
+    /// empty string here is a licensing failure and not a cosmetic one — the
+    /// Settings sheet reads exactly this.
+    func testBothLicencesAreBundledAndReadable() {
+        for licence in ["SpaceGrotesk-OFL", "IBMPlexMono-OFL"] {
+            let text = BundledFonts.licence(licence)
+            XCTAssertTrue(
+                text.contains("SIL OPEN FONT LICENSE"),
+                "\(licence) is missing or not the OFL (\(text.count) characters)"
+            )
+        }
+    }
+
     // MARK: The one-storey `a`
 
     /// Rounded asks for the alternate, so the `a`s must shape to different glyphs

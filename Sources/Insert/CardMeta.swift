@@ -1,73 +1,93 @@
 import AppKit
 import SwiftUI
 
-/// The refresh's note-card anatomy (CLAUDE.md decisions 2 and 3): the card
-/// face is white, and a note's type is expressed twice — a highlighter stroke
-/// behind the title, and a small-caps label leading the meta row. The pieces
-/// live here because both cards borrow from them and neither owns them.
+/// The note card's anatomy: the card face is plain paper, and a note's type is
+/// expressed twice — a capsule mark before the title, and a small-caps label
+/// leading the meta row. The pieces live here because both cards borrow from
+/// them and neither owns them.
 
-// MARK: - Marker title
+// MARK: - Marked title
 
-/// A card title wearing its type's highlighter stroke: a band in the type's
-/// `marker` colour covering the bottom ~34% of each line box, drawn *behind*
-/// the glyphs — the title's own colour and contrast are untouched.
+/// A card title with its type's mark: a 3×16pt capsule in the type's colour,
+/// then the title at full contrast.
 ///
-/// The band is per **line**, not per text block, which is the part SwiftUI
-/// doesn't give away: a single bottom-aligned background under a two-line
-/// title would stroke only the last line. So the text's height is measured,
-/// divided by the face's line height into a line count, and one band drawn per
-/// line. The bands span the text frame's width — for a wrapped title that is
-/// the widest line, so a shorter second line's band can overhang it by a few
-/// points, which at marker strength reads as the stroke running on rather
-/// than as an error. Mapping each line's true width would need the title
-/// laid out by hand; not worth it for a two-line limit.
-struct MarkerTitle: View {
+/// This replaced `MarkerTitle`, which drew the type as a **highlighter stroke
+/// behind the glyphs** — the July 2026 refresh's decision 2, and the one part of
+/// it that had to be undone rather than tuned. A coloured band under letters
+/// fights them at any opacity; the strength had already come down from the
+/// handoff's 60% to 45% because a saturated type crowded its own title, and the
+/// remaining problem wasn't the number. It also forced every title onto a tinted
+/// ground, so the title's contrast had to be argued per type instead of being
+/// the one thing on a card that never varies.
+///
+/// Beside the title, the type's colour costs the words nothing: the mark is a
+/// graphic, so it is solved at 3:1 (`AppTheme.typeMark`) and can stay bright
+/// enough to see, where the label naming the same type in the meta row is text
+/// and takes a darker value of it (`AppTheme.typeLabel`).
+///
+/// Two details. The mark is **fixed at 16pt tall** and top-aligned to the title's
+/// first line rather than stretched to the text's height, so a title that wraps
+/// to two lines doesn't grow a 40pt bar — it marks the card, it isn't a rule down
+/// the side (that treatment was mocked as a 3px left rule and rejected as
+/// generic). And it declares its own baseline through `centredOnTextCap`, because
+/// the title row is `.firstTextBaseline`-aligned and a shape has no baseline of
+/// its own: without that the capsule sat a couple of points low against the
+/// capitals it marks.
+struct TypeMarkTitle: View {
     let text: String
-    let marker: Color
+    let mark: Color
 
-    @State private var height: CGFloat = 0
+    @Environment(SettingsStore.self) private var settings
+
+    /// 3×16 at a 2pt radius, from the plan. A hair narrower than a hairline is
+    /// thick, so it reads as a mark rather than as a border.
+    private static let markWidth: CGFloat = 3
+    private static let markHeight: CGFloat = 16
+    private static let markRadius: CGFloat = 2
 
     var body: some View {
-        // The face's own metrics, so a serif or monospaced card folds its
-        // marker at its own rhythm — the `CollapsibleMarkdown` rule.
-        let font = Card.nsFont(.title3, weight: .bold)
-        let lineHeight = font.ascender - font.descender + font.leading
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            RoundedRectangle(cornerRadius: Self.markRadius, style: .continuous)
+                .fill(mark)
+                .frame(width: Self.markWidth, height: Self.markHeight)
+                .centredOnTextCap()
+                // Decoration: the meta row's label names the type in words, and
+                // spelling a colour out loud helps nobody.
+                .accessibilityHidden(true)
 
-        Text(text)
-            .font(Card.font(.title3, weight: .bold))
-            .lineLimit(2)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-            .background(alignment: .topLeading) {
-                let lines = max(1, Int((height / lineHeight).rounded()))
-                VStack(spacing: 0) {
-                    ForEach(0..<lines, id: \.self) { _ in
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            marker
-                                .frame(height: lineHeight * 0.34)
-                        }
-                        .frame(height: lineHeight)
-                    }
-                }
-                // The stroke runs a couple of points past the glyphs at each
-                // end, the way a real highlighter overshoots.
-                .padding(.horizontal, -2)
-            }
+            Text(text)
+                .font(Card.font(.title3, weight: .semibold))
+                .tracking(-0.1)
+                // `labelColor` in five of the six themes — only Dracula names a
+                // title colour of its own (`AppTheme.titleText`).
+                .foregroundStyle(settings.theme.titleText)
+                .lineLimit(2)
+        }
     }
 }
 
 // MARK: - Type label
 
-/// The small-caps type name leading a card's meta row — "MEETING", "NOTE" —
-/// in the type's `ink`, which is already solved at 4.5:1 on the card faces.
+/// The small-caps type name leading a card's meta row — "MEETING", "NOTE" — in
+/// the type's themed **label** colour, solved at 4.5:1 on the card faces its
+/// theme paints. A few points darker than the capsule mark beside the title, and
+/// that difference is the point: text carries a floor a graphic doesn't.
+///
+/// Mono, and uppercase, because it is a **tag rather than a word**: it labels the
+/// card the way the count pill labels a column, and the same face draws both (see
+/// `Mono`). At 10.5pt with 0.06em of tracking it also stops competing with the
+/// project chips beside it, which are proportional and sentence-case.
 struct TypeCapsLabel: View {
     let type: NoteType
 
+    @Environment(SettingsStore.self) private var settings
+
     var body: some View {
         Text(type.name.uppercased())
-            .font(.caption.weight(.semibold))
-            .tracking(0.8)
-            .foregroundStyle(type.tint.ink)
+            .font(Mono.font(size: 10.5, weight: .semibold))
+            // 0.06em at 10.5pt.
+            .tracking(0.63)
+            .foregroundStyle(settings.theme.typeLabel(type.tint))
             .lineLimit(1)
             // The uppercase is presentation; VoiceOver should say "Meeting",
             // not spell out an initialism.
@@ -83,6 +103,8 @@ struct ProjectDotChip: View {
     let name: String
     let dot: Color
 
+    @Environment(SettingsStore.self) private var settings
+
     var body: some View {
         HStack(spacing: 5) {
             Circle()
@@ -91,7 +113,7 @@ struct ProjectDotChip: View {
             Text(name)
         }
         .font(.caption)
-        .foregroundStyle(Stone.metaText)
+        .foregroundStyle(settings.theme.metaText)
         .lineLimit(1)
         .padding(.horizontal, 9)
         .padding(.vertical, 3)
@@ -113,6 +135,7 @@ struct ProjectDotChip: View {
 struct ProjectChipsRow: View {
     let projects: [Project]
 
+    @Environment(SettingsStore.self) private var settings
     @State private var showingOverflow = false
 
     private static let shown = 2
@@ -135,20 +158,22 @@ struct ProjectChipsRow: View {
         } label: {
             HStack(spacing: 3) {
                 // The hidden projects' own dots, overlapped, each on a sliver
-                // of card colour so neighbouring dots stay separable.
+                // of the card's own ground so neighbouring dots stay separable
+                // — the theme's face, not a nominal white, or the slivers would
+                // be the one light thing on a dark card.
                 HStack(spacing: -3) {
                     ForEach(hidden.prefix(3)) { project in
                         Circle()
                             .fill(project.tint.accent)
                             .frame(width: 6, height: 6)
                             .padding(1)
-                            .background(Circle().fill(Color(nsColor: .textBackgroundColor)))
+                            .background(Circle().fill(settings.theme.cardFace))
                     }
                 }
                 Text("+\(hidden.count)")
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(Stone.metaText)
+            .foregroundStyle(settings.theme.metaText)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .chipHeight()

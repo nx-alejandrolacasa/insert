@@ -17,7 +17,7 @@ import AppKit
 /// the problem it was working around.
 ///
 /// **The titles are why it still exists.** A title is a `TextField`
-/// (`ProjectHashField`), which has no text view of its own: it borrows the
+/// (`ProjectMentionField`), which has no text view of its own: it borrows the
 /// window's one shared **field editor**, and so do the toolbar's search field and
 /// Settings' text fields. What that editor is given follows it to the next field,
 /// so it has to be told, on each focus change, what the field it is *currently*

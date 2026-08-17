@@ -59,7 +59,7 @@ if [[ "${1:-}" == "icon" ]]; then
 fi
 
 # --disable-sandbox: SwiftPM's own build sandbox can't nest inside CI/agent
-# shells; harmless here since there are no third-party dependencies.
+# shells; harmless here since there are no third-party code dependencies.
 swift build -c "$CONFIG" --disable-sandbox
 
 rm -rf "$APP"
@@ -68,6 +68,19 @@ mkdir -p "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/${APP_NAME}"
 cp "Resources/Info.plist" "$APP/Contents/Info.plist"
+
+# The SwiftPM resource bundle — the two OFL fonts Insert bundles (see
+# BundledFonts). SwiftPM emits it beside the executable and Bundle.module looks
+# in Bundle.main.resourceURL first, so copying it into Contents/Resources is all
+# the app needs; it is not optional, since Grotesk is the default face and an
+# unregistered family silently resolves to the system font.
+RESOURCE_BUNDLE=".build/${CONFIG}/Insert_Insert.bundle"
+if [[ -d "$RESOURCE_BUNDLE" ]]; then
+  ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
+else
+  echo "warning: no ${RESOURCE_BUNDLE} — the bundled fonts will be missing and"
+  echo "         the Grotesk typeface will fall back to the system font."
+fi
 
 # App icon.
 #
@@ -135,7 +148,7 @@ fi
 # comes from git (commit count — monotonic and reproducible), so About and Finder
 # always show which build this actually is. CI overrides the version from the
 # pushed tag via INSERT_VERSION.
-VERSION="${INSERT_VERSION:-0.10.0}"
+VERSION="${INSERT_VERSION:-0.12.0}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 
 /usr/libexec/PlistBuddy \
