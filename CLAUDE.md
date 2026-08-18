@@ -436,6 +436,39 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   since a wide sidebar is a width someone chose and only the excess needs taking off.
   The modifier stays — it is still what sets the *ideal* — but none of its three
   values is what enforces the range.
+  **AppKit's hover-peek of the collapsed sidebar is switched off, because
+  cancelling one segfaults.** 0.13.0 crashed on open → close → open of the
+  projects column, with no frame of Insert's on the stack:
+  `-[_NSSplitViewCollapsedInteractionsView mouseExited:]` →
+  `-[NSSplitView _cancelProactivePeek]`, `EXC_BAD_ACCESS` at 0x59. The report's
+  own instruction bytes name the fault exactly — `ldrb w8, [x0, #0x59]` with x0
+  nil, a BOOL read off a pointer the call before it handed back nil for, three
+  instructions after AppKit *had* nil-checked the peek state it loaded (`cbz x0`)
+  — so the peek existed and one of its parts was already gone, and `x15` held
+  `NSSplitViewPeekingViewParams`, which is the part. What makes it an ordinary
+  gesture rather than an exotic one: the peek's sensitive zone is the window's
+  leading edge, which is where the show button is, so hovering it starts a peek
+  that clicking it then supersedes. That ordering is a reading of the trace and
+  the repro and was **not** instrumented; the crash and the nil deref are the
+  facts. There is no public API for any of the peek
+  (`_beginProactivePeekAtLocation:`, `_proactivePeekParams`,
+  `_canDoSidebarProactivePeek` are all private) and nothing on our side can make
+  AppKit's nil deref safe, so `disableSidebarPeek(in:)` removes the path instead:
+  `mouseExited:` arrives through an `NSTrackingArea`, and a view with none gets no
+  enter or exit at all. The **cost is deliberate** — the leading edge no longer
+  peeks the collapsed column, and the button, the menu item and ⌘§ are what open
+  it. It asks the split view for its own `_leadingCollapsedInteractionsView`
+  rather than matching a private class name down the hierarchy, so a future AppKit
+  without one degrades to a no-op, and it repeats on `applicationDidUpdate`
+  because AppKit re-adds the tracking areas from `updateTrackingAreas` every time
+  a column collapses — the fourth place in the app that reaches past the public
+  API, on `flattenToolbarGlass()`'s terms. `constrainSidebarWidth(in:)` was
+  narrowed in the same pass to **skip a collapsed sidebar**: there is no divider
+  to police while the column is away, the next update tick re-asserts the range as
+  it reopens, and it keeps our writes — each of which re-runs the split view's
+  layout — out of the interval the peek lives in. Whether those writes contributed
+  at all is untested; the guard costs nothing either way. Both now run from one
+  `configureSplitViews()`, so the hot path walks for the split view once.
 - **The toolbar's leading side is the show button and AppKit's own title, and
   nothing else.** A project icon sat between them from an earlier design and was
   **removed**, along with every attempt to space it: the whole episode is kept
@@ -1694,7 +1727,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   The toolbar's **search field stays the system's** (`.searchable(placement:
   .toolbar)`) — a hand-built field costs ⌘F, Escape-to-clear and the search item's
   collapse behaviour — so its glass is dealt with in AppKit instead, by
-  `AppDelegate.flattenToolbarGlass()`, the first of the three places in the app that
+  `AppDelegate.flattenToolbarGlass()`, the first of the four places in the app that
   reach past the
   public API. What's worth knowing:
   its shadow is **not a `CALayer` shadow**. Dumping the whole titlebar's view *and*

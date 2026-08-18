@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidUpdate(_ notification: Notification) {
         Self.flattenToolbarGlass()
         Self.restyleWindowTitle()
-        Self.constrainSidebarWidth()
+        Self.configureSplitViews()
         SpellChecking.applyToFocusedEditors()
     }
 
@@ -287,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// after a new `idealSidebarWidth` ships, every saved width is reset; afterwards
     /// only widths *outside* the range are corrected, so a divider the user drags
     /// stays where they put it. Out-of-range is now both ends: a build before
-    /// `constrainSidebarWidth()` could autosave a sidebar dragged to 1,100pt, and
+    /// `constrainSidebarWidth(in:)` could autosave a sidebar dragged to 1,100pt, and
     /// letting that restore would give a correct window one wrong first frame.
     ///
     /// This is the *first* half of the fix and not the reliable one — see
@@ -395,20 +395,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// established. It's idempotent by comparison rather than by remembering, since
     /// assigning a thickness re-runs the split view's layout.
     @MainActor
-    private static func constrainSidebarWidth() {
-        for window in NSApp.windows {
-            guard let split = splitView(in: window.contentView),
-                  let controller = split.delegate as? NSSplitViewController,
-                  let sidebar = controller.splitViewItems.first
-            else { continue }
+    private static func constrainSidebarWidth(in split: NSSplitView) {
+        guard let controller = split.delegate as? NSSplitViewController,
+              let sidebar = controller.splitViewItems.first,
+              // Nothing to police while the column is away: there is no divider to
+              // drag, and the next update tick re-asserts the range as it reopens,
+              // long before anyone can reach for one. What that buys is that our
+              // writes stay out of the collapse, where assigning a thickness
+              // re-runs the split view's layout underneath AppKit's own peek — see
+              // `disableSidebarPeek(in:)`.
+              !sidebar.isCollapsed
+        else { return }
 
-            if sidebar.minimumThickness != Metrics.minSidebarWidth {
-                sidebar.minimumThickness = Metrics.minSidebarWidth
-            }
-            if sidebar.maximumThickness != Metrics.maxSidebarWidth {
-                sidebar.maximumThickness = Metrics.maxSidebarWidth
-            }
+        if sidebar.minimumThickness != Metrics.minSidebarWidth {
+            sidebar.minimumThickness = Metrics.minSidebarWidth
         }
+        if sidebar.maximumThickness != Metrics.maxSidebarWidth {
+            sidebar.maximumThickness = Metrics.maxSidebarWidth
+        }
+    }
+
+    /// The split view's two corrections, so the hot path walks for it once.
+    @MainActor
+    private static func configureSplitViews() {
+        for window in NSApp.windows {
+            guard let split = splitView(in: window.contentView) else { continue }
+            constrainSidebarWidth(in: split)
+            disableSidebarPeek(in: split)
+        }
+    }
+
+    /// AppKit's own accessor for the invisible view that watches the collapsed
+    /// sidebar's edge. Private, so it is asked for rather than assumed.
+    private static let collapsedInteractionsView = Selector(("_leadingCollapsedInteractionsView"))
+
+    /// Takes AppKit's hover-**peek** off the collapsed sidebar, because *cancelling*
+    /// one segfaults.
+    ///
+    /// 0.13.0 crashed on open → close → open of the projects column, with no frame
+    /// of Insert's on the stack: `-[_NSSplitViewCollapsedInteractionsView
+    /// mouseExited:]` → `-[NSSplitView _cancelProactivePeek]`, `EXC_BAD_ACCESS` at
+    /// 0x59. The faulting instruction is `ldrb w8, [x0, #0x59]` with x0 nil — a BOOL
+    /// read off a pointer the call before it handed back nil for — and three
+    /// instructions earlier AppKit *had* nil-checked the peek state it loaded
+    /// (`cbz x0`). So the peek existed and one of its parts was already gone; `x15`
+    /// held `NSSplitViewPeekingViewParams`, which is the part.
+    ///
+    /// What makes it an ordinary gesture rather than an exotic one: the peek's
+    /// sensitive zone is the window's leading edge, which is where the "show" button
+    /// sits. Hovering it starts a peek, clicking it expands the column for real and
+    /// supersedes that peek, and the pointer leaving afterwards is what cancels a
+    /// peek whose params have gone. That sequence is a reading of the trace and the
+    /// repro, not something instrumented — don't repeat the ordering as fact.
+    ///
+    /// Nothing on our side can make AppKit's nil-deref safe, and there is no public
+    /// API for any of the peek (`_beginProactivePeekAtLocation:`,
+    /// `_proactivePeekParams`, `_canDoSidebarProactivePeek` are all private), so the
+    /// path is removed instead: `mouseExited:` arrives through an `NSTrackingArea`,
+    /// and a view with none gets no enter or exit at all. **The cost is deliberate**
+    /// — hovering the leading edge no longer slides the collapsed projects column
+    /// out. Insert has a toolbar button, a menu item and ⌘§ for that, and a crash on
+    /// the third click of a common gesture is worth more than an affordance.
+    ///
+    /// It rides `applicationDidUpdate` for `flattenToolbarGlass()`'s reason: AppKit
+    /// builds the interactions view as a column collapses and re-adds its tracking
+    /// areas from `updateTrackingAreas`, so this is repeated rather than done once.
+    /// And it asks the split view for the view rather than matching a private class
+    /// name down the hierarchy, so an AppKit that no longer has one is a no-op —
+    /// the same trade the toolbar's glass makes.
+    @MainActor
+    private static func disableSidebarPeek(in split: NSSplitView) {
+        guard split.responds(to: collapsedInteractionsView),
+              let peek = split.perform(collapsedInteractionsView)?.takeUnretainedValue() as? NSView,
+              !peek.trackingAreas.isEmpty
+        else { return }
+
+        for area in peek.trackingAreas { peek.removeTrackingArea(area) }
     }
 
     /// The window's column split view: the first one with something on both sides of
