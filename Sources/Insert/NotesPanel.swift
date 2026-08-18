@@ -278,7 +278,18 @@ private struct NoteCardView: View {
         // Focus on entering edit; persist-or-discard on leaving it (e.g. when
         // another note is selected).
         .onChange(of: isEditing) { _, editing in
-            if editing { focusForEntry() } else { finishEditing() }
+            if editing {
+                focusForEntry()
+            } else {
+                // Stay open. The editor showed the whole note, so folding it
+                // back to a preview the moment editing ends takes away the text
+                // someone was just reading — and it happens on the same frame
+                // the card is already resizing, so it reads as the note
+                // shrinking away from them. Expanding is a state the reader can
+                // undo with the chevron; collapsing is one they have to.
+                expanded = true
+                finishEditing()
+            }
         }
         .onDisappear {
             // Settle any pending edit — including mid-edit, where an empty

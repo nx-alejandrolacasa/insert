@@ -583,7 +583,21 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   notes (an install that had the earlier "Collapse long notes" toggle on is
   seeded to 10 — that toggle was ten lines or nothing); tasks default to 1 line,
   the teaser those rows have always shown. View mode only — the editor always
-  shows everything. All of it is **one shared view**, `CollapsibleMarkdown`
+  shows everything.
+  **A note stays expanded after being edited.** The editor showed the whole note,
+  so folding it back to a preview the moment editing ends takes away the text
+  someone was just reading, on the same frame the card is already resizing — it
+  reads as the note shrinking away from them. Expanding is a state the reader can
+  undo with the chevron; collapsing is one they have to. It rides the existing
+  `onChange(of: isEditing)`, so every route out of edit mode is covered, and the
+  two value-scoped animations mean the card resizes once rather than twice. One
+  consequence in `CollapsibleMarkdown`: a card that has only ever been expanded
+  has never laid its one-line teaser out, so `collapsible` falls back to one line
+  of the card face rather than comparing against an unmeasured zero, which would
+  call every body collapsible and hang a chevron on a note with nothing to fold.
+  Tasks are deliberately unchanged — their preview is one line by default, and
+  leaving every edited row expanded would rewrite the column's rhythm.
+  All of it is **one shared view**, `CollapsibleMarkdown`
   (`MarkdownText.swift`), and it has two collapsed shapes because one line is
   not just a smaller ten. **One line** is the teaser (`MarkdownParser.lead`,
   rendered inline), laid out at its natural width and faded out at the trailing

@@ -547,7 +547,14 @@ struct CollapsibleMarkdown: View {
     /// line height, and must not earn a chevron that reveals nothing.
     private var collapsible: Bool {
         guard let lines = previewLines else { return false }
-        if lines == 1 { return fullHeight > teaserHeight + 1 }
+        // A card that has only ever been *expanded* — a note left open by the
+        // edit it just finished — has never laid the teaser out, so there is no
+        // measurement to compare against and a zero would call every body
+        // collapsible. One line of the card face is the honest stand-in until
+        // the teaser has been drawn once.
+        if lines == 1 {
+            return fullHeight > (teaserHeight > 0 ? teaserHeight : lineHeight) + 1
+        }
         return fullHeight > CGFloat(lines) * lineHeight + lineHeight / 2
     }
 
