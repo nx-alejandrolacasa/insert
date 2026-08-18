@@ -564,6 +564,18 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   anything drawing a symbol in a well must size the glyph to the widest symbol
   it can be asked to hold, the reason `chipHeight` is pinned to its tallest
   case.
+  **The ⋯ menu copies the writing, not the file.** "Copy" puts
+  `MarkdownFiles.copyText(_:)` on the pasteboard — the title as an `#` heading, a
+  blank line, then the body — deliberately *not* `encode(_:)`, whose frontmatter
+  is Insert's own bookkeeping (ids, timestamps, project UUIDs) and means nothing
+  wherever it is being pasted. An empty title contributes no heading and no blank
+  line, since `displayTitle`'s "Untitled" is a label for a card with no name
+  rather than a name anyone wants pasted; a note with neither title nor body
+  copies as the empty string and the item is disabled. It carries **no ⌘C**, and
+  that is the interesting constraint: a menu item's `keyboardShortcut` is live for
+  as long as its view is, so every card on screen would claim ⌘C at once — both
+  ambiguous between cards and taken off the text selection in whichever card is
+  open. Pinned by `StorageLayoutTests`.
   **A body can read collapsed — "Preview lines", notes and tasks each their own**
   (Settings → Notes / Tasks): show everything, or a preview of 1 / 3 / 5 / 10
   rendered lines with a chevron beside the body's *first* line to reveal the

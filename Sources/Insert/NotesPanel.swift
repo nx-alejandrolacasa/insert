@@ -656,6 +656,19 @@ private struct NoteCardView: View {
             if !isEditing {
                 Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
             }
+            // The writing, not the file: title as a heading, then the body, with
+            // the frontmatter left behind (`MarkdownFiles.copyText`). No ⌘C on
+            // it — a menu item's shortcut is live for as long as the item's view
+            // is, so every card on screen would claim ⌘C at once and take it off
+            // the text selection in whichever card is open.
+            Button {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(MarkdownFiles.copyText(draft), forType: .string)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(MarkdownFiles.copyText(draft).isEmpty)
             Button(role: .destructive) {
                 saveTask?.cancel()
                 if isEditing { appState.selectedNoteID = nil }

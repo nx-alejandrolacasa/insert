@@ -51,6 +51,25 @@ enum MarkdownFiles {
         return Frontmatter.compose(lines: lines, body: note.body)
     }
 
+    /// A note as it goes onto the **pasteboard** — the title as an `#` heading,
+    /// a blank line, then the body.
+    ///
+    /// Deliberately not `encode(_:)`: what is on disk carries frontmatter, which
+    /// is Insert's bookkeeping (ids, timestamps, project UUIDs) and means nothing
+    /// in the mail or the message someone is pasting into. This is the writing.
+    ///
+    /// An empty title contributes **nothing** — no heading, no blank line — since
+    /// `displayTitle`'s "Untitled" is a label for a card with no name and not a
+    /// name anyone wants pasted. A note with neither title nor body copies as the
+    /// empty string, and the menu item is disabled in that case.
+    static func copyText(_ note: Note) -> String {
+        let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return body }
+        if body.isEmpty { return "# \(title)" }
+        return "# \(title)\n\n\(body)"
+    }
+
     static func decodeNote(from content: String, url: URL) -> Note? {
         let parsed = Frontmatter.parse(content)
         let s = parsed.scalars

@@ -443,4 +443,36 @@ final class StorageLayoutTests: XCTestCase {
         library.reloadAll()
         XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"], "the order did not persist")
     }
+    // MARK: Copying a note to the pasteboard
+
+    /// What the ⋯ menu's Copy puts on the pasteboard is the writing — the title
+    /// as a heading, a blank line, the body — and specifically *not* `encode`'s
+    /// frontmatter, which is Insert's own bookkeeping and means nothing wherever
+    /// it is being pasted.
+    func testCopyTextIsTheHeadingAndBodyWithoutFrontmatter() {
+        var note = Note(title: "Kickoff", body: "- agenda\n  - budget")
+        note.typeID = "meeting"
+        let text = MarkdownFiles.copyText(note)
+        XCTAssertEqual(text, "# Kickoff\n\n- agenda\n  - budget")
+        XCTAssertFalse(text.contains(note.id.uuidString))
+        XCTAssertFalse(text.contains("type:"))
+    }
+
+    /// "Untitled" is a label for a card with no name, not a name to paste, so an
+    /// empty title contributes no heading and no blank line above the body.
+    func testCopyTextOmitsAnEmptyTitleEntirely() {
+        XCTAssertEqual(MarkdownFiles.copyText(Note(title: "  ", body: "just the body")), "just the body")
+    }
+
+    /// A title with nothing under it copies as the heading alone — no trailing
+    /// blank line to paste.
+    func testCopyTextOfATitleOnlyNoteIsTheHeadingAlone() {
+        XCTAssertEqual(MarkdownFiles.copyText(Note(title: "Kickoff", body: "")), "# Kickoff")
+    }
+
+    /// Nothing to copy is the empty string, which is what disables the menu item.
+    func testCopyTextOfAnEmptyNoteIsEmpty() {
+        XCTAssertTrue(MarkdownFiles.copyText(Note(title: "", body: "\n  \n")).isEmpty)
+    }
+
 }
