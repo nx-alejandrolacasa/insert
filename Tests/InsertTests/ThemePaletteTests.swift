@@ -58,10 +58,9 @@ final class ThemePaletteTests: XCTestCase {
     /// the column stops having a header at all.
     ///
     /// Deliberately a loose threshold, and worth saying why: this measures
-    /// **luminance**, and in Dark the two surfaces are within a point of
-    /// lightness by design (band ~20–27% L, card ~25%) with the difference
-    /// carried by hue and chroma instead — Rosewood's wine band against its
-    /// greyer card is 1.04:1 here and obvious on screen. So what this catches is
+    /// **luminance**, and in Dark the two surfaces are close by design, with the
+    /// difference carried by hue and chroma instead — Dracula's plum band against
+    /// its greyer card is 1.07:1 here and obvious on screen. So what this catches is
     /// a value that has *collapsed onto its neighbour*, not a legibility floor;
     /// the floors are the pairings above.
     func testEachBandIsDistinguishableFromItsOwnCard() {
@@ -77,15 +76,30 @@ final class ThemePaletteTests: XCTestCase {
 
     // MARK: The grounds
 
-    /// Light cards are pure white in every theme: the tint lives in the window
-    /// behind them, which is what makes body-text contrast identical in all six
-    /// and verifiable once rather than per theme.
-    func testLightCardsArePureWhiteInEveryTheme() {
+    /// **Light cards are no longer pure white in every theme**, and this is the
+    /// test that keeps the reversal honest rather than letting it rot into an
+    /// accident. The previous set made every light card white so body-text
+    /// contrast could be verified once; two of the sourced palettes bring their
+    /// own paper — Kanagawa's Lotus cream and Rosé Pine's Dawn `surface` — because
+    /// a palette's paper is part of what it is.
+    ///
+    /// So it asserts both halves: those two are *not* white, which is what makes
+    /// "measure against the surface actually painted" a real requirement rather
+    /// than a formality, and the other four still are, which is what keeps the
+    /// exception to two themes instead of a drift across the set.
+    func testOnlyTheTwoSourcedPapersAreOffWhiteInLight() {
+        let papered: Set<AppTheme> = [.kanagawa, .rosePine]
         for theme in AppTheme.allCases {
             let face = srgb(theme.cardFace, .light)
-            XCTAssertEqual(face.r, 1, accuracy: 0.002, "\(theme.label) light card is not white")
-            XCTAssertEqual(face.g, 1, accuracy: 0.002, "\(theme.label) light card is not white")
-            XCTAssertEqual(face.b, 1, accuracy: 0.002, "\(theme.label) light card is not white")
+            let white = face.r >= 0.998 && face.g >= 0.998 && face.b >= 0.998
+            if papered.contains(theme) {
+                XCTAssertFalse(white, "\(theme.label) light card should be its palette's own paper")
+                // Paper, not a tint: it still has to be the lightest thing in the
+                // window, or the cards stop reading as cards.
+                XCTAssertGreaterThan(luminance(face), 0.9, "\(theme.label) light card is too dark")
+            } else {
+                XCTAssertTrue(white, "\(theme.label) light card should be pure white")
+            }
         }
     }
 
@@ -93,22 +107,36 @@ final class ThemePaletteTests: XCTestCase {
     /// this is the pair that would silently collapse if a window ground were
     /// nudged toward its card.
     ///
-    /// In Light the two are a white card on a 98.5% L page, 1.04:1, and the
-    /// separation is really the **hairline's** job (91% L, checked below) — which
-    /// is the whole reason `.island()` draws one now that nothing casts a shadow.
-    /// So the page check is for collapse, and the edge check is the one with
-    /// something to prove.
+    /// In Light the two are close by design and the separation is really the
+    /// **hairline's** job — which is the whole reason `.island()` draws one now
+    /// that nothing casts a shadow. So the page check is for an accidental
+    /// collapse, and the edge check is the one with something to prove; the edge
+    /// is therefore asserted for **every** theme, including the one exception
+    /// below.
+    ///
+    /// **System in Light is that exception, and it is deliberate**: its page is
+    /// white and so is its card, because macOS 26's own window background is white
+    /// and a white sheet of hairlined cards is the platform's arrangement. Asserted
+    /// as an *equality* rather than skipped, so a value drifting off white — in
+    /// either of the two — still fails.
     func testEveryCardSitsForwardOfItsPage() {
         for theme in AppTheme.allCases {
             for mode in Appearances.both {
-                let ratio = contrast(theme.cardFace, theme.windowFill, mode)
-                XCTAssertGreaterThan(
-                    ratio, 1.02,
-                    "\(theme.label)/\(mode) card doesn't separate from its window")
                 let edge = contrast(theme.cardBorder, theme.cardFace, mode)
                 XCTAssertGreaterThan(
                     edge, 1.05,
                     "\(theme.label)/\(mode) card hairline is invisible on its own card")
+                if theme == .system, mode == .light {
+                    assertSame(srgb(theme.cardFace, mode), srgb(theme.windowFill, mode),
+                               "System's light card and page are both meant to be white")
+                    assertSame(srgb(theme.cardFace, mode), RGB(r: 1, g: 1, b: 1),
+                               "System's light card and page are both meant to be white")
+                    continue
+                }
+                let ratio = contrast(theme.cardFace, theme.windowFill, mode)
+                XCTAssertGreaterThan(
+                    ratio, 1.02,
+                    "\(theme.label)/\(mode) card doesn't separate from its window")
             }
         }
     }
@@ -127,6 +155,71 @@ final class ThemePaletteTests: XCTestCase {
                        "\(theme.label)/\(mode) metadata", mode)
             }
         }
+    }
+
+    // MARK: Links and rings
+
+    /// A link is text on a card, so 4.5:1 — and it is the value most likely to
+    /// arrive wrong, because a palette's link is authored for a dark editor. Dark
+    /// Owl's `#00ff9f` measures **1.4:1** on white, which is why the light halves
+    /// are deepened or derived rather than taken.
+    func testEveryLinkClearsTheTextFloorOnItsCard() {
+        for theme in AppTheme.allCases {
+            for mode in Appearances.both {
+                assert(theme.link, on: theme.cardFace, floor: textFloor,
+                       "\(theme.label)/\(mode) link", mode)
+            }
+        }
+    }
+
+    /// The ring is a non-text indicator at 3:1 against the card it outlines, and
+    /// it is `primary` in most themes — so this is the check that a *table's* own
+    /// value was not taken on trust. The plan repeats the accent for Dracula in
+    /// both modes, and the lavender on white is 2.41:1; three rings in the set
+    /// step away from their accent for exactly this reason.
+    func testEveryRingClearsTheGraphicFloorOnItsCard() {
+        for theme in AppTheme.allCases {
+            for mode in Appearances.both {
+                assert(theme.ring, on: theme.cardFace, floor: graphicFloor,
+                       "\(theme.label)/\(mode) selection ring", mode)
+            }
+        }
+    }
+
+    // MARK: The count chip
+
+    /// The chip is the accent's, **except in System** — a theme whose whole claim
+    /// is that it adds no colour of its own cannot spend the accent on the one
+    /// number in the band. Measured as chroma rather than as a hex, since what is
+    /// being asserted is "this is a grey" and "this is a colour".
+    func testTheCountChipIsAccentedEverywhereButSystem() {
+        for mode in Appearances.both {
+            XCTAssertLessThan(
+                oklch(srgb(AppTheme.system.band.countFill, mode)).chroma, 0.02,
+                "System/\(mode) count chip should be neutral")
+            for theme in AppTheme.allCases where theme != .system {
+                let chip = oklch(srgb(theme.band.countFill, mode))
+                let text = oklch(srgb(theme.band.countText, mode))
+                XCTAssertGreaterThan(
+                    max(chip.chroma, text.chroma), 0.04,
+                    "\(theme.label)/\(mode) count chip carries no colour at all")
+            }
+        }
+    }
+
+    /// Dracula's chip **inverts between appearances**, and that is deliberate:
+    /// its bright pink cannot carry both ways, so it is the numeral on a recessed
+    /// fill in Dark and the *fill* under a dark numeral in Light. Pinned because
+    /// the obvious tidy-up — one role in both modes — is what fails the floor.
+    func testDraculasCountChipInvertsBetweenAppearances() {
+        let pink = RGB(r: 1.0, g: 0x79 / 255.0, b: 0xc6 / 255.0)
+        let band = AppTheme.dracula.band
+        assertSame(srgb(band.countFill, .light), pink, "Dracula light chip fill is the pink")
+        assertSame(srgb(band.countText, .dark), pink, "Dracula dark chip numeral is the pink")
+        // And the recessed fill really is recessed, rather than the band again.
+        XCTAssertLessThan(
+            luminance(srgb(band.countFill, .dark)), luminance(srgb(band.fill, .dark)),
+            "Dracula dark chip fill should sit below its band")
     }
 
     // MARK: The writing
@@ -219,16 +312,21 @@ final class ThemePaletteTests: XCTestCase {
     /// within 25° of any of its four note-type hues**, because that is what keeps
     /// "action" legible as action rather than as a fifth type.
     ///
-    /// A primary under 0.03 chroma is exempt, and Bone is the case that makes the
-    /// exemption necessary rather than convenient: its accent is ink, so it has a
-    /// nominal hue and no colour, and a hue distance measured against it means
-    /// nothing.
+    /// A primary under 0.03 chroma is exempt, because a hue distance measured
+    /// against a grey means nothing. **No theme in the current set is exempt** —
+    /// the previous Bone's accent was ink and needed it, and the guard stays for
+    /// the next accent that is a value rather than a hue.
     func testNoAccentSitsInAnyOfItsOwnTypeHues() {
         for theme in AppTheme.allCases {
             for mode in Appearances.both {
                 let primary = oklch(srgb(theme.primary, mode))
                 guard primary.chroma >= 0.03 else { continue }
                 for tint in Self.typeTints {
+                    // Rosé Pine's `love` and its blush Feedback mark are 19°
+                    // apart in Light and 17° in Dark. The palette is built on
+                    // that pairing and the plan records it rather than fixing it,
+                    // so it is named here rather than lowering the rule.
+                    if theme == .rosePine, tint == .purple { continue }
                     let mark = oklch(srgb(theme.typeMark(tint), mode))
                     let apart = hueDistance(primary.hue, mark.hue)
                     XCTAssertGreaterThanOrEqual(
@@ -257,6 +355,46 @@ final class ThemePaletteTests: XCTestCase {
                     "\(theme.label) \(tint.name): the label is not darker than its mark")
             }
         }
+    }
+
+    /// **The four marks form a lightness ladder** (rule 4), so a card's type is
+    /// legible in greyscale and not by hue alone. Every source palette puts three
+    /// or four of its hues at one lightness — that is what "re-levelled" in the
+    /// theme comments means, and it is the one thing done to all five sourced
+    /// palettes.
+    ///
+    /// The previous set failed this outright (worst pair 1.00–1.07:1 by
+    /// luminance) and recorded it as a known gap; this is that gap closed, which
+    /// is why the assertion is on the **gap** rather than on an ordering: what
+    /// matters is that no two marks collapse, not which type is darkest.
+    ///
+    /// **Dracula is the recorded exception**, in both appearances: its cyan Note
+    /// and green Staffing sit at one lightness, and levelling four bright pastels
+    /// is what would stop it looking like Dracula. The mark is never the sole
+    /// carrier — the mono label spells the type out beside it.
+    func testTheFourMarksFormALightnessLadder() {
+        for theme in AppTheme.allCases where theme != .dracula {
+            for mode in Appearances.both {
+                let levels = Self.typeTints
+                    .map { oklch(srgb(theme.typeMark($0), mode)).lightness }
+                    .sorted()
+                let gaps = (0..<3).map { levels[$0 + 1] - levels[$0] }
+                XCTAssertGreaterThanOrEqual(
+                    gaps.min() ?? 0, 0.029,
+                    """
+                    \(theme.label)/\(mode): two marks collapse in greyscale \
+                    (levels \(levels.map { round($0 * 1000) / 1000 }))
+                    """)
+            }
+        }
+        // And Dracula really is the exception, rather than quietly passing and
+        // making the note above wrong.
+        let levels = Self.typeTints
+            .map { oklch(srgb(AppTheme.dracula.typeMark($0), .dark)).lightness }
+            .sorted()
+        XCTAssertLessThan(
+            (0..<3).map { levels[$0 + 1] - levels[$0] }.min() ?? 1, 0.029,
+            "Dracula's ladder no longer needs its exception — take it out of the docs")
     }
 
     /// A type on a tint no theme overrides — Insert's types are user-extensible,
@@ -292,6 +430,8 @@ final class ThemePaletteTests: XCTestCase {
             for mode in Appearances.both {
                 assert(theme.metaText, on: theme.cardFace, floor: contrastFloor,
                        "\(theme.label)/\(mode) metadata under Increase Contrast", mode)
+                assert(theme.link, on: theme.cardFace, floor: contrastFloor,
+                       "\(theme.label)/\(mode) link under Increase Contrast", mode)
                 for tint in Self.typeTints {
                     assert(theme.typeLabel(tint), on: theme.cardFace, floor: contrastFloor,
                            "\(theme.label)/\(mode) \(tint.name) label under Increase Contrast", mode)
@@ -302,17 +442,43 @@ final class ThemePaletteTests: XCTestCase {
 
     // MARK: Dracula
 
-    /// Only Dracula reorders the auto-assigned project colours, and only the
-    /// *auto-assigned* ones: the order stays total, so the tenth project still
-    /// gets a colour rather than falling off the end of the preferred five.
-    func testOnlyDraculaReordersTheProjectDots() {
-        for theme in AppTheme.allCases where theme != .dracula {
+    /// Two themes reorder the auto-assigned project colours, and only the
+    /// *auto-assigned* ones — a colour the user picked is data in `Projects.md`,
+    /// and switching theme must never rewrite it. Both orders stay **total**, so
+    /// the tenth project still gets a colour rather than falling off the end.
+    ///
+    /// Dracula leads with its own five. Kanagawa pushes orange last instead,
+    /// which is its "the only orange on screen is the button" rule reaching the
+    /// dots as the plan asks — a demotion rather than a removal, for the totality
+    /// reason above.
+    func testOnlyDraculaAndKanagawaReorderTheProjectDots() {
+        for theme in AppTheme.allCases where theme != .dracula && theme != .kanagawa {
             XCTAssertEqual(theme.projectTintOrder, Tint.allCases, "\(theme.label)")
         }
         XCTAssertEqual(AppTheme.dracula.projectTintOrder.prefix(5),
                        [.red, .yellow, .blue, .purple, .orange])
-        XCTAssertEqual(Set(AppTheme.dracula.projectTintOrder), Set(Tint.allCases))
-        XCTAssertEqual(AppTheme.dracula.projectTintOrder.count, Tint.allCases.count)
+        XCTAssertEqual(AppTheme.kanagawa.projectTintOrder.last, .orange)
+        for theme in [AppTheme.dracula, .kanagawa] {
+            XCTAssertEqual(Set(theme.projectTintOrder), Set(Tint.allCases), "\(theme.label)")
+            XCTAssertEqual(theme.projectTintOrder.count, Tint.allCases.count, "\(theme.label)")
+        }
+    }
+
+    // MARK: The one red
+
+    /// `Semantic.overdue` is the app's only red and it is solved on the card, so
+    /// **a new set of card faces means re-measuring it** — the plan says so in as
+    /// many words ("re-measure; do not assume white"), and two of these faces are
+    /// no longer white. It lives in `Theme.swift` and knows nothing about themes,
+    /// which is exactly why the check belongs here: nothing else would notice a
+    /// card face nudged toward it.
+    func testOverdueRedClearsTheTextFloorOnEveryCardFace() {
+        for theme in AppTheme.allCases {
+            for mode in Appearances.both {
+                assert(Semantic.overdue, on: theme.cardFace, floor: textFloor,
+                       "\(theme.label)/\(mode) overdue red", mode)
+            }
+        }
     }
 
     // MARK: - Measuring
@@ -332,6 +498,15 @@ final class ThemePaletteTests: XCTestCase {
     }
 
     private func round(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+
+    private func assertSame(
+        _ a: RGB, _ b: RGB, _ what: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertEqual(a.r, b.r, accuracy: 0.004, what, file: file, line: line)
+        XCTAssertEqual(a.g, b.g, accuracy: 0.004, what, file: file, line: line)
+        XCTAssertEqual(a.b, b.b, accuracy: 0.004, what, file: file, line: line)
+    }
 
     private func contrast(_ a: Color, _ b: Color, _ mode: Appearances) -> Double {
         let (la, lb) = (luminance(srgb(a, mode)), luminance(srgb(b, mode)))

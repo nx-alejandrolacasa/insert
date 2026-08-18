@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The face note and task **cards** read and write in — Settings → General.
+/// The face note and task **cards** read and write in — Settings → Appearance.
 /// Chrome is not affected; see `Card`, which is the only thing that resolves
 /// this.
 ///

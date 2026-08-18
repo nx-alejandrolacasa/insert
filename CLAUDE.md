@@ -50,7 +50,7 @@ people.
 ## Data model & storage
 
 Everything lives under a root folder (default `~/Documents/Insert`, changeable in
-Settings → Storage):
+Settings → General → Storage):
 
 ```
 root/
@@ -91,7 +91,7 @@ Sources/Insert/
   NotesPanel.swift            center: note islands, type pills, sort/filter, edit
   TasksPanel.swift            right: tasks, checkboxes, # project autocomplete
   MenuBar.swift               menu-bar extra: pending tasks at a glance
-  SettingsView.swift          General / Note Types / Storage
+  SettingsView.swift          General / Appearance / Notes / Tasks / Accessibility
   Library.swift               @Observable store: lazy load/index/CRUD/search + watcher
   AppState.swift              transient window UI state (selection, filters…)
   SettingsStore.swift         persisted settings (note types, sort, retention…)
@@ -108,9 +108,10 @@ Sources/Insert/
   MarkdownText.swift          compact Markdown renderer for bodies + the shared
                               collapsible preview (CollapsibleMarkdown)
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
-  AppTheme.swift              the six themes: band / track / primary tones, the
-                              page and card grounds, the metadata colour, the
-                              per-theme type palette, the migration, the picker
+  AppTheme.swift              the six sourced themes: band / track / primary and
+                              count-chip tones, the page and card grounds, the
+                              metadata and link colours, the per-theme type
+                              palette, the migration, the picker
   ColumnHeaderBand.swift      the themed slab at the top of each column
   Appearance.swift            Auto / Light / Dark preference
   SegmentedFilter.swift       the filter rows' glass segmented control
@@ -171,9 +172,12 @@ the hue one of its own note types wears would show up in no build, no test and n
 screenshot of whichever theme you happen to use. It resolves each `Color` through
 its dynamic `NSColor` inside an explicit `NSAppearance` — so what it measures is
 what gets painted, not the literal — and asserts the plan's acceptance list: every
-band and card pairing against its floor, the 25° accent-vs-type-hue rule, that a
-label is darker than its mark, that light cards are pure white in all six, that a
-custom type's tint falls back to `Tint.ink`, that title and body colour are the
+band and card pairing against its floor, links and rings and the overdue red on
+every card face, the count chip measured **composited** over its band, the 25°
+accent-vs-type-hue rule and the four marks' greyscale ladder (each with its one
+recorded exception, named rather than waived), that a label is darker than its
+mark, that only the two sourced papers are off-white in Light, that a custom
+type's tint falls back to `Tint.ink`, that title and body colour are the
 **system's** in five of the six and Dracula's own in the sixth — the check that
 keeps "text is not themed" honest — and that Increase Contrast really reaches
 7:1.
@@ -191,43 +195,64 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   band a named **theme**. Content stays neutral and readable; personality lives
   where it is never behind text. What changed:
   - **Theme replaces both Background → Tint and Accent → Highlight colour.**
-    Six themes — Bone, Moss, Ember, Rosewood, Indigo, Dracula — each with a Light
-    and a Dark value, in `AppTheme`. A theme is *three grounds, one accent and its
-    own note-type palette*: band / page / card, the primary (buttons, rings,
-    selected states), and four authored type hues, with the glass track derived
-    from the band rather than a token set of its own. **Indigo is the default**,
-    and it is *not* the first case — see the Theme bullet. The old tint and accent
-    keys are read **once**, to choose a theme for an install that had them
-    (`AppTheme.migrated(tint:accent:)`: tint by family, else the accent's hue,
-    else the default), then never again — and **nothing migrates to Dracula**,
-    which is an identity rather than a shade and has to be picked. Pinned by
-    `ThemeMigrationTests`, including a sweep asserting no input reaches Dracula,
-    and by `ThemePaletteTests`, which measures every value in the table.
+    Six themes, each with a Light and a Dark value, in `AppTheme` — **System,
+    Tokyo Night, Kanagawa, Dark Owl, Rosé Pine, Dracula** since the third cut
+    below; **System is the default and the first case**. A theme is *three
+    grounds, one accent and its own note-type palette*: band / page / card, the
+    primary (buttons, rings, selected states), and four authored type hues, with
+    the glass track derived from the band rather than a token set of its own.
+    Whatever colour setting an older install holds is read **once** — a theme name
+    from an earlier set, else the retired tint, else the retired accent
+    (`AppTheme.migrated(theme:tint:accent:)`) — and the two retired keys are then
+    **deleted**; **nothing migrates to Dracula**, which is an identity rather than
+    a shade and has to be picked. Pinned by `ThemeMigrationTests`, including a
+    sweep asserting no input reaches Dracula, and by `ThemePaletteTests`, which
+    measures every value in the table.
   - **The column header band** (`ColumnHeaderBand`) replaces the heading row and
     the loose filter row in both columns: heading, a count in a mono pill, the
     primary button, then the filter track. Full column width, flush under the
     toolbar, **no radius of its own** — the window's corner clips it, which is
-    what makes two adjacent bands read as one strip. Light bands take a hairline
-    on the bottom edge; dark ones separate from the cards on their own.
+    what makes two adjacent bands read as one strip. **No hairline under it** in
+    any theme: a light band took one until it was seen on screen, where it read as
+    a rule *drawn under* the header rather than as the edge of a surface — the one
+    thing that looks like a border in a window with no shadows anywhere. The band's
+    own colour against the page is the boundary.
   - **The highlighter stroke is gone** — a 3×16pt capsule mark *beside* the
     title instead (`TypeMarkTitle`), in the type's themed colour. See the Notes
     bullet.
-  - **The second cut of the set is what shipped, and it is the interesting
-    revision.** The first six (Slate, Graphite, Pine, Amber, Indigo, Dracula)
-    themed the band and nothing under it, so five of them read as a *preference*
-    and only Dracula read as a theme — because Dracula was the only one bringing
-    its own window and card grounds and its own type hues. Rather than add a
-    seventh, every theme was held to what Dracula was already doing: **grounds for
-    all six** (page ~98.5% L in Light and ~20% in Dark, card pure white in Light
-    and ~25% in Dark, both at the band's hue), **a note-type palette per theme**,
-    and an accent that may not repeat one of its own type hues. The names went
-    with it. The band-is-where-colour-goes finding from the first cut stands
-    unchanged; what was wrong was stopping there.
+  - **The set is on its third cut, and each revision found the same kind of
+    fault one level up.** The **first** six (Slate, Graphite, Pine, Amber, Indigo,
+    Dracula) themed the band and nothing under it, so five read as a *preference*
+    and only Dracula read as a theme — it was the only one bringing its own
+    grounds and type hues. The **second** (Bone, Moss, Ember, Rosewood, Indigo,
+    Dracula) fixed that by holding every theme to what Dracula was already doing:
+    grounds for all six, a note-type palette per theme, and an accent that may not
+    repeat one of its own type hues. It still came out as a preference, for a
+    reason a rule can't reach: **every hue in it was one somebody picked**, so
+    there was no answer to "why this green" beyond taste, and the only theme that
+    read as an identity was still the borrowed one. So the **third** cut is five
+    *sourced* palettes plus the platform — read from the upstream project rather
+    than designed here — with what we changed stated per theme in `AppTheme`
+    (verbatim grounds, hairlines, links and accents; deepened where a label
+    couldn't clear 4.5:1; derived where a comment grey failed on a card;
+    re-levelled, always, for the four marks). The band-is-where-colour-goes
+    finding from the first cut stands unchanged through all three; what was wrong
+    the second time was authoring the hues at all.
   - **Two bundled typefaces**: Space Grotesk as a fifth face ("Grotesk", the
     default for new installs) and IBM Plex Mono as the app's numeral and label
     face. See the Typeface bullet.
-  - **The sidebar is transparent to the *desktop*, and carries no colour of its
-    own** — a pane you can see through, not a slab. That is `SidebarVibrancy`, a
+  - **The sidebar is translucent white in every theme** — a pane you can see
+    through, not a slab, and the one surface the theme never reaches. Two layers
+    make it: the system's material, transparent to the *desktop*, plus a **white
+    wash** over it (`ProjectsSidebar.sidebarWash`, 40% in Light / 16% in Dark, one
+    dynamic `NSColor`, no `colorScheme` read). The wash is what turns "the desktop,
+    blurred" into "frosted glass" and is what makes all six themes' sidebars the
+    same pane; the two values differ because 40% over a near-black material in Dark
+    is a grey haze rather than a lift. **A wash of the *band's* colour is still
+    rejected** — see the three rejected approaches below; what changed is that
+    white is theme-independent, which was the objection, and subtracting from the
+    material is the *point* here rather than a side effect. The transparency itself
+    is `SidebarVibrancy`, a
     zero-size probe in the sidebar's `.background` that walks **up** to the
     enclosing `NSVisualEffectView` and keeps `blendingMode` at the stock
     **`.behindWindow`** with `alphaValue` at 1. What that costs, honestly:
@@ -248,13 +273,17 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
     effect view, never the titlebar's and never the Settings window's; no match is
     a no-op. **Reduce Transparency needs nothing by hand**, unlike the app's other
     glass: the effect view opaques its own material, and with no `alphaValue` of
-    ours layered on top there is nothing left for the system switch to miss.
+    ours layered on top there is nothing left for the system switch to miss — and
+    the white wash doesn't change that, since over an opaque material it is only a
+    lighter opaque material.
     **Three rejected approaches, so they aren't re-proposed.** A translucent wash of
-    the band's colour over the sidebar: wrong because it makes the column a
-    *painted* surface when what it wants is to be transparent, and because a
+    the **band's colour** over the sidebar: wrong because it makes the column a
+    *themed, painted* surface when what it wants is to be transparent, and because a
     colour layer over a vibrancy material subtracts from it one for one, so the
     tint and the transparency fight for the same pixels (at the 40% it shipped
-    at, the sidebar read as flat tinted paint). `blendingMode = .withinWindow` plus
+    at, the sidebar read as flat tinted paint). The white wash above is not a
+    reversal of this: it is fixed rather than themed, and it spends that same
+    subtraction on frost instead of on hue. `blendingMode = .withinWindow` plus
     an `alphaValue` of 0.6, which was that same wash moved one layer down: a
     `NavigationSplitView` lays the sidebar out as a **column**, so the notes and
     tasks columns are beside it and never under it, and the only thing behind the
@@ -376,6 +405,23 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   **"ledger" layout as a future compact density**. It lost as the default for
   the reason in decision 2, but a deliberately dense mode is the one context
   where being space-hungry stops being the objection.
+- **The Settings window has five panes — General, Appearance, Notes, Tasks,
+  Accessibility — and Storage is not one of them.** That is one change rather than
+  two, made because of a footer. General had become the window's junk drawer
+  (appearance, theme, typeface, spelling, the menu-bar item), and the typeface
+  section ends in three paragraphs plus two licence links, because the OFL requires
+  the notice to travel with the fonts — so the two toggles *under* that footer were
+  effectively hidden behind the legal text. Moving the three chrome controls out
+  into an **Appearance** pane also settled a smaller thing: the word "Appearance"
+  was printed twice in one form, as a section header and as the row label under it.
+  The pane's name in the title bar says it now, so the section header is gone and
+  the row keeps its label — a bare segmented picker needs one.
+  That left General with two toggles, so **Storage folded into it** as a section and
+  its pane went: a folder path, two buttons and a footer was never a pane's worth on
+  its own, and "where the files live" is as general as a setting gets. Nothing
+  persists the selected pane, so the case that disappeared needed no migration.
+  Typeface stays **last** in its pane for the reason the split happened: nothing
+  should sit under that footer.
 - **Settings → Accessibility** offers in-app Reduce Motion / Reduce Transparency /
   Increase Contrast (briefly a top-level menu, moved to its own Settings pane),
   each **OR-ed with its system counterpart** — they only add
@@ -612,18 +658,20 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the mark's **own** value at 3:1, a few points brighter than the label naming
   the same type — the two were one number while the palette was shared, and
   splitting them is what lets the mark stay visible while the label carries the
-  4.5:1 a word needs — one gap is known and left open here: the plan also asks
-  that the four marks be distinguishable in *greyscale*, and its own tables put
-  three of the four at one lightness (worst pair 1.00–1.07:1 by luminance), which
-  would take re-authoring the palettes rather than converting them. And it costs
+  4.5:1 a word needs. The gap that used to be recorded here — that the four marks
+  were **not** distinguishable in greyscale, three of them sitting at one
+  lightness — is **closed** by the sourced set, whose four marks per theme are
+  re-levelled into a ladder; Dracula is the one documented exception, and the
+  reason it can be is that the mark is never the sole carrier. And it costs
   the title 11pt of leading inset the **editor
   doesn't have** — the one place the two modes no longer start at the same x.
   That's accepted: indenting the editor to match would spend a line of writing
   width on a decoration.
   The type colours are per-appearance and **per theme** (see the Theme bullet):
-  each theme authors its own four, arranged so none is within 25° of its own
-  accent, and a type on any other `Tint` falls back to the app's own `Tint.ink`
-  so a **custom** type added in Settings still gets a themed mark.
+  each theme's four come from its own palette's syntax colours, arranged so none
+  is within 25° of its accent and so the four form a lightness ladder, and a type
+  on any other `Tint` falls back to the app's own `Tint.ink` so a **custom** type
+  added in Settings still gets a themed mark.
   A note's **type** is, while editing, a pill-shaped dropdown in that type's
   colour at the trailing end of the chips row. It replaced a row of one filter
   pill per type, whose selected state is where the `deep`-and-white comes
@@ -930,7 +978,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   single-line field where Return submits — the note title and the `@project`
   field keep their own behaviour. The event is swallowed *only* when `listReturn`
   returns an edit, so Return is ordinary everywhere else.
-- **Cards read in one of five faces** — Settings → General offers Standard /
+- **Cards read in one of five faces** — Settings → Appearance offers Standard /
   Rounded / **Grotesk** / Serif / Monospace (`Typeface.swift`, resolved by
   `Card` and nowhere else). **Grotesk is the default for a new install**;
   an existing install keeps Rounded and keeps it *explicitly* — a default that
@@ -946,7 +994,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   user's Mac. This bends "no third-party dependencies — system frameworks only":
   the rule is about *code*, and these are font files with no build step, no
   package manager and nothing executable. The licences are bundled beside them
-  and shown from Settings → General (`FontLicenceSheet` reads the shipped file
+  and shown from Settings → Appearance (`FontLicenceSheet` reads the shipped file
   rather than a Swift literal, so the text shown and the text shipped can't
   drift), because the OFL requires the notice to travel with the fonts.
   They are a **SwiftPM resource** (`resources: [.copy("Fonts")]`) rather than a
@@ -1496,7 +1544,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   on *neutral* ground (a Form row, `Stone.chip`), where it can carry it.
   The refresh added two more solved colours with one job each:
   `Semantic.overdue` (the only red, ≥4.5:1 on every theme's card faces, both
-  modes — re-measured when the cards became themed) and `Stone.metaText`, a
+  modes — re-measured whenever the card faces change, which the sourced set's two
+  off-white papers made a live concern rather than a formality) and
+  `Stone.metaText`, a
   solid grey at ~7:1 rather than `.secondary`/`.tertiary`, which are alpha
   washes landing under the refresh's 4.5:1 floor for sub-14px text. On a **card**
   that job now belongs to `AppTheme.metaText`, which is the same argument at the
@@ -1511,7 +1561,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   Project and type colour never
   appears on a card except as a **dot** or the type's mark; metadata is grey; red
   means overdue and nothing else.
-- **Appearance** — Settings → General has a Theme picker: Auto / Light / Dark,
+- **Appearance** — Settings → Appearance leads with an Auto / Light / Dark picker,
   the same control prtscn has (`Appearance.swift` is a copy of its enum). Auto
   means `NSApp.appearance = nil` — follow the system — and is the default, so an
   install that never touches it behaves as before. This override was removed once
@@ -1523,113 +1573,199 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   Every colour in `Tint`/`Stone` resolves through a dynamic `NSColor`, so setting
   `NSApp.appearance` is all it takes — nothing reads `Locale`-style globals or
   caches a resolved shade.
-- **Theme** — Settings → General offers six, in this order: **Bone** (warm
-  near-neutral band, and an accent that is *ink* rather than a hue — near-black on
-  light, near-white on dark), **Moss** (olive band, chartreuse primary),
-  **Ember** (cream / warm near-black band, amber primary — the one warm theme),
-  **Rosewood** (wine band, coral primary), **Indigo** (violet band, periwinkle
-  primary) and **Dracula**.
-  **Declaration order is the picker's order, and the default is a different
-  thing** — Bone leads and **Indigo is the default**. The order runs muted → hued
-  → identity: the quiet one first, then the four that are a colour, then Dracula,
-  which belongs at the end of a list you scan for a hue. The default is the theme
-  with the most point of view, because that is what a new install should open
-  wearing. The previous set had these two collapsed into one rule ("the first
-  swatch is what you're already wearing"), so both are now pinned by
-  `testBoneLeadsThePickerAndIndigoIsTheDefault` — reordering the enum for any
-  other reason would silently move either.
-  Each has a Light and a Dark value and follows the Appearance picker with nothing
-  to re-apply, through the same dynamic `NSColor` trick `Tint` uses. The row label
-  is **"Theme"** and the Auto/Light/Dark control above it is labelled
-  **"Appearance"**, which is the collision that had to be resolved: the two would
-  otherwise both answer to "theme". The Theme section carries **no header of its
-  own** — the row's label already says the word, and a header repeated it as a
-  heading directly above itself; Appearance keeps its header because its row label
-  is the only thing naming a bare segmented picker.
+- **Theme** — Settings → Appearance offers six, in this order: **System** (the
+  platform's own greys, and `systemBlue` deepened), **Tokyo Night**
+  (indigo-slate grounds, mint action), **Kanagawa** (warm cream on cold ink —
+  Wave in Dark, Lotus in Light — orange action, and the set's one warm theme),
+  **Dark Owl** (teal-navy, violet action, spring-green links), **Rosé Pine**
+  (plum and rose; Dawn is pink-cream paper) and **Dracula**.
+  **Five of the six are sourced palettes**, read from the upstream project rather
+  than designed here, and that is this cut's whole argument rather than a
+  shortcut: a set of authored hues has nothing to be faithful to, which is why
+  the previous six still read as a preference (see the theme-system bullet's
+  third-cut paragraph). What we changed is stated per theme in `AppTheme`:
+  **verbatim** grounds, card edges, links and accents; **deepened** where an
+  accent's label couldn't clear 4.5:1 (Kanagawa's Lotus orange, Rosé Pine's Dawn
+  `love`); **derived** where a palette's comment grey failed on a card or where it
+  publishes no light half at all (Tokyo Night's light foregrounds, Dark Owl's
+  entire light mode); **desaturated** in exactly one place — Kanagawa's Lotus
+  grounds, whose published band is 0.060 C, more than twice any other band in the
+  set, and which read as a khaki slab rather than as warm paper, so its three light
+  grounds keep Lotus's hue and lightness at **half its chroma**; and
+  **re-levelled**, always, for the four marks.
+  **Declaration order is the picker's order, and the default is the first case
+  again** — System leads and System is the default, where the previous set had
+  those as two deliberately different things. Pinned by
+  `testSystemLeadsThePickerAndIsTheDefault`, since reordering the enum for any
+  other reason would silently move both.
+  **System is written down rather than read from semantic tokens, and that was
+  measured.** The plan asks for the tokens themselves, on the sound ground that
+  they resolve per appearance and contrast setting; the obstacle is that its names
+  are UIKit's (`systemGroupedBackground`, `systemGray5`) and the AppKit pair that
+  would stand in for page and card — `windowBackgroundColor` and
+  `controlBackgroundColor` — resolve to **the same value** on macOS 26 (`#ffffff`
+  Light, `#1e1e1e` Dark), so a card would vanish into the page it is meant to sit
+  forward of. macOS has no token for the numbered greys either, and the band's
+  derived tones have to be composited against a concrete band. So System's grounds
+  are written down (page **white** / true black, card white / `#1C1C1E`, band
+  `#F2F2F7` / `#2C2C2E`) and its blues are `systemBlue` deepened,
+  since as shipped it is ~4.0:1 under a white label. The writing is still the
+  platform's, through `labelColor`, which is what five of the six hand back anyway.
+  Its Light half is a **white page under a grey band** — the grouped ladder with its
+  two lightest steps swapped, since `windowBackgroundColor` really does resolve to
+  `#ffffff` in Light on macOS 26, so the sheet under the cards is white and the band
+  is the grey the page used to be. One consequence is deliberate and is System's
+  alone: **its light card *is* its page**, both pure white, so the card's hairline is
+  the whole separation — which is how a stack of white cards on white paper reads in
+  the platform's own apps. `testEveryCardSitsForwardOfItsPage` names that exception
+  and asserts it as an equality, so a value drifting off white in *either* of the two
+  still fails.
+  Each theme has a Light and a Dark value and follows the Mode picker with nothing
+  to re-apply, through the same dynamic `NSColor` trick `Tint` uses. The row label is
+  **"Theme"** and the Auto/Light/Dark control above it is labelled **"Mode"** — a
+  collision resolved twice over: first "Theme" against "Appearance", since the two
+  would otherwise both answer to "theme", and then "Appearance" against the pane and
+  sidebar row of that name (see the Settings-panes bullet). **Neither row carries a
+  section header**: each row's own label names its control, and a header would print
+  the same word directly above itself.
   **A theme is three grounds, one accent and a palette, and each of the three is
   load-bearing.** The *band* is `ColumnHeaderBand`; the *page* is `windowFill`
   (and so the sidebar, which is see-through to it); the *card* is `cardFace` —
-  **pure white in Light for all six**, so body-text contrast is identical
-  everywhere and verified once, and the page hue at ~25% L in Dark. The accent is
-  `primary`, for interactive and selected state only. And the palette is four
-  authored type hues, `typeMark`/`typeLabel`.
-  A band is **thirteen tones per appearance** and only seven are chosen — the
-  rest are *derived from the band's hue*, which is what keeps a new theme a hue
-  rather than a design: the count chip and the dark track are white at 12% / 10%
-  over the band (composited offline to opaque values, so nothing layers alpha at
-  draw time), the light track is the hue at 92% L, the segment labels at 87% L
-  dark / 42% L light, and the raised pill at 93% L or pure white. The selected
-  segment's label is the band's **text** in Light, where the pill is white, and
-  the band's own **fill** in Dark, where the pill is near-white and the label
-  reads as the band inverted — either way it is a value that was already solved.
-  The rule for a seventh theme: band `96% L / ≤0.026 C` in Light and ~20–27% L in
-  Dark, band text `26% L` at the same hue, light hairline `89% L`, page `98.5% L`
-  / card white in Light, and a primary that clears **4.5:1 against both bands** —
-  if it can't, invert it to white-on-deep, which is what Rosewood and Indigo do in
-  Light. Regenerate the whole table from the oklch spec rather than nudging one
-  entry. Every theme's worst *text* pairing, either appearance, clears the
-  **4.5:1** floor — ≥5.0:1 for all six except Dracula's own named metadata value
-  at 4.52:1 — measured across seven pairings each: band text on the band, count
-  text on the count chip, primary label on the primary fill, an unselected segment
-  label on the track, a selected one on the raised pill, the metadata colour on
-  the card, and each type label on the card. Graphics — the marks and the dots —
-  are held to 3:1 and clear it (worst 3.24:1). All of it runs, in
+  **no longer pure white in Light for all six**, which reverses the previous set's
+  rule: Kanagawa's cards are Lotus cream (`#fffdf0`) and Rosé Pine's are Dawn's
+  `surface` (`#fffaf3`), because a sourced palette's paper is part of what it is.
+  The cost is real and is accepted: body-text contrast can no longer be verified
+  once against white, so every value that lands on a card is measured against the
+  face **actually painted** (the refresh's third contrast rule), and
+  `testOnlyTheTwoSourcedPapersAreOffWhiteInLight` keeps the exception at two
+  themes rather than letting it spread. The accent is `primary`, for interactive
+  and selected state only. And the palette is four type hues,
+  `typeMark`/`typeLabel`.
+  A band is **thirteen tones per appearance** and nine are the palette's; the four
+  that make the filter track are *derived from the band's hue*, which is what
+  keeps adding a theme a matter of bringing a palette rather than designing one:
+  the dark track is white at 10% over the band (composited offline to an opaque
+  value, so nothing layers alpha at draw time), the light track is the hue at
+  92% L, the segment labels at 87% L dark / 42% L light, and the raised pill at
+  93% L or pure white. The selected segment's label is the band's **text** in
+  Light, where the pill is white, and the band's own **fill** in Dark, where the
+  pill is near-white and the label reads as the band inverted — either way it is a
+  value that was already solved.
+  **The count chip is accented**, and it used to be derived with the rest: the
+  accent at low alpha over the band, composited offline, under a legible tint of
+  itself. White at 12% was a value with no opinion, and it left the one number in
+  the band reading as chrome. Two themes do something else. **System keeps a
+  neutral chip** — a theme whose whole claim is that it adds no colour of its own
+  cannot spend the accent here — and **Dracula inverts per appearance**, because
+  its bright pink can't carry both ways: the pink is the *numeral* on a recessed
+  black fill in Dark, and the chip's *fill* under a dark numeral in Light, where
+  bright pink as text on a pale band fails badly. Both are measured on the
+  **composited** value rather than on the raw fill, which is the check that caught
+  the most defects in design.
+  The rule for a seventh theme is therefore "bring a palette, don't author one":
+  take the band, its text, the hairline, the grounds, the accent and the chip from
+  the source; derive the track and the raised segment from the band's hue by the
+  rules above; hold the accent to 4.5:1 under its label in both appearances — if
+  it can't, deepen it and invert to white-on-deep, which is what Kanagawa's Lotus
+  orange and Rosé Pine's Dawn `love` do; and regenerate the whole table rather
+  than nudging one entry. Every theme's worst *text* pairing, either appearance,
+  clears the **4.5:1** floor — Dracula's own named metadata value at 4.52:1 is the
+  tightest in the file — measured across eight pairings each: band text on the
+  band, count text on the count chip, primary label on the primary fill, an
+  unselected segment label on the track, a selected one on the raised pill, the
+  metadata colour on the card, a link on the card, and each type label on the
+  card. Graphics — the marks, the dots and the selection ring — are held to 3:1
+  and clear it (worst 3.03:1, and the three values stepped to get there are named
+  where they are declared). `Semantic.overdue` is re-measured on all six card
+  faces, which matters more now that two of them aren't white. All of it runs, in
   `ThemePaletteTests`, resolved through the dynamic `NSColor` under an explicit
   `NSAppearance`, because the table is data that can only be wrong quietly.
-  **Two rules keep a palette from fighting its own accent.** No type hue may sit
-  within **25°** of the theme's primary — automated, and it is why Moss has no
-  green in its types (Staffing goes teal, Feedback mauve), why Ember's Meeting is
-  a gold-olive and why Indigo's Feedback is rose. A primary under 0.03 chroma is
-  exempt, which is Bone: its accent is ink, so a hue distance against it means
-  nothing. And **mark and label are two values, not one** — the label is 5–8
-  points darker, because the mark is a graphic at 3:1 and the label is text at
-  4.5:1; collapsing them was the previous set's compromise, and pinning the
-  ordering (`testLabelsAreDarkerThanTheirMarksInLight`) is what stops it coming
-  back.
-  **A theme sets exactly one text colour, and Dracula is the exception**:
-  `metaText` — the page hue at 50% L Light / 70% Dark, for timestamps, chip names,
-  the resting due badge and the `···` menu, solved on the card face it lands on
-  (~6:1) with an Increase Contrast pair stepping to ≥7:1. `titleText` and
-  `bodyText` exist, and in five of the six themes they are **`labelColor`** —
-  unthemed, full contrast, the system's business. That is the rule, not an
-  omission: the title and the body are the writing, read at length, and their
-  contrast should not become a function of a colour preference; metadata is
+  **Three rules keep a palette from fighting itself.** No type hue may sit within
+  **25°** of the theme's primary — automated, and it is why Kanagawa has no orange
+  type at all, why Tokyo Night's Staffing stays a yellow-green rather than a mint,
+  and why Dracula's Feedback is the pink now that the lavender is the button. It
+  has one **recorded exception**: Rosé Pine's `love` and its blush Feedback mark
+  are 19° apart in Light and 17° in Dark, the palette is built on that pairing,
+  and the two never sit adjacent — named in the test rather than lowering the
+  rule. (A primary under 0.03 chroma is exempt, because a hue distance against a
+  grey means nothing; no theme in the current set needs it, and the guard stays
+  for the next accent that is a value rather than a hue — the retired Bone's was.)
+  **Mark and label are two values, not one** — the label sits a few points under
+  its mark, because the mark is a graphic at 3:1 and the label is text at 4.5:1
+  (`testLabelsAreDarkerThanTheirMarksInLight`). And **the four marks form a
+  lightness ladder**, so a card's type is legible in greyscale and not by hue
+  alone: every source palette puts three or four of its hues at one lightness, and
+  this is the acceptance criterion the previous set measured and recorded as
+  *unmet* (worst pair 1.00–1.07:1 by luminance). It is met now — worst gap 0.03 of
+  oklch lightness — with **Dracula the documented exception**, whose cyan Note and
+  green Staffing sit at one lightness in both appearances: levelling four bright
+  pastels is what would stop it looking like Dracula, and the mark is never the
+  sole carrier, since the mono label spells the type out beside it.
+  **A theme sets exactly two text colours, and Dracula is the exception**:
+  `metaText` — each palette's own comment grey where it clears 4.5:1 on the card,
+  derived from the page's hue where it doesn't, for timestamps, chip names, the
+  resting due badge and the `···` menu, with an Increase Contrast pair stepping to
+  ≥7:1 — and `link`, below. `titleText` and `bodyText` exist, and in five of the
+  six themes they are **`labelColor`** — unthemed, full contrast, the system's
+  business. That is the rule, not an omission, and it is the one place this set
+  deliberately **declines** a sourced value: all five palettes publish a title and
+  a body, and the title and the body are the writing, read at length, so their
+  contrast should not become a function of a colour preference. Metadata is
   different in kind, already quiet, and a tinted grey is what makes it read as
   part of the theme. **Dracula keeps all three**, because it is a text palette by
   origin — `#f8f8f2` / `#cfd2e0` / `#9098b8` dark, `#2c2145` / `#463d63` /
   `#6b6288` light, its body deliberately a step softer than its title, and no
   Increase Contrast variants needed since the softest of them is already 8.6:1.
-  Its metadata is also the **tightest text pairing in the file** — 4.52:1 in Dark,
-  where the five derived ones are near 6:1 — so it clears the floor with nothing
-  to spare, and a card face nudged lighter would take it under.
+  Its metadata is also the **tightest text pairing in the file** — 4.52:1 in Dark
+  — so it clears the floor with nothing to spare, and a card face nudged lighter
+  would take it under.
   `testTitleAndBodyAreUnthemedExceptInDracula` is what keeps "text is not themed"
   true, since the tempting next step from a themed metadata colour is a themed
   body and nothing on screen would announce it.
+  **A link in a card's body is themed too**, and it had to be: SwiftUI draws a
+  link in the environment's **tint**, so without a value of its own a link
+  inherited the app-wide tint — which is `primary`, i.e. a lavender at 2.4:1 or a
+  mint at 1.7:1 on a white card. `MarkdownText` applies `theme.link` as a
+  `.tint()` on the render and on the collapsed teaser. Verbatim from the palette
+  in Dark; deepened or derived in Light, where two of them publish a value that
+  can't sit on paper (Dark Owl's `#00ff9f` is **1.4:1** on white) and Kanagawa
+  publishes none for Lotus at all.
+  The **`ring`** follows the accent, and the previous set's rule that a ring must
+  differ from the button beside it is **gone** — only contrast moves it now. Two
+  of the departures are the palettes' own (Tokyo Night's deepened jade in Light,
+  Dark Owl's lifted violet in Dark); the one solved here is Dracula's light ring,
+  because the table repeats the lavender and on white that is 2.41:1, under the
+  3:1 an indicator needs.
   The **note-type palettes are keyed by `Tint`**, not by note-type id, because the
   type list is user-extensible: the four defaults wear blue / yellow / purple /
   green, a theme overrides those four, and a custom type on any other tint falls
   through to `Tint.ink`. A table keyed by the four built-in ids would have left a
   custom type unthemed — and a type whose tint the user *changed* wearing a colour
-  that no longer matched. The Increase Contrast variants are **derived** (±8–9
-  points of lightness at the same hue), not solved, since the plan gives none and
-  stepping lightness is the one move that can't change which colour a type is.
+  that no longer matched. The Increase Contrast variants are **derived** (±8.5
+  points of lightness at the same hue, stepped further only where that didn't
+  reach 7:1 on the card), not solved, since stepping lightness is the one move
+  that can't change which colour a type is.
   The one place a type's colour is *not* the themed one is the edit-mode type
   dropdown, which keeps `Tint.deep`: the themed values are foregrounds, and
   several are too bright to carry white type as a fill.
-  **Dracula is unchanged, and is now the theme the others were built to match.**
-  It brings its own grounds (`#282a36` / `#2f313f` dark, `#faf7ff` / white light)
-  and its own note-type hues, because a Dracula that keeps the app's white card is
-  not Dracula; it shipped in **both** appearances by request, though it is
-  dark-first by origin. Its type values needed solving rather than copying: the
-  plan's light ones land at 4.1–4.3:1 on white, fine for a capsule and short for a
-  label, so mark and label were each darkened in oklch until they cleared their
-  floor. Its metadata colour is the only one in the set that departs from the
-  derivation — 72% L rather than 70 — because its card is the lightest of the six
-  and 70% landed at 4.8:1 on it; stepped up by the generator until it cleared 5:1,
-  not chosen by eye. `Semantic.overdue` was re-measured on all six card faces
-  rather than assumed.
-  Dracula also changes which colour a **new** project is auto-assigned
-  (`AppTheme.projectTintOrder`, red/yellow/cyan/purple/orange first). Only the
+  **Dracula is unchanged in structure, and is the theme the other five were built
+  to match** — it was the only one of the first cut that read as an identity, which
+  is the observation the whole sourced-palette set came from. It brings its own
+  grounds (`#282a36` / `#2f313f` dark, `#faf7ff` / white light) and its own
+  note-type hues, because a Dracula that keeps the app's white card is not
+  Dracula; it ships in **both** appearances by request, though it is dark-first by
+  origin. Its two changes here are the **pink/purple swap** — the accent is the
+  lavender `#bd93f9` and Feedback takes the pink `#ff79c6`, because with Rosé Pine
+  in the set a rose-pink button on a plum ground made two themes read as the same
+  idea — and the **count chip** described above. Its light type values are the
+  palette darkened in oklch until each clears its floor on white, since the
+  published light ones land at 4.1–4.3:1: fine for a capsule, short for the label
+  beside it.
+  Two themes reorder which colour a **new** project is auto-assigned
+  (`AppTheme.projectTintOrder`): Dracula leads with red/yellow/cyan/purple/orange,
+  and Kanagawa pushes orange **last**, which is its "the only orange on screen is
+  the button" rule reaching the dots as the plan asks. Both orders stay total, so
+  a tenth project still gets a colour — a demotion, not a removal. Only the
   auto-assignment: a colour the user picked is data, in `Projects.md`, and
   switching theme must never rewrite it.
   **The Settings swatch shows one half — the appearance in effect** — drawn with
@@ -1639,7 +1775,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   values, so previewing one hides half the choice) is real, but at 74pt wide two
   22pt slabs read as two slabs rather than as one preview. The footer caption
   carries that information instead — "Light and dark values are built in —
-  Appearance decides which you see" — which is a sentence doing a job no small
+  Mode decides which you see" — which is a sentence doing a job no small
   rectangle could. Three columns, not six across: below about 46pt a swatch stops
   previewing anything, which is the line the seven-swatch tint picker had already
   hit.
@@ -1655,8 +1791,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   two stacked panels. Any `if` around such a layer sits *inside* the
   `.background { }` builder, for the identity reason above.
 
-  `.island()` is the **theme's card ground** — white in Light for every theme,
-  the theme's hue at ~25% L in Dark, opaque, with the theme's own hairline
+  `.island()` is the **theme's card ground** — white in Light for four of the six
+  and the palette's own paper in Kanagawa and Rosé Pine, the theme's own dark card
+  in Dark, opaque, with the theme's own hairline
   (`Stone`'s warm wash over a tinted card reads as a smudge rather than an edge).
   Its `tint:` parameter (a translucent wash over an opaque base, the layering the
   gradients forced) left with the last thing using it, the "Color tasks by due

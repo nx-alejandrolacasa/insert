@@ -799,7 +799,8 @@ struct AccentButtonStyle: ButtonStyle {
                 // The hairline every flat control wears (`FlatButtonStyle`,
                 // the chips, the search capsule). On the deep primaries it
                 // disappears into the fill's own edge; it earns its place on
-                // the bright ones (Moss's chartreuse, Ember's amber), where a
+                // the bright ones (Tokyo Night's mint, Kanagawa's surimiOrange),
+                // where a
                 // borderless pill on a pale band read as a different material
                 // from the bordered controls beside it.
                 .overlay(Capsule().strokeBorder(Stone.line, lineWidth: 0.5))

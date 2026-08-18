@@ -10,7 +10,7 @@ import SwiftUI
 /// State ownership:
 /// - The type filter lives on `AppState` so it survives project switches and
 ///   stays in sync with the toolbar search; the sort order is a persisted
-///   preference (Settings → General) rather than a per-window control.
+///   preference (Settings → Notes) rather than a per-window control.
 /// - Per-note draft/editing state lives inside `NoteCardView` and is reset per
 ///   identity (`.id(note.id)`), which keeps unrelated cards from sharing focus
 ///   or half-typed edits.
@@ -33,7 +33,7 @@ struct NotesPanel: View {
     private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
     var body: some View {
-        // Sort order is a preference (Settings → General), not a per-window
+        // Sort order is a preference (Settings → Notes), not a per-window
         // control, which keeps this header down to a title and one button.
         let notes = library.notes(
             forProject: appState.selectedProjectID,
@@ -336,9 +336,10 @@ private struct NoteCardView: View {
                 // editing", which is an interactive state, and interactive is
                 // the primary's one job (CLAUDE.md decision 4). At full
                 // strength, not the 0.55 the accent wore — `ring` is already
-                // solved as an outline (it is where Ember's amber, Moss's
-                // chartreuse and Bone's ink each deepen a step in Light), and
-                // fading it was compensating for a colour that wasn't.
+                // solved as an outline (it is where Tokyo Night's mint and
+                // Dracula's lavender each deepen a step in Light, and Dark
+                // Owl's violet lifts one in Dark), and fading it was
+                // compensating for a colour that wasn't.
                 RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous)
                     .strokeBorder(settings.theme.ring, lineWidth: 1.5)
             }

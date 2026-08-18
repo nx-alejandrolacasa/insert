@@ -41,13 +41,13 @@ final class SettingsStore {
 
     /// One of six named themes: the colour of each column's header band, the
     /// filter track on it, the window and card grounds under it, the primary
-    /// buttons and the note-type marks. **Indigo by default** — not the first of
-    /// the six, which is Bone; see `AppTheme`'s declaration order for why those
-    /// are two different things now.
+    /// buttons and the note-type marks. **System by default**, which is also the
+    /// first of the six.
     ///
     /// It replaced two settings, `backdrop` (Background → Tint) and `accent`
-    /// (Accent → Highlight colour); an install that had either is mapped onto a
-    /// theme once, here in `init`. Every value adapts to `appearance` on its
+    /// (Accent → Highlight colour), and it has since replaced its own first set
+    /// of six names; an install holding any of the three is mapped onto a theme
+    /// once, here in `init`. Every value adapts to `appearance` on its
     /// own through a dynamic `NSColor`, so there is nothing to re-apply — unlike
     /// `appearance` itself, and unlike `appIncreaseContrast`.
     var theme: AppTheme {
@@ -172,9 +172,9 @@ final class SettingsStore {
         static let showCreatedDate = "showCreatedDate"
         static let showUpdatedDate = "showUpdatedDate"
         // The two settings `theme` replaced — the window's flat tint and the
-        // highlight colour. Read once, to choose a theme for an install that
-        // had them, then never again; they are not written back, so the theme
-        // key is the only one that matters after the first launch.
+        // highlight colour. Read once, to choose a theme for an install that had
+        // them, and then deleted, so the theme key is the only one that matters
+        // after the first launch.
         static let backdrop = "backdrop"
         static let accent = "accent"
         // Superseded by notePreviewLines ("Collapse long notes" was ten lines
@@ -191,20 +191,26 @@ final class SettingsStore {
         // asked keeps everything.
         doneTaskRetention = DoneTaskRetention(rawValue: defaults.string(forKey: Keys.doneTaskRetention) ?? "") ?? .never
         appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
-        // A saved theme wins; failing that, the install's retired tint and
-        // accent choose one for it (see `AppTheme.migrated(tint:accent:)`), and
-        // the result is written straight back — `didSet` doesn't fire during
-        // init — so the mapping runs exactly once and the old keys are never
-        // consulted again. An install that never touched either lands on
-        // `AppTheme.default`, which is what that function's fall-through gives.
+        // A theme this build still recognises wins. Failing that, whatever
+        // colour setting the install *does* have chooses one — a theme name from
+        // the first set of six, else the retired tint, else the retired accent
+        // (see `AppTheme.migrated(theme:tint:accent:)`) — and the result is
+        // written straight back, since `didSet` doesn't fire during init. So the
+        // mapping runs exactly once, and the two retired keys are **removed**
+        // afterwards rather than merely left unread: nothing can consult them
+        // again, and a stale tint can't outlive the theme it chose. An install
+        // that never touched any of the three lands on `AppTheme.default`.
         if let saved = AppTheme(rawValue: defaults.string(forKey: Keys.theme) ?? "") {
             theme = saved
         } else {
             let migrated = AppTheme.migrated(
+                theme: defaults.string(forKey: Keys.theme) ?? "",
                 tint: defaults.string(forKey: Keys.backdrop) ?? "",
                 accent: defaults.string(forKey: Keys.accent) ?? "")
             theme = migrated
             defaults.set(migrated.rawValue, forKey: Keys.theme)
+            defaults.removeObject(forKey: Keys.backdrop)
+            defaults.removeObject(forKey: Keys.accent)
         }
         // Grotesk for a **new** install — the bundled Space Grotesk is most of
         // what the theme refresh's character is, and the reference mock is set

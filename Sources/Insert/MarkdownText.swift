@@ -36,7 +36,17 @@ struct MarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .tint(Self.linkColour)
     }
+
+    /// The colour SwiftUI draws a link in is the environment's tint, so that is
+    /// how the theme's own link value reaches one. Without it a link inherited
+    /// the app-wide tint, which is `AppTheme.primary` — a lavender or a mint link
+    /// on a white card, at 2.4:1 and 1.6:1, where each theme's `link` is solved
+    /// against the card it lands on. Read inside a view update, so the
+    /// `@Observable` access registers and a theme change re-renders (the way
+    /// `Card` reads the typeface).
+    static var linkColour: Color { SettingsStore.shared.theme.link }
 
     @ViewBuilder
     private func view(for block: MarkdownParser.Block) -> some View {
@@ -626,6 +636,7 @@ struct CollapsibleMarkdown: View {
         MarkdownText.inline(MarkdownParser.lead(markdown), in: nsFont)
             .font(Font(nsFont))
             .foregroundStyle(.secondary)
+            .tint(MarkdownText.linkColour)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserWidth = $0 }

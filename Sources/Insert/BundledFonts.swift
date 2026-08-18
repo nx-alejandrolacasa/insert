@@ -13,7 +13,7 @@ import SwiftUI
 /// executable in them. They ship inside the bundle and are registered
 /// **`.process`**-scoped, so they exist for this app and are never installed on
 /// the user's Mac. The licences travel with them (`SpaceGrotesk-OFL.txt`,
-/// `IBMPlexMono-OFL.txt`, shown in Settings → General → "Font licences") because
+/// `IBMPlexMono-OFL.txt`, shown in Settings → Appearance → "Font licences") because
 /// the OFL requires the copyright notice and licence to be distributed with the
 /// fonts.
 ///

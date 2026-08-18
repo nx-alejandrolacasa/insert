@@ -15,9 +15,8 @@ import SwiftUI
 ///
 /// Two rows inside one band — heading and filters — and **no radius of its own**:
 /// it spans the full column width and the window's corner clips it, which is what
-/// makes two adjacent bands read as one strip rather than as two cards. The light
-/// band takes a hairline along its bottom edge; the dark one separates from the
-/// cards below it on its own.
+/// makes two adjacent bands read as one strip rather than as two cards. And no
+/// hairline under it either — see the `.background` below.
 ///
 /// The heading is drawn in the **card face**, not the system font — the one place
 /// the typeface setting reaches outside a card. That is a deliberate widening of
@@ -77,14 +76,11 @@ struct ColumnHeaderBand<Filters: View>: View {
         .padding(.bottom, Metrics.bandBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(band.fill)
-        // Drawn as an overlay on the bottom edge rather than as a `Divider`
-        // below the band, so it belongs to the band and travels with it — and
-        // so it is inside the window's own clip at the column edges.
-        .overlay(alignment: .bottom) {
-            if let hairline = band.hairline {
-                hairline.frame(height: 1)
-            }
-        }
+        // **No hairline on the bottom edge**, in any theme. A light band used to
+        // take one — a dark band separates from the cards on its own — and it read
+        // as a rule *drawn under* the header rather than as the edge of a surface,
+        // which in a window with no shadows anywhere is the one thing that looks
+        // like a border. The band's own colour against the page is the boundary.
         // The band is chrome for the column under it; VoiceOver should reach
         // the heading, the count and the button, not a container named "band".
         .accessibilityElement(children: .contain)

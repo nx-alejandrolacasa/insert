@@ -89,36 +89,42 @@ struct ProjectsSidebar: View {
         // traffic lights rather than in a band below them. `header` insets
         // itself past the lights.
         .ignoresSafeArea(.container, edges: .top)
-        // The sidebar is **transparent to the desktop, and carries no colour of
-        // its own** — see `SidebarVibrancy`, which is the whole of it, and note
-        // that its other half is in `RootView`: nothing of ours may be painted
-        // behind this column, or there is nothing to see through it.
+        // The sidebar is **translucent white in every theme** — the system's
+        // material with a white wash over it, so the column reads as frosted glass
+        // rather than as a surface, and reads the *same* whichever theme is on.
+        // `SidebarVibrancy` is the transparency (and note its other half is in
+        // `RootView`: nothing of ours may be painted behind this column, or there
+        // is nothing to see through it); `sidebarWash` is the white.
         //
-        // It briefly wore a translucent wash of the band's colour, which was the
-        // wrong idea twice over and is worth recording so it isn't proposed again.
-        // It made the sidebar a *painted* surface, when what the column wants is
-        // to be a pane you can see through; and a colour layer over a vibrancy
-        // material subtracts from that material one for one, so the tint and the
-        // transparency were fighting each other for the same pixels — at the 40%
-        // it started on, the sidebar read as flat tinted paint. There is no wash
-        // here now, and adding one back means giving up the effect. The
-        // `.withinWindow` pass that followed the wash was the same mistake with
-        // the paint moved one layer down; it is gone too.
+        // **The wash that was rejected before is not this one, and the difference
+        // is the whole reason this is allowed.** What was tried and reversed was a
+        // wash of the *band's* colour: it made the sidebar a themed, painted
+        // surface, and since a colour layer over a vibrancy material subtracts from
+        // that material one for one, the tint and the transparency fought for the
+        // same pixels — at 40% it read as flat tinted paint. White subtracts the
+        // same way, and that is exactly what is wanted here: less desktop, more
+        // frost. What stays true is the underlying rule — **no theme colour on this
+        // column** — so the wash is one fixed pair of values and the sidebar does
+        // not follow `windowFill`. (The `.withinWindow` pass that followed the tint
+        // was the same mistake with the paint one layer down; it is still gone.)
         //
-        // No `if` and nothing theme-dependent in this layer either, which also
+        // Still no `if` and nothing theme-dependent in this layer, which also
         // sidesteps the trap the old tint layer had to document: a conditional
         // around the column gives the `List` a new identity whenever the setting
         // changes and takes the split view's autosaved widths down with it.
         // Anything conditional added later belongs *inside* a `.background { }`
         // builder, never around the column.
         //
-        // If a background layer is ever added back here, `.ignoresSafeArea()` on
-        // it is load-bearing and easy to lose: a background layer does **not**
-        // inherit the content's `.ignoresSafeArea(.container, edges: .top)` above,
-        // so without it the layer starts below the toolbar inset and leaves the
-        // titlebar band one layer short — a hard seam right under the traffic
-        // lights, reading as two stacked panels rather than one column.
-        .background { SidebarVibrancy() }
+        // `.ignoresSafeArea()` on the wash is load-bearing and easy to lose: a
+        // background layer does **not** inherit the content's
+        // `.ignoresSafeArea(.container, edges: .top)` above, so without it the layer
+        // starts below the toolbar inset and leaves the titlebar band one layer
+        // short — a hard seam right under the traffic lights, reading as two
+        // stacked panels rather than one column.
+        .background {
+            SidebarVibrancy()
+            Self.sidebarWash.ignoresSafeArea()
+        }
         // The "New Project" menu command (⌘N) posts this; open the same flow.
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
             showingAdd = true
@@ -152,6 +158,34 @@ struct ProjectsSidebar: View {
             Text("The project is removed and unassigned from its notes and tasks. The notes and tasks themselves are kept.")
         }
     }
+
+    // MARK: - The pane
+
+    /// The white the sidebar's frost is washed with, over `SidebarVibrancy`'s
+    /// material. **Not a theme value and deliberately not one**: the column is the
+    /// one surface in the window that stays out of the theme, so this is a fixed
+    /// pair and every theme's sidebar is the same pane.
+    ///
+    /// Two values rather than one, per appearance, because white does opposite
+    /// things to the two materials it sits on. In **Light** it is doing the work —
+    /// 40% is what turns "the desktop, blurred" into "white frosted glass", which
+    /// is what the column is meant to read as. In **Dark** the same 40% would be a
+    /// grey haze over a near-black material and would take the row text's ground
+    /// with it, so it is 16%: enough to lift the panel off the desktop behind it
+    /// and keep the two appearances the same idea, not the same number.
+    ///
+    /// Built as one dynamic `NSColor` rather than read from `colorScheme`, the trick
+    /// `Tint` and `AppTheme` use, so the layer needs no environment and no `if` —
+    /// see the call site for why a conditional must not appear around this column.
+    ///
+    /// **Reduce Transparency still needs nothing by hand.** The material opaques
+    /// itself for that setting; a white wash over an opaque material is just a
+    /// lighter opaque material, so there is nothing translucent left for the switch
+    /// to miss — which was true before this wash and is still true with it.
+    private static let sidebarWash = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: dark ? 0.16 : 0.40)
+    })
 
     // MARK: - Header
 
@@ -831,6 +865,12 @@ private struct ProjectEditorPopover: View {
 /// Makes the sidebar **actually transparent** — the desktop behind the window
 /// shows through it, the way it does through a Finder sidebar.
 ///
+/// This is the transparency only. The **white** the column also wears is a wash at
+/// the call site (`sidebarWash`), layered over the material this configures; the
+/// two together are what make the sidebar read as frosted glass rather than as
+/// blurred wallpaper. Nothing here is theme-dependent, and that is the rule for
+/// this column.
+///
 /// This reverses the `.withinWindow` pass that came before it, and the reversal is
 /// the point rather than a tuning step, so here is the whole of it.
 /// `.withinWindow` samples the *window's own content* instead of the desktop, and
@@ -895,7 +935,8 @@ private struct ProjectEditorPopover: View {
 /// **Reduce Transparency needs nothing by hand any more**, which is the one
 /// simplification that came free: `NSVisualEffectView` opaques its own material
 /// for that setting, and with no `alphaValue` of ours layered on top there is
-/// nothing left for the system's switch to miss. The in-app switch rides along
+/// nothing left for the system's switch to miss. The white wash doesn't change
+/// that — over an opaque material it is simply a lighter opaque material. The in-app switch rides along
 /// through `AccessibilityOverride`'s effect on the appearance rather than through
 /// a property here.
 private struct SidebarVibrancy: NSViewRepresentable {

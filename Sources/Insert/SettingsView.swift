@@ -2,38 +2,56 @@ import AppKit
 import SwiftUI
 
 /// The panes of the Settings window, in sidebar order.
+///
+/// **Appearance is its own pane and Storage is not a pane at all**, which is one
+/// change rather than two. General had grown into the window's junk drawer —
+/// appearance, theme, typeface, spelling, the menu-bar item — and the typeface
+/// section ends in a footer three paragraphs long, because the OFL requires the
+/// licence notice to travel with the fonts. Anything under that footer was
+/// effectively hidden: you had to scroll past the legal text to find the two
+/// toggles. So the three chrome controls moved out together, which also settled a
+/// smaller annoyance — the word "Appearance" printed twice in one form, once as a
+/// section header and once as the row label under it. The pane's name says it now:
+/// the section header is gone and the row that switches Auto / Light / Dark is
+/// labelled **"Mode"**, so the word appears once per screen.
+///
+/// That left General with two toggles, so **Storage folded into it** and its pane
+/// went: one folder path, two buttons and a footer was never a pane's worth of
+/// settings on its own, and "where the files live" is as general as a setting
+/// gets. Nothing persists the selected pane, so no migration was needed for the
+/// case that disappeared.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, notes, tasks, accessibility, storage
+    case general, appearance, notes, tasks, accessibility
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .general: "General"
+        case .appearance: "Appearance"
         case .notes: "Notes"
         case .tasks: "Tasks"
         case .accessibility: "Accessibility"
-        case .storage: "Storage"
         }
     }
 
     var icon: String {
         switch self {
         case .general: "gearshape"
+        case .appearance: "paintpalette"
         case .notes: "note.text"
         case .tasks: "checklist"
         case .accessibility: "accessibility"
-        case .storage: "externaldrive"
         }
     }
 
     var tint: Color {
         switch self {
         case .general: .gray
+        case .appearance: .pink
         case .notes: .purple
         case .tasks: .blue
         case .accessibility: .teal
-        case .storage: .orange
         }
     }
 }
@@ -66,10 +84,10 @@ struct SettingsDetail: View {
         Group {
             switch model.pane {
             case .general: GeneralSettingsTab()
+            case .appearance: AppearanceSettingsTab()
             case .notes: NotesSettingsTab()
             case .tasks: TasksSettingsTab()
             case .accessibility: AccessibilitySettingsTab()
-            case .storage: StorageSettingsTab()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,11 +171,160 @@ private struct SettingsPaneLabel: View {
 
 // MARK: - General
 
-/// The app-wide preferences. Anything specific to notes or tasks lives in their
-/// own pane.
+/// The app-wide preferences that aren't chrome: spelling, the menu-bar item, and
+/// **where the Markdown lives** — the last of which was its own pane until the
+/// appearance controls moved out and left this one with two toggles (see
+/// `SettingsPane`).
 private struct GeneralSettingsTab: View {
     // The Settings window is hosted by AppKit (see SettingsWindowController),
     // so there is no injected environment here — read the shared store directly.
+    @Bindable var settings = SettingsStore.shared
+
+    private let library = Library.shared
+
+    /// A folder the user picked but hasn't committed to yet — the
+    /// move-or-just-switch choice is on screen.
+    @State private var pendingFolder: URL?
+    /// What the last relocation did. Reported inline rather than in an alert:
+    /// it's information, not a problem to dismiss. A `Text` rather than a
+    /// `String` so the file count can carry inflection markup (see `move`).
+    @State private var status: Text?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Check spelling while typing", isOn: $settings.checkSpelling)
+            } footer: {
+                Text("Underlines misspelled words while you write a note or a task — title and body both — in the spelling language your Mac is set to. Control-click a word for its corrections. Nothing is ever changed for you: autocorrect and grammar checking stay off.")
+            }
+
+            Section {
+                Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
+            } footer: {
+                Text("The menu-bar item summarizes tasks that are past due, due today, and coming up.")
+            }
+
+            // The old Storage pane, unchanged apart from gaining a header: with
+            // its own pane gone, the group needs a name, and "Location" beside
+            // the path is a label for the row rather than for the section.
+            Section {
+                LabeledContent("Location") {
+                    Text(library.rootURL.path)
+                        .truncationMode(.middle)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                HStack {
+                    Button("Change…", action: changeFolder)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([library.rootURL])
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                }
+
+                if let status {
+                    status
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Storage")
+            } footer: {
+                Text("Notes, projects, and tasks are stored as plain Markdown files. You can browse and edit them directly in any text or Markdown editor, and Insert will pick up outside changes automatically.")
+            }
+        }
+        .formStyle(.grouped)
+        // Changing the folder is two different intentions — take my files with
+        // me, or open a library that's already over there — so ask instead of
+        // guessing. Only shown when there is something to migrate.
+        .confirmationDialog(
+            "Move your Markdown to the new folder?",
+            isPresented: dialogBinding,
+            titleVisibility: .visible,
+            presenting: pendingFolder
+        ) { folder in
+            Button("Move Files") { move(to: folder) }
+            Button("Switch Without Moving") { switchOnly(to: folder) }
+            Button("Cancel", role: .cancel) { pendingFolder = nil }
+        } message: { folder in
+            Text("Insert can move your notes, tasks and project list into “\(folder.lastPathComponent)”, or just read whatever is already there and leave the current folder untouched.")
+        }
+    }
+
+    private var dialogBinding: Binding<Bool> {
+        Binding(get: { pendingFolder != nil }, set: { if !$0 { pendingFolder = nil } })
+    }
+
+    /// Presents a directory-only open panel. `runModal` is safe to call here
+    /// because SwiftUI view bodies run on the main actor.
+    private func changeFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder where Insert should store your Markdown."
+        panel.directoryURL = library.rootURL
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard url.standardizedFileURL != library.rootURL.standardizedFileURL else { return }
+
+        // With an empty library there's nothing to move, so skip the question.
+        if library.isEmpty {
+            switchOnly(to: url)
+        } else {
+            pendingFolder = url
+        }
+    }
+
+    private func switchOnly(to url: URL) {
+        pendingFolder = nil
+        library.setRoot(url)
+        status = Text("Now reading from this folder. Nothing was moved.")
+    }
+
+    private func move(to url: URL) {
+        pendingFolder = nil
+        do {
+            let result = try library.moveRoot(to: url)
+            // `file\(n == 1 ? "" : "s")` is English-only and unlocalizable;
+            // `^[…](inflect: true)` has Foundation agree the noun with the count.
+            let moved = Text("Moved ^[\(result.moved) file](inflect: true) here.")
+            status = result.skipped > 0
+                ? Text("\(moved) \(result.skipped) stayed behind — the new folder already had a file with the same name.")
+                : moved
+        } catch {
+            status = Text("Couldn’t move the files: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Appearance
+
+/// How the window looks: light or dark, which theme, and the face cards are
+/// written in. The three that used to sit at the top of General, and the reason
+/// they are here is in `SettingsPane` — the typeface footer's licence text buried
+/// everything under it.
+///
+/// **The Auto / Light / Dark row is labelled "Mode", not "Appearance".** The pane
+/// is Appearance — in the sidebar and in the title bar — so a row of the same name
+/// under it printed the word three times on one screen, which is what this split
+/// was partly meant to fix; the section header went with it, since the pane's name
+/// already does that job and a bare segmented picker only needs the row label.
+///
+/// **"Mode" moves, "Theme" stays**, and that is the cheaper direction: the
+/// palettes below *are* named themes (Dracula, Tokyo Night), which is what a user
+/// already calls them, and it is what the type is called in the code (`AppTheme`)
+/// and throughout CLAUDE.md. Naming the light/dark switch "Theme" and the palettes
+/// "Colour scheme" was the other option and would have renamed the better-known of
+/// the two. `Appearance` keeps its name as a *type*; only its label is "Mode".
+private struct AppearanceSettingsTab: View {
     @Bindable var settings = SettingsStore.shared
 
     /// Which bundled licence the sheet is showing, or `nil` for closed.
@@ -165,13 +332,8 @@ private struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Appearance") {
-                // Labelled "Appearance", not "Theme", since this pane now has a
-                // Theme section of its own and the two controls would otherwise
-                // both answer to the same word. The section header repeats the
-                // label rather than leaving the row unlabelled, which is what
-                // System Settings does with a lone control in a named group.
-                Picker("Appearance", selection: $settings.appearance) {
+            Section {
+                Picker("Mode", selection: $settings.appearance) {
                     ForEach(Appearance.allCases) { option in
                         Text(option.label).tag(option)
                     }
@@ -185,11 +347,8 @@ private struct GeneralSettingsTab: View {
                 // padded down to where a centred label would land on the first
                 // row of swatches.
                 //
-                // **No section header**, unlike Appearance above: the row's own
-                // label already says "Theme", and a header repeating it printed
-                // the word twice, once as a heading and once beside the swatches.
-                // Appearance keeps its header because its control is a bare
-                // segmented picker whose row label is the only thing naming it.
+                // No section header, for the reason above and the one this
+                // originally had: the row's own label already says "Theme".
                 HStack(alignment: .top) {
                     Text("Theme")
                         .padding(.top, 9)
@@ -197,9 +356,12 @@ private struct GeneralSettingsTab: View {
                     ThemePicker(selection: settings.theme) { settings.theme = $0 }
                 }
             } footer: {
-                Text("The theme colours the column headers, the window behind the cards, the primary buttons and the note-type marks. Light and dark values are built in — Appearance decides which you see.")
+                Text("The theme colours the column headers, the window behind the cards, the primary buttons and the note-type marks. Light and dark values are built in — Mode decides which you see.")
             }
 
+            // Last in the pane, deliberately: its footer is three paragraphs and
+            // ends in the two licence links, so anything under it reads as an
+            // afterthought — which is exactly what happened to General's toggles.
             Section {
                 TypefacePicker(selection: settings.typeface) { settings.typeface = $0 }
             } header: {
@@ -232,18 +394,6 @@ private struct GeneralSettingsTab: View {
                         }
                     }
                 }
-            }
-
-            Section {
-                Toggle("Check spelling while typing", isOn: $settings.checkSpelling)
-            } footer: {
-                Text("Underlines misspelled words while you write a note or a task — title and body both — in the spelling language your Mac is set to. Control-click a word for its corrections. Nothing is ever changed for you: autocorrect and grammar checking stay off.")
-            }
-
-            Section {
-                Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
-            } footer: {
-                Text("The menu-bar item summarizes tasks that are past due, due today, and coming up.")
             }
         }
         .formStyle(.grouped)
@@ -658,118 +808,5 @@ private struct AccessibilitySettingsTab: View {
             }
         }
         .formStyle(.grouped)
-    }
-}
-
-// MARK: - Storage
-
-/// Where the markdown lives. Lets the user relocate the folder or reveal it in
-/// Finder, and explains that everything is plain files editable elsewhere.
-private struct StorageSettingsTab: View {
-    private let library = Library.shared
-
-    /// A folder the user picked but hasn't committed to yet — the
-    /// move-or-just-switch choice is on screen.
-    @State private var pendingFolder: URL?
-    /// What the last relocation did. Reported inline rather than in an alert:
-    /// it's information, not a problem to dismiss. A `Text` rather than a
-    /// `String` so the file count can carry inflection markup (see `move`).
-    @State private var status: Text?
-
-    var body: some View {
-        Form {
-            Section {
-                LabeledContent("Location") {
-                    Text(library.rootURL.path)
-                        .truncationMode(.middle)
-                        .lineLimit(1)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                HStack {
-                    Button("Change…", action: changeFolder)
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.capsule)
-                    Button("Reveal in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([library.rootURL])
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
-                }
-
-                if let status {
-                    status
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            } footer: {
-                Text("Notes, projects, and tasks are stored as plain Markdown files. You can browse and edit them directly in any text or Markdown editor, and Insert will pick up outside changes automatically.")
-            }
-        }
-        .formStyle(.grouped)
-        // Changing the folder is two different intentions — take my files with
-        // me, or open a library that's already over there — so ask instead of
-        // guessing. Only shown when there is something to migrate.
-        .confirmationDialog(
-            "Move your Markdown to the new folder?",
-            isPresented: dialogBinding,
-            titleVisibility: .visible,
-            presenting: pendingFolder
-        ) { folder in
-            Button("Move Files") { move(to: folder) }
-            Button("Switch Without Moving") { switchOnly(to: folder) }
-            Button("Cancel", role: .cancel) { pendingFolder = nil }
-        } message: { folder in
-            Text("Insert can move your notes, tasks and project list into “\(folder.lastPathComponent)”, or just read whatever is already there and leave the current folder untouched.")
-        }
-    }
-
-    private var dialogBinding: Binding<Bool> {
-        Binding(get: { pendingFolder != nil }, set: { if !$0 { pendingFolder = nil } })
-    }
-
-    /// Presents a directory-only open panel. `runModal` is safe to call here
-    /// because SwiftUI view bodies run on the main actor.
-    private func changeFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Choose"
-        panel.message = "Choose the folder where Insert should store your Markdown."
-        panel.directoryURL = library.rootURL
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard url.standardizedFileURL != library.rootURL.standardizedFileURL else { return }
-
-        // With an empty library there's nothing to move, so skip the question.
-        if library.isEmpty {
-            switchOnly(to: url)
-        } else {
-            pendingFolder = url
-        }
-    }
-
-    private func switchOnly(to url: URL) {
-        pendingFolder = nil
-        library.setRoot(url)
-        status = Text("Now reading from this folder. Nothing was moved.")
-    }
-
-    private func move(to url: URL) {
-        pendingFolder = nil
-        do {
-            let result = try library.moveRoot(to: url)
-            // `file\(n == 1 ? "" : "s")` is English-only and unlocalizable;
-            // `^[…](inflect: true)` has Foundation agree the noun with the count.
-            let moved = Text("Moved ^[\(result.moved) file](inflect: true) here.")
-            status = result.skipped > 0
-                ? Text("\(moved) \(result.skipped) stayed behind — the new folder already had a file with the same name.")
-                : moved
-        } catch {
-            status = Text("Couldn’t move the files: \(error.localizedDescription)")
-        }
     }
 }
