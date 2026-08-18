@@ -57,6 +57,14 @@ struct RootView: View {
                 // button once it's open (Safari's arrangement). It stays in the
                 // toolbar a little longer than the sidebar is closed so it can
                 // fade with the column rather than blink — see `syncShowButton`.
+                //
+                // It is the *only* navigation item, and the window title beside
+                // it is AppKit's own. A project icon sat between the two for a
+                // while and is gone: spacing it evenly took a negative inset,
+                // which failed three ways (see CLAUDE.md), and drawing the title
+                // ourselves to fix that — `.toolbar(removing: .title)` plus a
+                // `Text` — cost the search field its trailing pin, since the
+                // title item is what holds the space between the two ends.
                 if showButtonPresent {
                     ToolbarItem(placement: .navigation) {
                         Button {
@@ -90,11 +98,21 @@ struct RootView: View {
                         // in a single step while the glyph was still arriving.
                         // Width, scale and opacity all run off the same 0→1, so
                         // the space and the thing filling it turn up together.
-                        .scaleEffect(showButtonOpacity)
+                        //
+                        // The scale is floored, never 0: a zero scale is a
+                        // singular transform, and `convertRect:fromView:` aborts
+                        // rather than declining when it cannot invert one — see
+                        // `minButtonScale`.
+                        .scaleEffect(max(showButtonOpacity, Self.minButtonScale))
                         .frame(width: showButtonWidth * showButtonOpacity)
                         // At nothing wide the item is still holding the toolbar's
                         // gap to its neighbour; take that back too, or the title
-                        // keeps a smaller version of the same jump.
+                        // keeps a smaller version of the same jump. It is safe on
+                        // a button only because it reaches full size at the end of
+                        // the fade, when there is nothing left to click: a
+                        // negative inset shrinks the frame while the glyph keeps
+                        // drawing at its own size, and the click target goes with
+                        // the frame.
                         .padding(.trailing, -Self.toolbarItemSpacing * (1 - showButtonOpacity))
                         .opacity(showButtonOpacity)
                         // Nothing to click while it's on its way out.
@@ -102,25 +120,6 @@ struct RootView: View {
                     }
                     .sharedBackgroundVisibility(.hidden)
                 }
-                // The selected project's icon (or the inbox tray for Everything),
-                // beside the title. `sharedBackgroundVisibility(.hidden)` is what
-                // makes this read as part of the title rather than as another
-                // button: without it macOS wraps the item in its own glass
-                // capsule, and interpolating the image into `navigationTitle`
-                // instead gets flattened away entirely.
-                ToolbarItem(placement: .navigation) {
-                    Image(systemName: titleSymbol)
-                        .foregroundStyle(titleTint.ink)
-                        // Toolbar items are spaced for buttons; this one is really
-                        // part of the title, so pull the gap right in — -8 only
-                        // cancels the item spacing and still read as a detached
-                        // glyph next to the title.
-                        .padding(.trailing, -12)
-                        // Decorative: `navigationTitle` right beside it already
-                        // names the selected project.
-                        .accessibilityHidden(true)
-                }
-                .sharedBackgroundVisibility(.hidden)
                 // Pin the search field to the trailing edge. Left to itself the
                 // toolbar tucks it in beside the sidebar toggle; the plan wants
                 // sidebar control on the left, search on the right.
@@ -210,27 +209,11 @@ struct RootView: View {
         )
     }
 
-    /// The icon shown beside the window title: the selected project's symbol, or
-    /// the same inbox tray the sidebar's "Everything" row wears.
-    private var titleSymbol: String {
-        if let id = appState.selectedProjectID, let project = library.project(id: id) {
-            return project.symbol
-        }
-        return SymbolCatalog.everything
-    }
-
-    /// The selected project's colour, or the same neutral grey the sidebar's
-    /// "Everything" row wears.
-    private var titleTint: Tint {
-        if let id = appState.selectedProjectID, let project = library.project(id: id) {
-            return project.tint
-        }
-        return .gray
-    }
-
-    /// Stays a plain `String`: a `Text` with an interpolated `Image` gets
-    /// flattened for the window title, which drops the glyph and leaves the bar
-    /// empty on first render — hence the separate toolbar item above.
+    /// A plain `String`, drawn by AppKit. Two ways of dressing it up have been
+    /// tried and undone: interpolating an `Image` into it is flattened away, and
+    /// removing the drawn title to lay out an icon and a `Text` of our own moved
+    /// the search field off the trailing edge, because that title item is what
+    /// holds the space between the toolbar's two ends.
     private var navigationTitle: String {
         if let id = appState.selectedProjectID, let project = library.project(id: id) {
             return project.displayName
@@ -243,6 +226,13 @@ struct RootView: View {
     private static let slideCurve = Animation.easeInOut(duration: 0.25)
     private static let slideDuration = Duration.milliseconds(250)
 
+    /// How much of the slide the show button's exit takes. Short enough that the
+    /// title's un-animatable step lands mid-travel, long enough that the glyph
+    /// still reads as fading rather than blinking out.
+    private static let exitFraction = 0.4
+    private static let exitCurve = Animation.easeOut(duration: 0.25 * exitFraction)
+    private static let exitDuration = Duration.milliseconds(Int(250 * exitFraction))
+
     /// The system switch OR-ed with the Accessibility menu's in-app one.
     private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
@@ -253,15 +243,26 @@ struct RootView: View {
         motionReduced ? nil : Self.slideCurve
     }
 
+    /// The button's exit, dropped entirely with Reduce Motion for the same
+    /// reason `slide` is.
+    private var exit: Animation? {
+        motionReduced ? nil : Self.exitCurve
+    }
+
     /// How long to wait before taking the faded-out button out of the toolbar.
     /// With no fade to wait for, that's immediately.
     private var slideDuration: Duration {
         motionReduced ? .zero : Self.slideDuration
     }
 
-    /// The gap the toolbar leaves between two items — the same one the title
-    /// icon pulls back with a negative inset.
+    /// The gap the toolbar leaves between two items, which the show button hands
+    /// back as it leaves.
     private static let toolbarItemSpacing: CGFloat = 8
+
+    /// The smallest the show button is scaled to on its way out. Anything
+    /// times zero is a matrix AppKit cannot invert, and it aborts rather than
+    /// declining — see `scaleEffect` above.
+    private static let minButtonScale: Double = 0.01
 
     /// Animated so the column slides, as a real macOS sidebar does — a bare
     /// mutation makes `NavigationSplitView` pop the column in and out. Every
@@ -280,8 +281,20 @@ struct RootView: View {
     /// while the column was still sliding away — and vanishing before it had
     /// finished coming back. So presence and opacity are tracked separately. The
     /// button joins the toolbar *before* fading in, and only leaves it once it
-    /// has already faded out, which puts the un-animatable half of the change
-    /// where there is nothing left to see.
+    /// has already faded out.
+    ///
+    /// **The exit is deliberately faster than the slide, and that is about the
+    /// title rather than the button.** The toolbar holds the item's slot at its
+    /// natural width whatever width we animate underneath — the same reservation
+    /// that made a negative inset useless on the title icon — so the shrinking
+    /// glyph moves nothing, and the title travels its last ~36pt in **one step**
+    /// when the item is finally removed. That step can't be animated away; it can
+    /// only be put somewhere it doesn't read as a jump. At the full slide length
+    /// it landed at the exact moment the column stopped, with the whole window
+    /// still — the worst possible frame for it. Ending the fade at
+    /// `exitFraction` of the slide lands it while the column is still travelling
+    /// and the title is already moving with it, so the step is absorbed by a
+    /// movement the eye is already following.
     private func syncShowButton(sidebarVisible: Bool) {
         showButtonRemoval?.cancel()
         showButtonRemoval = nil
@@ -292,9 +305,11 @@ struct RootView: View {
             return
         }
 
-        withAnimation(slide) { showButtonOpacity = 0 }
+        withAnimation(exit) { showButtonOpacity = 0 }
         showButtonRemoval = Task { @MainActor in
-            try? await Task.sleep(for: slideDuration)
+            // With Reduce Motion there is no fade to wait for, and a slot held
+            // open for a button nobody can see is just a later jump.
+            try? await Task.sleep(for: motionReduced ? .zero : Self.exitDuration)
             guard !Task.isCancelled else { return }
             showButtonPresent = false
         }

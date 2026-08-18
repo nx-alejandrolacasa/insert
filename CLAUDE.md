@@ -436,6 +436,49 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   since a wide sidebar is a width someone chose and only the excess needs taking off.
   The modifier stays — it is still what sets the *ideal* — but none of its three
   values is what enforces the range.
+- **The toolbar's leading side is the show button and AppKit's own title, and
+  nothing else.** A project icon sat between them from an earlier design and was
+  **removed**, along with every attempt to space it: the whole episode is kept
+  because each attempt failed in a way that is worth not repeating.
+  Spacing it as its own `ToolbarItem` needs a negative inset, and a negative inset
+  **shrinks the view's frame**. On the button that left a 28pt circle drawing
+  inside an 8pt frame, and only that sliver took clicks ("hard to click, as if
+  there is something on top of it"). Moved onto the icon — decorative,
+  `accessibilityHidden`, hit-tests nothing — it stopped costing clicks and stopped
+  working: **the toolbar reserves an item's slot at its natural width whatever the
+  padding says**, so the space came off one side and reappeared on the other
+  (button→icon 29→12.5pt, icon→title 8.5→35pt, measured at 2×). And the same inset
+  landed differently depending on the sidebar — 3pt to the title with the button in
+  the stack, 18pt with the icon alone — so no single value was right in both.
+  Putting all three in one `HStack` *did* fix the spacing, at a price that wasn't
+  worth it: it needs `.toolbar(removing: .title)` and a `Text` of our own, and with
+  the title item gone **the search field lost its trailing pin** and sat beside the
+  title, because that item is what holds the space between the toolbar's two ends.
+  `DefaultToolbarItem(kind: .search, placement: .primaryAction)` does not survive
+  it. So the title is AppKit's again, styled only by
+  `AppDelegate.restyleWindowTitle()`, and the icon is gone rather than reinstated —
+  the simplification was the maintainer's call once the spacing had cost this much.
+  **The button's exit is 40% of the slide, and that timing is about the title.**
+  The toolbar holds the item's slot at its natural width whatever width is
+  animated underneath — the same reservation that made a negative inset useless
+  above — so the shrinking glyph moves nothing and the title travels its last
+  ~36pt in **one step**, when the item is removed. The step can't be animated
+  away, only placed: at the full slide length it landed the instant the column
+  stopped, with the whole window still, which is the frame that makes it read as
+  a jump. `exitFraction` ends the fade mid-slide instead, so the step is absorbed
+  by a movement the eye is already following. With Reduce Motion there is no fade
+  to wait for and the item leaves at once, since a slot held open for an invisible
+  button is only a later jump.
+  **The button's fade scale is floored at 0.01 and must never reach 0.** A zero
+  scale is a **singular** transform, and `NSView.convertRect:fromView:` aborts
+  rather than declining when it cannot invert one — `__assert_rtn` inside
+  `NSViewGetTransformToDescendant`, reached from the window's own
+  `_regionForOpaqueDescendants` pass under the titlebar, with **no frame of
+  Insert's on the stack**, so the crash report names only AppKit and SwiftUI. It
+  crashed while the button was a *descendant* inside a hosting view AppKit walks
+  into (the one-item arrangement above) rather than that view's root, which is the
+  only reason the same degenerate value had been survivable before. At 0.01 the
+  button is equally invisible — `opacity` is the same 0 — and the matrix inverts.
 - **Search** — the toolbar field filters all three columns at once (projects,
   notes and tasks), not just the focused one.
 - **Projects** — each row shows its emoji, name and a live `X notes · Y tasks`
