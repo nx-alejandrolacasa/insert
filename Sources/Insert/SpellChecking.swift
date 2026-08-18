@@ -96,5 +96,12 @@ enum SpellChecking {
         if editor.isAutomaticSpellingCorrectionEnabled {
             editor.isAutomaticSpellingCorrectionEnabled = false
         }
+        // The user's own replacement table, on for the same reason the body
+        // editor turns it on (see `MarkdownTextViewBridge.makeNSView`). Set here
+        // rather than left to the default because this editor is *shared*: it
+        // arrives carrying whatever the last field it served was given.
+        if !editor.isAutomaticTextReplacementEnabled {
+            editor.isAutomaticTextReplacementEnabled = true
+        }
     }
 }

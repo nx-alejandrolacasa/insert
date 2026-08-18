@@ -27,7 +27,7 @@ import SwiftUI
 /// keeps the marks it already has, the way Notes does.
 ///
 /// What came with the change, since a hosted text view answers its own keys:
-/// **Tab** and **Esc** are now `insertTab(_:)` / `cancelOperation(_:)` overrides
+/// **⇧Tab** and **Esc** are now `insertBacktab(_:)` / `cancelOperation(_:)` overrides
 /// rather than a local `NSEvent` monitor and an `onKeyPress` at the call sites —
 /// the same two keys, answered in the one place that gets them first. **Return**
 /// still goes through `MarkdownReturn`'s app-wide monitor below, which reads the
@@ -51,10 +51,11 @@ struct MarkdownEditor: View {
     /// read here, like `font`: the call site reads it inside a view body, so the
     /// `@Observable` access registers and a theme change repaints an open editor.
     var textColor: NSColor = .labelColor
-    /// Tab or ⇧Tab — the owner's field traversal (a card hands focus back to
-    /// its title). Without it the text view answers Tab itself, as a literal
-    /// tab character, and there is no key that leaves the body.
-    var onTab: (() -> Void)? = nil
+    /// ⇧Tab — the owner's field traversal, which in a card means handing focus
+    /// back to the title. **Tab is not this**: it inserts a literal tab, the
+    /// text view's own behaviour, because a body is prose where an indent is
+    /// something you type rather than a field in a form you page through.
+    var onBacktab: (() -> Void)? = nil
     /// Esc — the owner leaves edit mode. A hook rather than the `.onKeyPress`
     /// the call sites used to carry: the text view answers keys before SwiftUI's
     /// key-press handlers see them, which is why Tab needed a monitor in the
@@ -76,7 +77,7 @@ struct MarkdownEditor: View {
             text: $text,
             font: font,
             textColor: textColor,
-            onTab: onTab,
+            onBacktab: onBacktab,
             onEscape: onEscape,
             focused: $focused,
             selection: $selection
@@ -141,7 +142,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
     @Binding var text: String
     var font: NSFont
     var textColor: NSColor
-    var onTab: (() -> Void)?
+    var onBacktab: (() -> Void)?
     var onEscape: (() -> Void)?
     @FocusState.Binding var focused: Bool
     @Binding var selection: TextSelection?
@@ -186,20 +187,55 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         view.isAutomaticSpellingCorrectionEnabled = false
         view.isAutomaticQuoteSubstitutionEnabled = false
         view.isAutomaticDashSubstitutionEnabled = false
-        view.isAutomaticTextReplacementEnabled = false
         view.isAutomaticTextCompletionEnabled = false
         view.isAutomaticLinkDetectionEnabled = false
         view.isAutomaticDataDetectionEnabled = false
+        // **Text replacement is the exception, and it is on.** It was refused
+        // with the rest and shouldn't have been: the others are macOS deciding
+        // that what someone typed isn't what they meant — `--` becoming an en
+        // dash in a file where the two characters differ — while this one is a
+        // table the user wrote themselves in System Settings, firing only on the
+        // exact strings they put in it. Typing `->` and getting `→` is the
+        // feature working, in every other app on the Mac, and refusing it here
+        // read as the shortcut being broken.
+        view.isAutomaticTextReplacementEnabled = true
+
+        applyTabStops(to: view, font: font)
 
         view.string = text
         return view
+    }
+
+    /// Makes a tab a **four-space step, anywhere in the line**.
+    ///
+    /// An `NSTextView` arrives with twelve tab stops 28pt apart and a
+    /// `defaultTabInterval` of **0**, and that zero is the bug: past the twelfth
+    /// stop there is no next one, so the layout manager gives the tab the rest of
+    /// the line and the caret lands on the line below. Typing a tab at the end of
+    /// a long line looked like it inserted a newline as well. Clearing the stops
+    /// and giving the interval a real value makes every tab the same step
+    /// wherever it is typed.
+    ///
+    /// Four spaces because that is what a tab means in the file: `MarkdownParser`
+    /// counts one as four columns when it works out a sub-list's depth, so the
+    /// indent the editor shows and the nesting the card renders agree. Measured
+    /// in the editor's own font, so a serif or monospaced card steps by its own
+    /// four spaces rather than by a number written down here.
+    private func applyTabStops(to view: MarkdownTextView, font: NSFont) {
+        let style = NSMutableParagraphStyle()
+        style.tabStops = []
+        style.defaultTabInterval = 4 * NSAttributedString(
+            string: " ", attributes: [.font: font]
+        ).size().width
+        view.defaultParagraphStyle = style
+        view.typingAttributes[.paragraphStyle] = style
     }
 
     func updateNSView(_ view: MarkdownTextView, context: Context) {
         // The coordinator writes through this, so it has to be the current one:
         // the closures a card passes capture that card's state.
         context.coordinator.parent = self
-        view.onTab = onTab
+        view.onBacktab = onBacktab
         view.onEscape = onEscape
         view.onFocusChange = { [coordinator = context.coordinator] focused in
             // The overrides that call this are main-actor isolated already; the
@@ -208,7 +244,11 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             MainActor.assumeIsolated { coordinator.report(focus: focused) }
         }
 
-        if view.font != font { view.font = font }
+        if view.font != font {
+            view.font = font
+            // The step is measured in the font, so it moves with it.
+            applyTabStops(to: view, font: font)
+        }
         // Assigned only when it really differs, like the font and the text
         // itself: `textColor` on an `NSTextView` rewrites the whole storage's
         // attributes, so setting it every update would be a full re-attribution
@@ -310,7 +350,7 @@ final class MarkdownTextView: NSTextView {
     // Plain closure types, called from overrides that are already on the main
     // actor. Annotating them `@MainActor` would make them `@Sendable` too, which
     // the owner's own closures are not.
-    var onTab: (() -> Void)?
+    var onBacktab: (() -> Void)?
     var onEscape: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
 
@@ -330,16 +370,55 @@ final class MarkdownTextView: NSTextView {
         return resigned
     }
 
-    /// Both directions call the same closure: two fields make a loop of two, so
-    /// Tab and ⇧Tab mean the same thing in a card.
+    /// The two directions mean **different** things here, which is the one place
+    /// a card's field traversal departs from a form's.
+    ///
+    /// On a **list item** they are each other's opposite: Tab adds a level,
+    /// ⇧Tab takes one off. Anywhere else Tab is left to the text view, so it
+    /// inserts a tab — the body is prose, and an indent is something you type
+    /// into it — while ⇧Tab is the way back to the title, and the only key that
+    /// leaves the body, so it has to be answered.
     override func insertTab(_ sender: Any?) {
-        guard let onTab else { return super.insertTab(sender) }
-        onTab()
+        // On a list item, Tab sets the item's *level* — see
+        // `MarkdownFormatting.listIndent`. Anywhere else it is a tab. Only a
+        // caret indents; with text selected Tab is the text view's business.
+        let selected = selectedRange()
+        if selected.length == 0,
+           let caret = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+           let edit = MarkdownFormatting.listIndent(string, caret: caret),
+           MarkdownEdits.apply(edit, to: self) {
+            return
+        }
+        super.insertTab(sender)
     }
 
     override func insertBacktab(_ sender: Any?) {
-        guard let onTab else { return super.insertBacktab(sender) }
-        onTab()
+        // On a list item ⇧Tab is Tab's opposite and takes a level off. Only
+        // where there is no level to take off does it mean the other thing it
+        // means in a card — back to the title.
+        let selected = selectedRange()
+        if selected.length == 0,
+           let caret = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+           let edit = MarkdownFormatting.listOutdent(string, caret: caret),
+           MarkdownEdits.apply(edit, to: self) {
+            return
+        }
+        guard let onBacktab else { return super.insertBacktab(sender) }
+        onBacktab()
+    }
+
+    /// ⌘Return leaves the card too, and it is caught here rather than as a
+    /// command because AppKit binds it to nothing: Return alone is
+    /// `insertNewline(_:)`, and with ⌘ held there is no action to override. Only
+    /// the first responder gets `keyDown`, so two open cards can't both answer.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command],
+           let onEscape {
+            onEscape()
+            return
+        }
+        super.keyDown(with: event)
     }
 
     /// Esc leaves the card. `complete(_:)` is overridden alongside
@@ -482,26 +561,49 @@ enum MarkdownReturn {
         guard selected.length == 0 else { return false }
 
         let text = textView.string
-        guard let caret = characterOffset(in: text, utf16Offset: selected.location),
-              let edit = MarkdownFormatting.listReturn(text, caret: caret),
-              let range = nsRange(of: edit.range, in: text),
+        guard let caret = MarkdownEdits.characterOffset(in: text, utf16Offset: selected.location),
+              let edit = MarkdownFormatting.listReturn(text, caret: caret)
+        else { return false }
+
+        return MarkdownEdits.apply(edit, to: textView)
+    }
+}
+
+/// Applying a `MarkdownFormatting.Edit` to a live text view.
+///
+/// Shared by the two keys that rewrite a line rather than insert a character —
+/// Return continuing a list (`MarkdownReturn`) and Tab indenting one
+/// (`MarkdownTextView.insertTab`) — because the interesting part is identical:
+/// the edit goes **through the text view**, which is what earns it native undo
+/// and leaves the caret placed by the same code that places it when you type,
+/// and `didChangeText()` is what tells SwiftUI to pull the new string back into
+/// the binding.
+@MainActor
+enum MarkdownEdits {
+    /// `false` when the edit can't be made, which is the caller's cue to let the
+    /// key through untouched.
+    static func apply(_ edit: MarkdownFormatting.Edit, to textView: NSTextView) -> Bool {
+        guard let range = nsRange(of: edit.range, in: textView.string),
               textView.shouldChangeText(in: range, replacementString: edit.replacement)
         else { return false }
 
         textView.textStorage?.replaceCharacters(in: range, with: edit.replacement)
         textView.didChangeText()
-        // Both edits — inserting a marker, and clearing an empty item — leave the
-        // caret at the end of what was written, so one sum covers each.
-        let caretUTF16 = range.location + (edit.replacement as NSString).length
-        textView.setSelectedRange(NSRange(location: caretUTF16, length: 0))
+
+        // The edit says where the caret lands, and it is an offset into the text
+        // *after* the replacement — so it is resolved against the new string.
+        let updated = textView.string
+        let caret = max(0, min(edit.caret, updated.count))
+        let index = updated.index(updated.startIndex, offsetBy: caret)
+        textView.setSelectedRange(NSRange(location: index.utf16Offset(in: updated), length: 0))
         return true
     }
 
     /// The text view counts in UTF-16 and `MarkdownFormatting` counts in
     /// `Character`s, so every offset crosses this pair. `nil` when the caret
     /// isn't on a character boundary — mid-emoji, where there's no sensible
-    /// answer and Return may as well behave normally.
-    private static func characterOffset(in text: String, utf16Offset: Int) -> Int? {
+    /// answer and the key may as well behave normally.
+    static func characterOffset(in text: String, utf16Offset: Int) -> Int? {
         let clamped = max(0, min(utf16Offset, text.utf16.count))
         guard let index = String.Index(utf16Offset: clamped, in: text).samePosition(in: text)
         else { return nil }
@@ -632,6 +734,86 @@ enum MarkdownFormatting {
             range: caret..<caret,
             replacement: inserted,
             caret: caret + inserted.count
+        )
+    }
+
+    /// **One level of indentation**, as a string. Two spaces, which is what the
+    /// renderer reads as one level (`MarkdownParser` counts levels relative to
+    /// the indents already open, so two and four both work — two is simply the
+    /// smaller of the conventions and the one this app writes).
+    static let indentUnit = "  "
+
+    /// Tab on a list item, as an edit that indents the **line**. `nil` when the
+    /// caret is not on a list item at all — the caller then lets Tab through and
+    /// the editor inserts a tab character.
+    ///
+    /// This is where the two meanings of Tab in this editor meet. A body is
+    /// prose, so a tab is something you type into it; but the one place a leading
+    /// indent is *structure* rather than whitespace is a list item, where it sets
+    /// the item's level. **Anywhere on the line counts**, which is Obsidian's
+    /// rule and so this app's (the same reason `continueList` follows it): the
+    /// caret's position within an item says nothing about whether its author
+    /// meant to nest it. The cost, accepted, is that a tab cannot be typed inside
+    /// an item's text.
+    ///
+    /// Quotes are excluded. `>` nests by repeating the marker, not by
+    /// indentation, so spaces in front of one change nothing the renderer reads.
+    static func listIndent(_ text: String, caret: Int) -> Edit? {
+        let chars = Array(text)
+        let caret = max(0, min(caret, chars.count))
+
+        var lineStart = caret
+        while lineStart > 0, chars[lineStart - 1] != "\n" { lineStart -= 1 }
+        var lineEnd = caret
+        while lineEnd < chars.count, chars[lineEnd] != "\n" { lineEnd += 1 }
+
+        let line = Array(chars[lineStart..<lineEnd])
+        guard let marker = lineMarker(line) else { return nil }
+        guard marker.lead.first != ">" else { return nil }
+
+        return Edit(
+            range: lineStart..<lineStart,
+            replacement: indentUnit,
+            caret: caret + indentUnit.count
+        )
+    }
+
+    /// ⇧Tab on a list item, as an edit that takes **one level off** the line.
+    /// `nil` when there is no level to take off — the caller then does what ⇧Tab
+    /// otherwise means in a card, which is hand focus back to the title.
+    ///
+    /// It removes what one Tab put on: `indentUnit`'s worth of spaces, or a
+    /// single tab character, whichever the line actually starts with. A line
+    /// indented by an odd number of spaces loses what there is rather than
+    /// refusing — the renderer reads levels relative to the indents already open,
+    /// so leaving a stray space behind would keep the item nested on a level of
+    /// its own.
+    static func listOutdent(_ text: String, caret: Int) -> Edit? {
+        let chars = Array(text)
+        let caret = max(0, min(caret, chars.count))
+
+        var lineStart = caret
+        while lineStart > 0, chars[lineStart - 1] != "\n" { lineStart -= 1 }
+        var lineEnd = caret
+        while lineEnd < chars.count, chars[lineEnd] != "\n" { lineEnd += 1 }
+
+        let line = Array(chars[lineStart..<lineEnd])
+        guard let marker = lineMarker(line) else { return nil }
+        guard marker.lead.first != ">" else { return nil }
+
+        let removed: Int
+        if marker.indent.first == "\t" {
+            removed = 1
+        } else {
+            let spaces = marker.indent.prefix(while: { $0 == " " }).count
+            removed = min(spaces, indentUnit.count)
+        }
+        guard removed > 0 else { return nil }
+
+        return Edit(
+            range: lineStart..<(lineStart + removed),
+            replacement: "",
+            caret: max(lineStart, caret - removed)
         )
     }
 

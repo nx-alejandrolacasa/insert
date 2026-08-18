@@ -136,7 +136,28 @@ struct ProjectMentionField: View {
     /// `focused` keeps all but the active one out of the way.
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         guard focused else { return false }
-        // ⌘/⌃/⌥-modified presses keep their normal meaning.
+        // …and the body editor must not have the keyboard. `focused` is this
+        // field's `@FocusState`, and the card's body is an `NSTextView` that
+        // takes and reports focus through AppKit, so the two can disagree — the
+        // symptom was **the first Tab in a body doing nothing**: this monitor
+        // claimed it, called `onTab` (already in the body, so nothing visible
+        // happened) and swallowed it, and only the second reached the editor.
+        // The first responder is the truth, which is the same conclusion
+        // `MarkdownReturn` reached for the same reason. A *field* editor here is
+        // this field or another one — not a body — so it doesn't disqualify.
+        if let responder = NSApp.keyWindow?.firstResponder as? NSTextView,
+           !responder.isFieldEditor {
+            return false
+        }
+        // ⌘Return finishes the edit, the same as Esc — and before the dropdown
+        // gets a say, because Return *alone* there means "take the highlighted
+        // match" and ⌘Return has to mean one thing wherever it is pressed.
+        if event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command] {
+            onEscape()
+            return true
+        }
+        // Other ⌘/⌃/⌥-modified presses keep their normal meaning.
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
             return false
         }

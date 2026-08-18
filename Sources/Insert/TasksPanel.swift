@@ -806,7 +806,7 @@ private struct TaskCardView: View {
                 text: $draft.body,
                 font: Card.nsFont(.callout),
                 textColor: NSColor(settings.theme.bodyText),
-                onTab: { focusTitle() },
+                onBacktab: { focusTitle() },
                 // Esc leaves the editor, matching the title field. A hook rather
                 // than `.onKeyPress`: the editor is an `NSTextView` and answers
                 // the key itself.

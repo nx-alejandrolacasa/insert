@@ -632,7 +632,7 @@ private struct NoteCardView: View {
                 text: $draft.body,
                 font: Card.nsFont(.body),
                 textColor: NSColor(settings.theme.bodyText),
-                onTab: { focusTitle() },
+                onBacktab: { focusTitle() },
                 // Esc leaves the Markdown editor, matching the title field. A
                 // hook rather than `.onKeyPress`: the editor is an `NSTextView`
                 // and answers the key itself.

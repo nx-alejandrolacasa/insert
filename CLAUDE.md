@@ -1100,19 +1100,63 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `**`/`#`, draws bullets as circles and joins hard-wrapped lines into one
   paragraph, so a point in the preview has no source character to map to.
   Landing in the right *block* would mean `MarkdownParser` carrying source ranges.
-- **Tab walks an open card's fields.** Tab or ⇧Tab moves focus between a card's
-  title and body, both directions the same because two fields make a loop of
-  two. Without it there is no key out of a body: the editor's text view answers
-  Tab itself, as a literal tab character — the `ProjectMentionField` wall again
-  (the field editor and the text view both consume Tab before `onKeyPress`
-  sees it), solved its way both times. The title side is a new `onTab` on
-  `ProjectMentionField`'s existing monitor, firing only with the dropdown closed —
-  dropdown open, Tab still means "first match", which stays the override. The
-  body side was a focus-gated monitor of the same shape inside `MarkdownEditor`
-  and is now an `insertTab(_:)`/`insertBacktab(_:)` override on the editor's own
-  text view (`onTab`, optional so an owner without a second field leaves Tab
-  alone) — the same behaviour, answered where the key lands rather than
-  intercepted before it.
+- **Tab walks an open card's fields — except out of the body, where Tab is a
+  tab.** From the title, Tab (or ⇧Tab) moves to the body. From the **body**, ⇧Tab
+  moves back to the title and **Tab inserts a literal tab character**, which is
+  the text view's own behaviour left alone. The asymmetry is the point and was
+  asked for: a body is prose, where an indent is something you type, while a
+  title is a field in a form you page through. It also means ⇧Tab is the *only*
+  key that leaves the body, which is why that one has to be answered.
+  The title side is an `onTab` on `ProjectMentionField`'s existing monitor,
+  firing only with the dropdown closed — dropdown open, Tab still means "first
+  match", which stays the override. The body side was a focus-gated monitor of
+  the same shape inside `MarkdownEditor` and is now an `insertBacktab(_:)`
+  override on the editor's own text view (`onBacktab`, optional so an owner
+  without a second field leaves the key alone), with `insertTab(_:)` left to
+  `super` — answered where the key lands rather than intercepted before it. The
+  hook was called `onTab` and fired for both directions; the rename is what keeps
+  the two from being confused again.
+  **On a list item, Tab sets the item's level instead** — `* ` on a fresh line
+  plus Tab is `  * `, two spaces inserted at the **start of the line** rather than
+  a tab at the caret, so an item already one level in goes to two rather than
+  growing a gap after its marker. Two spaces because that is the smaller of the
+  conventions `MarkdownParser` reads, and it counts levels relative to the indents
+  already open, so it needs no agreement about the unit. **Anywhere on the line
+  counts**, which is Obsidian's rule and so this app's (the same reason
+  `continueList` follows it): where the caret sits within an item says nothing
+  about whether its author meant to nest it, and the cost — a tab cannot be typed
+  inside an item's text — is accepted. Quotes are excluded, since `>` nests by
+  repeating the marker and spaces in front of one change nothing the renderer
+  reads. **⇧Tab is its opposite** (`listOutdent`): it takes off exactly what Tab
+  put on — `indentUnit`'s spaces, or a single tab where the line was indented with
+  one — and only when there is no level left to remove does ⇧Tab go back to
+  meaning "leave the body" and hand focus to the title. A line indented by an odd
+  number of spaces loses what there is rather than refusing, since a stray space
+  left behind would keep the item nested on a level of its own. Both rules are
+  pure functions over offsets beside `listReturn`, pinned the same way (including
+  that Tab then ⇧Tab is a round trip at every caret position), and both edits are
+  applied through the shared `MarkdownEdits.apply` — the text view, not the
+  binding, which is what earns them native undo.
+  **The `@project` field's key monitor has to stand down while the body has the
+  keyboard**, and not doing so is what made *the first Tab in a body do nothing*.
+  That monitor is gated on the field's `@FocusState`, the body is an `NSTextView`
+  that takes and reports focus through AppKit, and the two can disagree — so the
+  monitor claimed the Tab, called `onTab` (already in the body, nothing visible
+  happened) and swallowed it, and only the second reached the editor. It now bails
+  when the first responder is a text view that is **not** a field editor, which is
+  the same conclusion `MarkdownReturn` reached: the first responder is the truth.
+  A field editor doesn't disqualify, since that is this field or another one.
+  **The editor also has to say what a tab is worth**, or the key looks broken in a
+  second way: an `NSTextView` arrives with twelve tab stops 28pt apart and a
+  `defaultTabInterval` of **0**, so past the twelfth stop there is no next one and
+  the layout manager hands the tab the rest of the line — the caret lands on the
+  line below, and a tab at the end of a long line reads as having inserted a
+  newline too. `applyTabStops` clears the stops and sets the interval to **four
+  spaces measured in the editor's font**: four because that is what a tab means in
+  the file (`MarkdownParser` counts one as four columns when working out a
+  sub-list's depth), and measured rather than written down so a serif or
+  monospaced card steps by its own four spaces. It is re-applied whenever the font
+  changes.
   **The two directions are not symmetrical, and that is the finding.** Body →
   title is a plain `@FocusState` pair (`bodyFocused = false; titleFocused = true`),
   written directly rather than through `focusForEntry()`'s deferred turn, and it
@@ -1147,11 +1191,22 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   typing" (on by default) underlines misspellings in a card's **title and
   body**, notes and tasks alike; corrections come from the text view's own
   Control-click menu, where they're accepted deliberately. Grammar checking,
-  automatic spelling correction, smart quotes, smart dashes, text replacement
+  automatic spelling correction, smart quotes, smart dashes, completion
   and link detection are all refused **by name**, because a bare `NSTextView`
   arrives with them *on* (measured) and these are Markdown files Obsidian also
   opens: a substitution made on the user's behalf is a write to someone's note,
   and `--` has no business becoming an en dash in a file.
+  **macOS text replacement is the exception, and it is on** — it was refused with
+  the rest until August 2026, when it was reported as "keyboard shortcuts not
+  working", which is exactly what it looks like from outside. The line is *who
+  decided*: the refused ones are macOS deciding that what someone typed isn't what
+  they meant, where the replacement table is one the user wrote themselves in
+  System Settings and fires only on the exact strings they put in it — typing
+  `->` and getting `→` works in every other app on the Mac. It is set in **both**
+  places a card is typed into: `MarkdownTextViewBridge.makeNSView` for the body,
+  and `SpellChecking.apply` for the titles, where it has to be written rather than
+  left to the default because the window's field editor is shared and arrives
+  carrying whatever the last field it served was given.
   **SwiftUI's `TextEditor` cannot do this on macOS, and that is what cost the
   editor its `TextEditor`.** There is no spell-checking modifier in SwiftUI at
   all (`autocorrectionDisabled` is iOS's, a different thing), the state lives per
@@ -1211,7 +1266,16 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   inside `MarkdownEditor` is gone — same behaviour, answered where the key
   actually lands), and **Esc** is `cancelOperation(_:)` *plus* `complete(_:)`,
   because a text view binds Esc to inline completion by default and that would
-  otherwise swallow it. **Return is not here**: `MarkdownReturn`'s app-wide
+  otherwise swallow it.
+  **⌘Return is Esc's twin — it finishes the edit** — and it is a `keyDown(with:)`
+  override rather than another `doCommandBySelector` action, because AppKit binds
+  it to nothing: Return alone is `insertNewline(_:)`, and with ⌘ held there is no
+  action to override. Only the first responder receives `keyDown`, so two open
+  cards can't both answer. The title side is a case in `ProjectMentionField`'s
+  monitor, placed **before** the dropdown's own handling, since Return alone there
+  means "take the highlighted match" and ⌘Return has to mean one thing wherever it
+  is pressed. Both routes call the same `onEscape` the four call sites already
+  point at `exitEdit()`, so ⌘Return and Esc settle a card identically. **Return is not here**: `MarkdownReturn`'s app-wide
   monitor reads the first responder, so it works unchanged — and `isFieldEditor`
   still separates a body from a title.
   Three details in the bridge that are easy to undo by accident. Text is written

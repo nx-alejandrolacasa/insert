@@ -326,4 +326,134 @@ final class MarkdownFormattingTests: XCTestCase {
     func testCaretInsideTheQuoteMarkerDoesNothing() {
         XCTAssertNil(pressReturn("|> quoted"))
     }
+    // MARK: Tab indents a list item
+
+    /// The case this was asked for: a fresh item, caret after the marker, Tab
+    /// steps it in one level rather than typing a tab into the line.
+    func testTabIndentsAFreshBulletItem() {
+        let edit = MarkdownFormatting.listIndent("* ", caret: 2)
+        XCTAssertEqual(edit, MarkdownFormatting.Edit(range: 0..<0, replacement: "  ", caret: 4))
+    }
+
+    /// Every marker the editor writes, since which one an author reaches for says
+    /// nothing about whether they meant to nest.
+    func testTabIndentsEveryMarker() {
+        for marker in ["- ", "* ", "+ ", "1. ", "1) ", "- [ ] "] {
+            let edit = MarkdownFormatting.listIndent(marker, caret: marker.count)
+            XCTAssertEqual(
+                edit,
+                MarkdownFormatting.Edit(
+                    range: 0..<0, replacement: "  ", caret: marker.count + 2
+                ),
+                "marker \(marker)"
+            )
+        }
+    }
+
+    /// The indent goes at the **start of the line**, not at the caret, so an item
+    /// already one level in goes to two rather than growing a gap after its
+    /// marker.
+    func testTabIndentsAnAlreadyIndentedItemFromTheLineStart() {
+        let text = "* parent\n  * child"
+        let caret = text.count
+        XCTAssertEqual(
+            MarkdownFormatting.listIndent(text, caret: caret),
+            MarkdownFormatting.Edit(range: 9..<9, replacement: "  ", caret: caret + 2)
+        )
+    }
+
+    /// A caret inside the marker or its indent still means the item's level.
+    func testTabIndentsWithTheCaretInsideTheMarker() {
+        XCTAssertNotNil(MarkdownFormatting.listIndent("* item", caret: 0))
+        XCTAssertNotNil(MarkdownFormatting.listIndent("* item", caret: 2))
+    }
+
+    /// Anywhere on the item counts, which is Obsidian's rule: where the caret
+    /// happens to sit within an item says nothing about whether its author meant
+    /// to nest it. The cost is that a tab can't be typed inside an item's text.
+    func testTabIndentsFromAnywhereInTheItem() {
+        for caret in 0...6 {
+            XCTAssertEqual(
+                MarkdownFormatting.listIndent("* item", caret: caret),
+                MarkdownFormatting.Edit(range: 0..<0, replacement: "  ", caret: caret + 2),
+                "caret \(caret)"
+            )
+        }
+    }
+
+    /// Nothing to nest on an ordinary paragraph.
+    func testTabIsATabOnAPlainLine() {
+        XCTAssertNil(MarkdownFormatting.listIndent("just prose", caret: 0))
+        XCTAssertNil(MarkdownFormatting.listIndent("", caret: 0))
+    }
+
+    /// A quote nests by repeating `>`, so spaces in front of one change nothing
+    /// the renderer reads.
+    func testTabDoesNotIndentAQuote() {
+        XCTAssertNil(MarkdownFormatting.listIndent("> quoted", caret: 2))
+    }
+
+    // MARK: ⇧Tab takes a level off
+
+    /// The opposite of Tab, and it removes exactly what Tab put on.
+    func testShiftTabRemovesOneLevel() {
+        let edit = MarkdownFormatting.listOutdent("  * item", caret: 8)
+        XCTAssertEqual(edit, MarkdownFormatting.Edit(range: 0..<2, replacement: "", caret: 6))
+    }
+
+    /// Tab then ⇧Tab is a round trip, at every caret position on the item.
+    func testTabThenShiftTabIsARoundTrip() {
+        let text = "* item"
+        for caret in 0...text.count {
+            guard let indent = MarkdownFormatting.listIndent(text, caret: caret) else {
+                return XCTFail("no indent at \(caret)")
+            }
+            var indented = Array(text)
+            indented.insert(contentsOf: indent.replacement, at: indent.range.lowerBound)
+            let after = String(indented)
+
+            guard let outdent = MarkdownFormatting.listOutdent(after, caret: indent.caret) else {
+                return XCTFail("no outdent at \(indent.caret)")
+            }
+            var back = Array(after)
+            back.removeSubrange(outdent.range)
+            XCTAssertEqual(String(back), text, "caret \(caret)")
+            XCTAssertEqual(outdent.caret, caret, "caret \(caret)")
+        }
+    }
+
+    /// A tab-indented line loses the tab, since that is its one level.
+    func testShiftTabRemovesATabIndent() {
+        XCTAssertEqual(
+            MarkdownFormatting.listOutdent("\t- item", caret: 7),
+            MarkdownFormatting.Edit(range: 0..<1, replacement: "", caret: 6)
+        )
+    }
+
+    /// An odd indent loses what there is rather than refusing: a stray space left
+    /// behind would keep the item nested on a level of its own.
+    func testShiftTabRemovesAnOddIndentEntirely() {
+        XCTAssertEqual(
+            MarkdownFormatting.listOutdent(" - item", caret: 7),
+            MarkdownFormatting.Edit(range: 0..<1, replacement: "", caret: 6)
+        )
+    }
+
+    /// At the outermost level there is nothing to remove, and ⇧Tab goes back to
+    /// meaning "leave the body" — which is the caller's business, so this is nil.
+    func testShiftTabAtTheOutermostLevelIsNotAnEdit() {
+        XCTAssertNil(MarkdownFormatting.listOutdent("* item", caret: 6))
+        XCTAssertNil(MarkdownFormatting.listOutdent("plain prose", caret: 4))
+        XCTAssertNil(MarkdownFormatting.listOutdent("  > quoted", caret: 6))
+    }
+
+    /// The line the caret is on, not the first line in the body.
+    func testShiftTabWorksOnTheCaretsOwnLine() {
+        let text = "* parent\n  * child"
+        XCTAssertEqual(
+            MarkdownFormatting.listOutdent(text, caret: text.count),
+            MarkdownFormatting.Edit(range: 9..<11, replacement: "", caret: text.count - 2)
+        )
+    }
+
 }
