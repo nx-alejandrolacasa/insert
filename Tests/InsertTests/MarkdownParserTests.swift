@@ -126,4 +126,87 @@ final class MarkdownParserTests: XCTestCase {
     func testLeadJoinsHardWrappedLines() {
         XCTAssertEqual(MarkdownParser.lead("one two\nthree four"), "one two three four")
     }
+
+    // MARK: Nested lists
+
+    /// The items of the first list block in a source, or `nil` if there is none.
+    private func list(_ source: String) -> [MarkdownParser.ListItem]? {
+        for block in MarkdownParser.parse(source) {
+            if case .list(let items) = block { return items }
+        }
+        return nil
+    }
+
+    /// A level is counted against the indents already open, not divided by a
+    /// fixed unit, so two spaces and four spaces both mean one level down — the
+    /// two conventions a Markdown editor writes, and Obsidian opens these files
+    /// too.
+    func testTwoAndFourSpaceIndentsBothMeanOneLevel() {
+        for indent in ["  ", "    "] {
+            XCTAssertEqual(
+                list("* element 1\n\(indent)* element 1.1\n* element 2"),
+                [
+                    .init(level: 0, ordered: false, text: "element 1"),
+                    .init(level: 1, ordered: false, text: "element 1.1"),
+                    .init(level: 0, ordered: false, text: "element 2"),
+                ],
+                "indented with \(indent.count) spaces"
+            )
+        }
+    }
+
+    /// Deeper still, and back out again — the closing side is the half a stack of
+    /// indents exists for, and returning to a level must not open a new one.
+    func testNestingClosesBackToTheLevelItReturnsTo() {
+        XCTAssertEqual(
+            list("- a\n  - b\n    - c\n  - d\n- e")?.map(\.level),
+            [0, 1, 2, 1, 0]
+        )
+    }
+
+    /// Indentation the author didn't line up still nests by what it is *relative*
+    /// to: three spaces then two is a level opened and closed, not a level and a
+    /// half.
+    func testMixedIndentationStillNestsByRelativeDepth() {
+        XCTAssertEqual(list("- a\n   - b\n  - c")?.map(\.level), [0, 1, 1])
+    }
+
+    /// One run of list lines is one block whatever the markers do inside it —
+    /// two blocks would put a paragraph's worth of space in the middle of a list.
+    func testABulletSubListUnderANumberedItemStaysOneList() {
+        let items = list("1. first\n   * note\n2. second")
+        XCTAssertEqual(items?.count, 3)
+        XCTAssertEqual(items?.map(\.ordered), [true, false, true])
+        XCTAssertEqual(items?.map(\.level), [0, 1, 0])
+    }
+
+    /// Each level counts for itself: a sub-list starts again at 1 and its parent
+    /// picks up where it left off.
+    func testNumberingRestartsPerLevel() {
+        let items = list("1. a\n  1. a1\n  1. a2\n1. b") ?? []
+        XCTAssertEqual(MarkdownParser.numbering(items), [1, 1, 2, 2])
+    }
+
+    /// Bullets take no number, and reset the level they sit at rather than
+    /// consuming one — otherwise a numbered run after a bullet sibling would skip.
+    func testBulletsTakeNoNumberAndResetTheirLevel() {
+        let items = list("1. a\n* aside\n1. b") ?? []
+        XCTAssertEqual(MarkdownParser.numbering(items), [1, nil, 1])
+    }
+
+    /// Every marker the app writes nests the same way — `-`, `*`, `+` and both
+    /// spellings of a number — since which one an author reaches for says nothing
+    /// about the shape of their list.
+    func testEveryMarkerNests() {
+        for marker in ["-", "*", "+", "1.", "1)"] {
+            let items = list("\(marker) parent\n  \(marker) child")
+            XCTAssertEqual(items?.map(\.level), [0, 1], "marker \(marker)")
+            XCTAssertEqual(items?.map(\.text), ["parent", "child"], "marker \(marker)")
+        }
+    }
+
+    /// The teaser is still the first item's text, marker and indent dropped.
+    func testLeadReadsANestedFirstItem() {
+        XCTAssertEqual(MarkdownParser.lead("  * buried\n* after"), "buried")
+    }
 }

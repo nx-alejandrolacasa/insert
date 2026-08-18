@@ -1012,6 +1012,27 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   read the other way — they sit on consecutive source lines with nothing between
   them, so the 4pt they used to add had lists loosening while paragraphs
   tightened.
+  **Lists nest, and a level is relative rather than a unit of spaces.** A run of
+  list lines is **one** `.list` block whatever its markers do inside it — `-`,
+  `*`, `+`, `1.` and `1)` all parse the same and a bullet sub-list may sit under a
+  numbered parent — because two blocks would put a paragraph's worth of space in
+  the middle of one list. Depth comes from a **stack of the indents already
+  open** (`nestingLevel(for:in:)`): a wider indent than the top opens a level, a
+  narrower one closes every level it has left. That is what lets two-space and
+  four-space indentation both mean one level down, which is the requirement —
+  dividing a column count by a fixed unit can't, since four spaces is level 1
+  under one convention and level 2 under the other, and the source alone never
+  says which. It also means indentation the author didn't line up still reads by
+  relative depth. A tab counts as four columns. On screen a level is the **marker
+  column** (dot plus its gap), so a child's bullet lands under the first character
+  of its parent's text; it is deliberately not a count of the source's spaces,
+  which would make the same list step differently depending on how it was typed.
+  Numbers are per level — a sub-list restarts at 1, its parent resumes — and a
+  bullet takes no number and *resets* the level it sits at, so a numbered run
+  interrupted by a bullet sibling starts over instead of silently skipping.
+  Source numbers are still ignored (`1. 1. 1.` renders 1, 2, 3, as Markdown does).
+  Return already carried the indent (`LineMarker`), so typing a sub-list worked
+  before it rendered as one. Pinned by `MarkdownParserTests`.
   **A quote keeps its line breaks**, and gets 0 between its lines for the list's
   reason. Every `>` line used to be joined into one paragraph, which ran the shape
   quotes are actually written in — the quotation, then its attribution on the next

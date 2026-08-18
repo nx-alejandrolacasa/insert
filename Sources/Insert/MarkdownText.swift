@@ -52,25 +52,26 @@ struct MarkdownText: View {
         // Items sit on consecutive lines in the source with nothing between them,
         // so they get nothing here either — the 4pt this used to add was the list
         // loosening on the way *into* view mode while every paragraph tightened.
-        case .bullet(let items):
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        bulletDot
-                        Self.inline(item, in: nsFont).font(font)
-                    }
-                }
-            }
-        case .ordered(let items):
+        //
+        // Bullets and numbers share one block, and one `VStack`, because a nested
+        // list may change marker (`1.` with `*` items under it) and two stacks
+        // would put a paragraph gap in the middle of one list.
+        case .list(let items):
+            let numbers = MarkdownParser.numbering(items)
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(idx + 1).")
-                            .font(font)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Self.inline(item, in: nsFont).font(font)
+                    HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
+                        if let number = numbers[idx] {
+                            Text("\(number).")
+                                .font(font)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        } else {
+                            bulletDot
+                        }
+                        Self.inline(item.text, in: nsFont).font(font)
                     }
+                    .padding(.leading, CGFloat(item.level) * Self.listIndent)
                 }
             }
         // A quote keeps its line breaks. Every `>` line used to be joined into one
@@ -104,6 +105,18 @@ struct MarkdownText: View {
         }
     }
 
+    /// The gap between a list marker and its item.
+    private static let markerGap: CGFloat = 8
+
+    /// One level of nesting. It is the marker column — the dot plus its gap — so
+    /// a child's bullet lands under the first character of its parent's text,
+    /// which is where the eye already expects the sub-list to start. A count of
+    /// the source's own spaces would be no use: the same nesting can be written
+    /// with two spaces or four, and both mean one level.
+    private static let listIndent: CGFloat = bulletDiameter + markerGap
+
+    private static let bulletDiameter: CGFloat = 5
+
     /// A bullet list's marker, drawn rather than typed. `Text("•")` is what this
     /// was, and that glyph measures **2.6pt** across at body size — a speck
     /// beside 13pt text, and the font is no lever on it: at 20pt the dot is still
@@ -120,7 +133,7 @@ struct MarkdownText: View {
         let xHeight = nsFont.xHeight
         return Circle()
             .fill(.secondary)
-            .frame(width: 5, height: 5)
+            .frame(width: Self.bulletDiameter, height: Self.bulletDiameter)
             .alignmentGuide(.firstTextBaseline) { d in
                 d.height / 2 + xHeight / 2
             }
@@ -238,11 +251,21 @@ struct MarkdownText: View {
 }
 
 enum MarkdownParser {
+    /// One line of a list: its text, whether it wore a number, and how deep it
+    /// was nested. The depth is a **level**, not a column count — see
+    /// `nestingLevel(for:in:)`.
+    struct ListItem: Equatable {
+        var level: Int
+        var ordered: Bool
+        var text: String
+    }
+
     enum Block {
         case heading(Int, String)
         case paragraph(String)
-        case bullet([String])
-        case ordered([String])
+        /// Bullets and numbers together, in source order — one block per run of
+        /// list lines however their markers or nesting change inside it.
+        case list([ListItem])
         /// One entry per `>` line, not one joined paragraph — a quote's line breaks
         /// are part of it (see the renderer).
         case quote([String])
@@ -311,29 +334,22 @@ enum MarkdownParser {
                 continue
             }
 
-            // Unordered list.
-            if isBullet(line) {
+            // List — bullets and numbers alike, nested by indentation.
+            if listMarker(line) != nil {
                 flushParagraph()
-                var items: [String] = []
-                while i < lines.count, isBullet(lines[i].trimmingCharacters(in: .whitespaces)) {
+                var items: [ListItem] = []
+                var indents: [Int] = []
+                while i < lines.count {
                     let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    items.append(String(l.dropFirst(2)))
+                    guard let marker = listMarker(l) else { break }
+                    items.append(ListItem(
+                        level: nestingLevel(for: indentColumns(lines[i]), in: &indents),
+                        ordered: marker.ordered,
+                        text: String(l.dropFirst(marker.length))
+                    ))
                     i += 1
                 }
-                blocks.append(.bullet(items))
-                continue
-            }
-
-            // Ordered list.
-            if orderedPrefixLength(line) != nil {
-                flushParagraph()
-                var items: [String] = []
-                while i < lines.count, let n = orderedPrefixLength(lines[i].trimmingCharacters(in: .whitespaces)) {
-                    let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    items.append(String(l.dropFirst(n)))
-                    i += 1
-                }
-                blocks.append(.ordered(items))
+                blocks.append(.list(items))
                 continue
             }
 
@@ -362,7 +378,9 @@ enum MarkdownParser {
             switch block {
             case .heading(_, let text), .paragraph(let text):
                 if !text.isEmpty { return text }
-            case .bullet(let items), .ordered(let items), .quote(let items):
+            case .list(let items):
+                if let first = items.first(where: { !$0.text.isEmpty }) { return first.text }
+            case .quote(let items):
                 if let first = items.first(where: { !$0.isEmpty }) { return first }
             case .code(let code):
                 let lines = code.components(separatedBy: "\n")
@@ -382,17 +400,68 @@ enum MarkdownParser {
         return (level, text)
     }
 
-    private static func isBullet(_ line: String) -> Bool {
-        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
+    /// The numbers a list's items show, one per item, `nil` where the item is a
+    /// bullet. The source's own numbers are ignored — Markdown renders `1. 1. 1.`
+    /// as 1, 2, 3 and so does this — but each level counts for itself, so a
+    /// sub-list starts again at 1 and its parent picks up where it left off.
+    ///
+    /// A bullet **resets** the level it sits at rather than consuming a number,
+    /// so a numbered run interrupted by a bullet sibling starts over instead of
+    /// silently skipping a number.
+    static func numbering(_ items: [ListItem]) -> [Int?] {
+        var counters: [Int] = []
+        return items.map { item in
+            if item.level < counters.count {
+                counters.removeSubrange((item.level + 1)...)
+            }
+            while counters.count <= item.level { counters.append(0) }
+            guard item.ordered else { counters[item.level] = 0; return nil }
+            counters[item.level] += 1
+            return counters[item.level]
+        }
     }
 
-    /// Returns the length of the "1. " prefix if the line starts an ordered item.
+    /// The width of a line's leading whitespace, a tab counting as four columns.
+    private static func indentColumns(_ line: String) -> Int {
+        var columns = 0
+        for ch in line {
+            if ch == "\t" { columns += 4 } else if ch == " " { columns += 1 } else { break }
+        }
+        return columns
+    }
+
+    /// How deep an item sits, from the indents of the items above it.
+    ///
+    /// Levels are counted **relative to the list**, not divided by a fixed unit,
+    /// which is what lets two-space and four-space indentation both mean one
+    /// level — and mixed indentation still read right. `indents` is the stack of
+    /// columns each open level started at: a wider indent than the top opens a
+    /// level, a narrower one closes every level it has left.
+    private static func nestingLevel(for columns: Int, in indents: inout [Int]) -> Int {
+        while let top = indents.last, columns < top { indents.removeLast() }
+        if indents.last.map({ columns > $0 }) ?? true { indents.append(columns) }
+        return indents.count - 1
+    }
+
+    /// The marker a list line opens with — its length, so the caller can drop it,
+    /// and whether it was a number.
+    private static func listMarker(_ line: String) -> (length: Int, ordered: Bool)? {
+        if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
+            return (2, false)
+        }
+        if let n = orderedPrefixLength(line) { return (n, true) }
+        return nil
+    }
+
+    /// Returns the length of the `1. ` or `1) ` prefix if the line starts an
+    /// ordered item. Both spellings, because Return continues either one
+    /// (`LineMarker`) and a body should render what the editor just wrote.
     private static func orderedPrefixLength(_ line: String) -> Int? {
         var digits = 0
         for ch in line { if ch.isNumber { digits += 1 } else { break } }
         guard digits > 0 else { return nil }
         let rest = line.dropFirst(digits)
-        guard rest.hasPrefix(". ") else { return nil }
+        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") else { return nil }
         return digits + 2
     }
 }
