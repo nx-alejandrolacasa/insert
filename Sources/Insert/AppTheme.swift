@@ -138,11 +138,17 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// The accent is the theme's own `button.background` at **full opacity**: the
     /// shipped `cc` alpha drops the white label under 4.5:1. Its light link is a
     /// deep jade rather than the theme's `#00ff9f`, which measures 1.4:1 on white.
-    /// The count chip is the cyan `#7fdbca` — Night Owl's signature colour, and
-    /// the one bright in the palette that is neither the violet action nor next to
-    /// the spring-green link. It replaced the coral `#f78c6c`, by request: the coral
-    /// was the theme's strings colour and cleared every floor, but a warm chip in a
-    /// cold theme read as a stray rather than as the palette's second voice.
+    /// The count chip is the cyan — Night Owl's signature colour, and the one
+    /// bright in the palette that is neither the violet action nor next to the
+    /// spring-green link. It is `alexlafroscia/night-owl-palette`'s **normal**
+    /// `cyan` `#94d8ca`, at full brightness in both halves, which makes Dark Owl
+    /// the second theme after Rosé Pine to keep its bright hue as the Light fill
+    /// and take a dark numeral: deepened to `#1c8374` for a white numeral it landed
+    /// at `L` 0.55, where a cyan reads as a green — which is how it was reported —
+    /// and the hue is too pale for anything else to be the colour. It replaced the
+    /// coral `#f78c6c` before that, by request: the coral was the theme's strings
+    /// colour and cleared every floor, but a warm chip in a cold theme read as a
+    /// stray rather than as the palette's second voice.
     case darkOwl
 
     /// `rose-pine/palette`. Dark is main, Light is Dawn — plum and rose, on
@@ -508,15 +514,16 @@ struct Band {
     /// its own value, kept.
     ///
     /// **The Light numeral is white, and the fill is deepened to carry it** — with
-    /// **Rosé Pine the one exception** — by request in both directions, which is
+    /// **Rosé Pine and Dark Owl the two exceptions** — by request in every
+    /// direction, which is
     /// worth reading as one decision rather than as a rule and a lapse. The bright
     /// hue under a near-black numeral was the first cut of this and read muddy
     /// everywhere it was tried but the gold. White needs the fill at `L` ≈ 0.55 or
     /// below to clear 4.5:1, so each one is the palette's own deep member of that
     /// hue where it publishes one (Tokyo Night's `blue0` `#3d59a1`, verbatim) and
     /// the hue deepened in oklch at constant chroma and hue where it doesn't
-    /// (Kanagawa's `lotusGreen` → `#637c42`, Dark Owl's cyan → `#1c8374`,
-    /// Dracula's pink → `#b02a72`, which is the same deepening the plan derived for
+    /// (Kanagawa's `lotusGreen` → `#637c42`, Dracula's pink → `#b02a72`, which is
+    /// the same deepening the plan derived for
     /// its light pink). It is the "deepen and invert to white-on-deep" move
     /// Kanagawa's and Rosé Pine's primary buttons already make, spent here on the
     /// chip; the cost is that a light chip reads heavier than the bright pill it
@@ -526,8 +533,15 @@ struct Band {
     /// dark plum: at `L` 0.84 it is far too light for a white numeral, and it is the
     /// one hue in the set bright enough that deepening it was the thing that read
     /// wrong. So the floor is met from the other side — a dark numeral on a bright
-    /// fill, 5.98:1 — and the rule the other four follow is what the chip does when
+    /// fill, 5.98:1 — and the rule the other three follow is what the chip does when
     /// its hue *can't* carry that.
+    ///
+    /// **Dark Owl does the same with its cyan `#94d8ca`**, for the other reason a
+    /// bright hue survives here: deepened to `L` 0.55 it read as a *green* rather
+    /// than as Night Owl's cyan, which is the one thing the chip is there to say. At
+    /// `L` 0.83 it takes the band's own navy at 9.55:1. Two exceptions out of five
+    /// is where the rule stands: white-on-deep is what a hue does when it can carry
+    /// a white numeral **and** still reads as itself once it can.
     ///
     /// **System keeps a neutral chip**, because a theme whose claim is that it adds
     /// no colour cannot spend one here. Both directions are measured on the
@@ -792,8 +806,8 @@ private extension AppTheme {
         // publishes no light half. The accent is the theme's own
         // `button.background` at **full opacity** — the shipped `cc` alpha drops
         // the white label under 4.5:1 — and the dark ring is its lifted violet. The
-        // cyan chip is verbatim as the dark numeral and deepened to `#1c8374` as the
-        // light fill, which is the same derivation the rest of its light half is.
+        // cyan chip is the palette's normal `cyan` **verbatim in both halves** — the
+        // dark numeral, and the light *fill* under the band's own navy at 9.55:1.
         // The light band is the plan's hue at **half its chroma**, by request: at
         // 0.018 C it read as a blue slab rather than as a header over blue-white
         // paper, so the hue and lightness stand and only the saturation is ours.
@@ -803,8 +817,8 @@ private extension AppTheme {
             light: Band(
                 fill: RGB(r: 0.921, g: 0.945, b: 0.963),
                 text: RGB(r: 0.060, g: 0.147, b: 0.232),
-                countFill: RGB(r: 0.110, g: 0.513, b: 0.456),
-                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
+                countFill: RGB(r: 0.580, g: 0.847, b: 0.792),
+                countText: RGB(r: 0.060, g: 0.147, b: 0.232),
                 primary: RGB(r: 0.494, g: 0.341, b: 0.761),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.494, g: 0.341, b: 0.761),
@@ -816,8 +830,8 @@ private extension AppTheme {
             dark: Band(
                 fill: RGB(r: 0.043, g: 0.161, b: 0.259),
                 text: RGB(r: 0.902, g: 0.929, b: 0.961),
-                countFill: RGB(r: 0.134, g: 0.301, b: 0.366),
-                countText: RGB(r: 0.498, g: 0.859, b: 0.792),
+                countFill: RGB(r: 0.151, g: 0.298, b: 0.366),
+                countText: RGB(r: 0.580, g: 0.847, b: 0.792),
                 primary: RGB(r: 0.494, g: 0.341, b: 0.761),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.604, g: 0.463, b: 0.910),

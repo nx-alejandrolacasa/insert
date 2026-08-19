@@ -212,14 +212,17 @@ final class ThemePaletteTests: XCTestCase {
     /// Three properties, and each is a way the chip has already gone wrong:
     ///
     /// - The Light **fill** carries the hue, and the numeral on it is **white** —
-    ///   **except in Rosé Pine**, whose gold stays bright and takes the band's own
-    ///   dark plum instead. The version this replaced put the *accent* in that fill
+    ///   **except in Rosé Pine and Dark Owl**, whose gold and cyan stay bright and
+    ///   take their band's own dark text instead. The version this replaced put the
+    ///   *accent* in that fill
     ///   at low alpha, which composites into a pale band above `L` 0.90 — legible,
     ///   and read as chrome, which is the whole reason the chip was revisited. The
     ///   one after that put the bright hue there under a near-black numeral and read
-    ///   muddy — everywhere but the gold, which is why that one exception exists.
-    ///   So the fill is the hue *deepened* until white clears the floor, and a
-    ///   lightness ceiling is what keeps it there: drift lighter and the white
+    ///   muddy — everywhere but the gold, which is why the first exception exists;
+    ///   the cyan is the second, and for the other reason a bright hue survives —
+    ///   deepened until white cleared the floor it read as a green.
+    ///   So elsewhere the fill is the hue *deepened* until white clears the floor,
+    ///   and a lightness ceiling is what keeps it there: drift lighter and the white
     ///   numeral is the thing that fails, silently, in one theme at a time.
     /// - The Dark **numeral** carries the hue instead, on a tint of it. Both
     ///   appearances are light-on-dark; what swaps is which of the two is the
@@ -235,7 +238,7 @@ final class ThemePaletteTests: XCTestCase {
         // Night's `blue`, Kanagawa's `springGreen`, Dark Owl's cyan, Rosé Pine's
         // `gold`, Dracula's pink.
         let hues: [AppTheme: RGB] = [
-            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0x7fdbca),
+            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0x94d8ca),
             .rosePine: hex(0xf6c177), .dracula: hex(0xff79c6),
         ]
         for theme in AppTheme.allCases where theme != .system {
@@ -249,18 +252,19 @@ final class ThemePaletteTests: XCTestCase {
             XCTAssertEqual(
                 oklch(light.fill).hue, oklch(hue).hue, accuracy: 12,
                 "\(theme.label) light chip fill should be its palette hue, deepened at most")
-            if theme == .rosePine {
-                // The one exception, and it is asserted rather than skipped: the gold
-                // stays bright and the numeral is the band's own dark plum, so the
-                // floor is met from the other side. What would fail silently here is
-                // the *pair* drifting apart — a numeral lightened toward white on a
-                // fill this light is the same defect the ceiling below catches.
+            if theme == .rosePine || theme == .darkOwl {
+                // The two exceptions, and they are asserted rather than skipped: the
+                // gold and the cyan stay bright and the numeral is the band's own dark
+                // text, so the floor is met from the other side. What would fail
+                // silently here is the *pair* drifting apart — a numeral lightened
+                // toward white on a fill this light is the same defect the ceiling
+                // below catches.
                 XCTAssertGreaterThan(
                     oklch(light.fill).lightness, 0.78,
-                    "Rosé Pine light chip should keep `gold` itself")
+                    "\(theme.label) light chip should keep its bright hue itself")
                 XCTAssertLessThan(
                     luminance(light.text), luminance(light.fill),
-                    "Rosé Pine light numeral should be the dark one on a bright fill")
+                    "\(theme.label) light numeral should be the dark one on a bright fill")
             } else {
                 assertSame(
                     light.text, RGB(r: 1, g: 1, b: 1), "\(theme.label) light numeral is white")
