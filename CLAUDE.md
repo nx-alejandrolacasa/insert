@@ -1593,10 +1593,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   accent's label couldn't clear 4.5:1 (Kanagawa's Lotus orange, Rosé Pine's Dawn
   `love`); **derived** where a palette's comment grey failed on a card or where it
   publishes no light half at all (Tokyo Night's light foregrounds, Dark Owl's
-  entire light mode); **desaturated** in exactly one place — Kanagawa's Lotus
-  grounds, whose published band is 0.060 C, more than twice any other band in the
-  set, and which read as a khaki slab rather than as warm paper, so its three light
-  grounds keep Lotus's hue and lightness at **half its chroma**. (The fifth kind of
+  entire light mode); **desaturated** in two places, each on the same
+  finding and both by request — Kanagawa's Lotus grounds, whose published band is
+  0.060 C, more than twice any other band in the set, and which read as a khaki slab
+  rather than as warm paper, and Dark Owl's light band, which read as a blue slab
+  rather than as a header over blue-white paper; both keep their hue and lightness
+  at **half the chroma** (Kanagawa across all three light grounds, Dark Owl on the
+  band and the two tones derived from it). (The fifth kind of
   change, re-levelling each palette's four note-type hues, went with the per-theme
   type palettes — see below.)
   **Declaration order is the picker's order, and the default is the first case
@@ -1665,24 +1668,30 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   theme, so the chip was a wash of the button beside it and still read as chrome —
   while Dracula's, which was never a wash, read as the theme. So all five sourced
   themes now do what Dracula does: a **vivid** hue read from the palette — Tokyo
-  Night's `blue` `#7aa2f7`, Kanagawa's `springGreen` `#98bb6c`, Dark Owl's coral
-  `#f78c6c`, Rosé Pine's `gold` `#f6c177`, Dracula's pink `#ff79c6` — and never the
+  Night's `blue` `#7aa2f7`, Kanagawa's `springGreen` `#98bb6c`, Dark Owl's cyan
+  `#7fdbca`, Rosé Pine's `gold` `#f6c177`, Dracula's pink `#ff79c6` — and never the
   accent, since the button owns that and repeating it is what made the wash look
   like chrome. **The hue swaps roles per appearance**, because it can't carry both:
   the chip's *fill* in Light, and the numeral itself in Dark, on that hue at 20% over
   the band — lightened in-hue only where the floor needs it, which is Tokyo Night's
   blue and Kanagawa's green. Dracula's dark fill is the one that is *recessed below*
   its band rather than tinted above it, which is its own value and kept.
-  **The light numeral is white, and the fill is deepened to carry it**, by request:
-  the bright hue under a near-black numeral was the first cut and read muddy. White
-  needs the fill at `L` ≈ 0.55 or below to clear 4.5:1, so each is the palette's own
-  deep member of that hue where it publishes one (Tokyo Night's `blue0` `#3d59a1`,
-  verbatim) and the hue deepened in oklch at constant chroma and hue where it doesn't
-  (Kanagawa's `lotusGreen` → `#637c42`, Dark Owl's coral → `#bb5638`, Rosé Pine's
-  `gold` → `#9b6b1a`, Dracula's pink → `#b02a72`). It is the "deepen and invert to
+  **The light numeral is white, and the fill is deepened to carry it — except in
+  Rosé Pine**, by request in both directions: the bright hue under a near-black
+  numeral was the first cut and read muddy everywhere it was tried but the gold.
+  White needs the fill at `L` ≈ 0.55 or below to clear 4.5:1, so each is the
+  palette's own deep member of that hue where it publishes one (Tokyo Night's
+  `blue0` `#3d59a1`, verbatim) and the hue deepened in oklch at constant chroma and
+  hue where it doesn't (Kanagawa's `lotusGreen` → `#637c42`, Dark Owl's cyan →
+  `#1c8374`, Dracula's pink → `#b02a72`). It is the "deepen and invert to
   white-on-deep" move Kanagawa's and Rosé Pine's *buttons* already make, spent on
   the chip; the cost is that a light chip reads heavier than the bright pill it
-  replaced, and that was the trade asked for. **System keeps a neutral chip** — a
+  replaced, and that was the trade asked for. **Rosé Pine keeps `gold` `#f6c177`
+  itself in Light**, under the band's own dark plum at 5.98:1 — at `L` 0.84 it is
+  far too light for a white numeral, and it is the one hue in the set bright enough
+  that deepening it was the thing that read wrong, so its floor is met from the
+  other side. `ThemePaletteTests` asserts the exception rather than skipping it: the
+  gold stays above `L` 0.78 and its numeral stays the darker of the pair. **System keeps a neutral chip** — a
   theme whose whole claim is that it adds no colour of its own cannot spend one here.
   All of it is measured on the **composited** value rather than on the raw fill,
   which is the check that caught the most defects in design, and

@@ -211,11 +211,13 @@ final class ThemePaletteTests: XCTestCase {
     /// appearance**, which is Dracula's construction adopted by the other four.
     /// Three properties, and each is a way the chip has already gone wrong:
     ///
-    /// - The Light **fill** carries the hue, and the numeral on it is **white**.
-    ///   The version this replaced put the *accent* in that fill at low alpha,
-    ///   which composites into a pale band above `L` 0.90 — legible, and read as
-    ///   chrome, which is the whole reason the chip was revisited. The one after
-    ///   that put the bright hue there under a near-black numeral and read muddy.
+    /// - The Light **fill** carries the hue, and the numeral on it is **white** —
+    ///   **except in Rosé Pine**, whose gold stays bright and takes the band's own
+    ///   dark plum instead. The version this replaced put the *accent* in that fill
+    ///   at low alpha, which composites into a pale band above `L` 0.90 — legible,
+    ///   and read as chrome, which is the whole reason the chip was revisited. The
+    ///   one after that put the bright hue there under a near-black numeral and read
+    ///   muddy — everywhere but the gold, which is why that one exception exists.
     ///   So the fill is the hue *deepened* until white clears the floor, and a
     ///   lightness ceiling is what keeps it there: drift lighter and the white
     ///   numeral is the thing that fails, silently, in one theme at a time.
@@ -230,10 +232,10 @@ final class ThemePaletteTests: XCTestCase {
     /// both sides of the swap.
     func testEverySourcedChipIsAPaletteHueThatSwapsRolesBetweenAppearances() {
         // Each theme's second palette colour, the one the chip spends: Tokyo
-        // Night's `blue`, Kanagawa's `springGreen`, Dark Owl's coral, Rosé Pine's
+        // Night's `blue`, Kanagawa's `springGreen`, Dark Owl's cyan, Rosé Pine's
         // `gold`, Dracula's pink.
         let hues: [AppTheme: RGB] = [
-            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0xf78c6c),
+            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0x7fdbca),
             .rosePine: hex(0xf6c177), .dracula: hex(0xff79c6),
         ]
         for theme in AppTheme.allCases where theme != .system {
@@ -244,13 +246,28 @@ final class ThemePaletteTests: XCTestCase {
             let light = (fill: srgb(band.countFill, .light), text: srgb(band.countText, .light))
             let dark = (fill: srgb(band.countFill, .dark), text: srgb(band.countText, .dark))
 
-            assertSame(light.text, RGB(r: 1, g: 1, b: 1), "\(theme.label) light numeral is white")
             XCTAssertEqual(
                 oklch(light.fill).hue, oklch(hue).hue, accuracy: 12,
                 "\(theme.label) light chip fill should be its palette hue, deepened at most")
-            XCTAssertLessThan(
-                oklch(light.fill).lightness, 0.62,
-                "\(theme.label) light chip is too light to carry a white numeral")
+            if theme == .rosePine {
+                // The one exception, and it is asserted rather than skipped: the gold
+                // stays bright and the numeral is the band's own dark plum, so the
+                // floor is met from the other side. What would fail silently here is
+                // the *pair* drifting apart — a numeral lightened toward white on a
+                // fill this light is the same defect the ceiling below catches.
+                XCTAssertGreaterThan(
+                    oklch(light.fill).lightness, 0.78,
+                    "Rosé Pine light chip should keep `gold` itself")
+                XCTAssertLessThan(
+                    luminance(light.text), luminance(light.fill),
+                    "Rosé Pine light numeral should be the dark one on a bright fill")
+            } else {
+                assertSame(
+                    light.text, RGB(r: 1, g: 1, b: 1), "\(theme.label) light numeral is white")
+                XCTAssertLessThan(
+                    oklch(light.fill).lightness, 0.62,
+                    "\(theme.label) light chip is too light to carry a white numeral")
+            }
             XCTAssertGreaterThan(
                 oklch(dark.text).chroma, 0.05,
                 "\(theme.label) dark chip numeral should be the colour, not the fill")
