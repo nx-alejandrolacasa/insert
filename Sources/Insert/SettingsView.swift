@@ -193,15 +193,15 @@ private struct GeneralSettingsTab: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Check spelling while typing", isOn: $settings.checkSpelling)
-            } footer: {
-                Text("Underlines misspelled words while you write a note or a task — title and body both — in the spelling language your Mac is set to. Control-click a word for its corrections. Nothing is ever changed for you: autocorrect and grammar checking stay off.")
-            }
-
-            Section {
                 Toggle("Show menu-bar item", isOn: $settings.showMenuBar)
             } footer: {
                 Text("The menu-bar item summarizes tasks that are past due, due today, and coming up.")
+            }
+
+            Section {
+                Toggle("Check spelling while typing", isOn: $settings.checkSpelling)
+            } footer: {
+                Text("Underlines misspelled words while you write a note or a task — title and body both — in the spelling language your Mac is set to. Control-click a word for its corrections. Nothing is ever changed for you: autocorrect and grammar checking stay off.")
             }
 
             // The old Storage pane, unchanged apart from gaining a header: with

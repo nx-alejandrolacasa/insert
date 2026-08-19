@@ -7,11 +7,10 @@ import XCTest
 /// asserted in a comment.
 ///
 /// This suite exists because the theme table is **data that can only be wrong
-/// quietly**. A band tone off by a step, a type label that stops clearing its
-/// floor on a card, an accent that drifts into the hue one of its own note types
-/// wears: none of those crash, none of them show up in a screenshot of the theme
-/// you happen to be using, and there are twelve surfaces (six themes × two
-/// appearances) where they could hide. The values are generated from an oklch
+/// quietly**. A band tone off by a step, a type colour that stops clearing its
+/// floor on a card, a link that inherits the accent: none of those crash, none of
+/// them show up in a screenshot of the theme you happen to be using, and there are
+/// twelve surfaces (six themes × two appearances) where they could hide. The values are generated from an oklch
 /// spec offline, so the thing worth pinning is not the arithmetic that produced
 /// them but the properties they were produced to have.
 ///
@@ -22,8 +21,9 @@ final class ThemePaletteTests: XCTestCase {
     /// Text under 14px, which is what a type label, a count and a timestamp are
     /// (CLAUDE.md decision 5).
     private let textFloor = 4.5
-    /// A mark or a dot: a graphic, and held to the lower floor deliberately —
-    /// that is *why* mark and label are two values rather than one.
+    /// A non-text indicator — the selection ring. The note-type marks and dots are
+    /// *not* measured against it: see `testEveryTypeLabelClearsItsFloorOnEveryThemesCard`
+    /// for why decoration beside a name carries no floor.
     private let graphicFloor = 3.0
     /// What Increase Contrast promises.
     private let contrastFloor = 7.0
@@ -188,10 +188,10 @@ final class ThemePaletteTests: XCTestCase {
 
     // MARK: The count chip
 
-    /// The chip is the accent's, **except in System** — a theme whose whole claim
-    /// is that it adds no colour of its own cannot spend the accent on the one
-    /// number in the band. Measured as chroma rather than as a hex, since what is
-    /// being asserted is "this is a grey" and "this is a colour".
+    /// The chip carries a hue, **except in System** — a theme whose whole claim
+    /// is that it adds no colour of its own cannot spend one on the one number in
+    /// the band. Measured as chroma rather than as a hex, since what is being
+    /// asserted is "this is a grey" and "this is a colour".
     func testTheCountChipIsAccentedEverywhereButSystem() {
         for mode in Appearances.both {
             XCTAssertLessThan(
@@ -207,18 +207,65 @@ final class ThemePaletteTests: XCTestCase {
         }
     }
 
-    /// Dracula's chip **inverts between appearances**, and that is deliberate:
-    /// its bright pink cannot carry both ways, so it is the numeral on a recessed
-    /// fill in Dark and the *fill* under a dark numeral in Light. Pinned because
-    /// the obvious tidy-up — one role in both modes — is what fails the floor.
-    func testDraculasCountChipInvertsBetweenAppearances() {
-        let pink = RGB(r: 1.0, g: 0x79 / 255.0, b: 0xc6 / 255.0)
-        let band = AppTheme.dracula.band
-        assertSame(srgb(band.countFill, .light), pink, "Dracula light chip fill is the pink")
-        assertSame(srgb(band.countText, .dark), pink, "Dracula dark chip numeral is the pink")
-        // And the recessed fill really is recessed, rather than the band again.
+    /// **Every sourced theme's chip carries a palette hue, in swapped roles per
+    /// appearance**, which is Dracula's construction adopted by the other four.
+    /// Three properties, and each is a way the chip has already gone wrong:
+    ///
+    /// - The Light **fill** carries the hue, and the numeral on it is **white**.
+    ///   The version this replaced put the *accent* in that fill at low alpha,
+    ///   which composites into a pale band above `L` 0.90 — legible, and read as
+    ///   chrome, which is the whole reason the chip was revisited. The one after
+    ///   that put the bright hue there under a near-black numeral and read muddy.
+    ///   So the fill is the hue *deepened* until white clears the floor, and a
+    ///   lightness ceiling is what keeps it there: drift lighter and the white
+    ///   numeral is the thing that fails, silently, in one theme at a time.
+    /// - The Dark **numeral** carries the hue instead, on a tint of it. Both
+    ///   appearances are light-on-dark; what swaps is which of the two is the
+    ///   colour, and the swap is not a tidy-up waiting to happen — a hue bright
+    ///   enough to read as text on a pale band does not exist in these palettes.
+    ///
+    /// Neither half is pinned to the source hex: the light fill is deepened and
+    /// Tokyo Night's and Kanagawa's dark numerals are lightened, both in oklch at
+    /// constant hue, so the **hue angle** is what is asserted and it is asserted on
+    /// both sides of the swap.
+    func testEverySourcedChipIsAPaletteHueThatSwapsRolesBetweenAppearances() {
+        // Each theme's second palette colour, the one the chip spends: Tokyo
+        // Night's `blue`, Kanagawa's `springGreen`, Dark Owl's coral, Rosé Pine's
+        // `gold`, Dracula's pink.
+        let hues: [AppTheme: RGB] = [
+            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0xf78c6c),
+            .rosePine: hex(0xf6c177), .dracula: hex(0xff79c6),
+        ]
+        for theme in AppTheme.allCases where theme != .system {
+            guard let hue = hues[theme] else {
+                return XCTFail("\(theme.label) has no chip hue on record")
+            }
+            let band = theme.band
+            let light = (fill: srgb(band.countFill, .light), text: srgb(band.countText, .light))
+            let dark = (fill: srgb(band.countFill, .dark), text: srgb(band.countText, .dark))
+
+            assertSame(light.text, RGB(r: 1, g: 1, b: 1), "\(theme.label) light numeral is white")
+            XCTAssertEqual(
+                oklch(light.fill).hue, oklch(hue).hue, accuracy: 12,
+                "\(theme.label) light chip fill should be its palette hue, deepened at most")
+            XCTAssertLessThan(
+                oklch(light.fill).lightness, 0.62,
+                "\(theme.label) light chip is too light to carry a white numeral")
+            XCTAssertGreaterThan(
+                oklch(dark.text).chroma, 0.05,
+                "\(theme.label) dark chip numeral should be the colour, not the fill")
+            XCTAssertEqual(
+                oklch(dark.text).hue, oklch(hue).hue, accuracy: 12,
+                "\(theme.label) dark chip numeral should be the same hue, lightened at most")
+            XCTAssertGreaterThan(
+                luminance(dark.text), luminance(dark.fill),
+                "\(theme.label) dark chip should be a vivid numeral on a tinted fill")
+        }
+        // Dracula's dark fill is the one that is *recessed* below its band rather
+        // than the hue tinted above it — its own value, and kept.
+        let dracula = AppTheme.dracula.band
         XCTAssertLessThan(
-            luminance(srgb(band.countFill, .dark)), luminance(srgb(band.fill, .dark)),
+            luminance(srgb(dracula.countFill, .dark)), luminance(srgb(dracula.fill, .dark)),
             "Dracula dark chip fill should sit below its band")
     }
 
@@ -279,137 +326,87 @@ final class ThemePaletteTests: XCTestCase {
         }
     }
 
-    // MARK: The note-type palettes
+    // MARK: The note-type colours
 
-    /// Marks at 3:1 on the card *and* on the filter track, since the same value
-    /// draws the capsule beside a title and the dot on the band.
-    func testEveryTypeMarkClearsTheGraphicFloorOnBothSurfaces() {
+    /// **A note type's colours are the app's own, shared by every theme**: `accent`
+    /// for its two graphics (the capsule mark, the filter-track dot) and `ink` for
+    /// the word naming it in the meta row. See `AppTheme`'s note-type section for the
+    /// two rules the per-theme palettes took with them.
+    ///
+    /// So the check that matters is no longer "did each theme author four hues that
+    /// clear their floors" but the stricter one: **one palette against twelve card
+    /// faces**, measured on the surface actually painted — which is what took dark
+    /// purple under the floor when the cards became themed, since a themed dark card
+    /// is lighter than the flat near-black island `ink` was first solved on.
+    ///
+    /// The **graphics are deliberately not measured**, and that is the half worth
+    /// stating: `accent` is a bright value that lands as low as 1.28:1 as a dot on a
+    /// light track, under the 3:1 a *required* graphic answers to. Nothing here is
+    /// required — a dot and a mark always sit beside the name of the type they mark,
+    /// so the colour is a second voice and the label below carries the floor. What
+    /// is pinned instead is that the graphics really are `accent`, in
+    /// `testTypeGraphicsAreTheAppsOneDotColour`.
+    ///
+    /// It sweeps **all nine tints**, not the four the default types wear: the type
+    /// list is user-extensible, so any of them can end up on a card.
+    func testEveryTypeLabelClearsItsFloorOnEveryThemesCard() {
         for theme in AppTheme.allCases {
             for mode in Appearances.both {
-                for tint in Self.typeTints {
-                    let mark = theme.typeMark(tint)
-                    assert(mark, on: theme.cardFace, floor: graphicFloor,
-                           "\(theme.label)/\(mode) \(tint.name) mark on card", mode)
-                    assert(mark, on: theme.band.trackFill, floor: graphicFloor,
-                           "\(theme.label)/\(mode) \(tint.name) dot on track", mode)
+                for tint in Tint.allCases {
+                    assert(tint.ink, on: theme.cardFace, floor: textFloor,
+                           "\(theme.label)/\(mode) \(tint.name) type label on card", mode)
                 }
             }
         }
     }
 
-    func testEveryTypeLabelClearsTheTextFloorOnItsCard() {
-        for theme in AppTheme.allCases {
-            for mode in Appearances.both {
-                for tint in Self.typeTints {
-                    assert(theme.typeLabel(tint), on: theme.cardFace, floor: textFloor,
-                           "\(theme.label)/\(mode) \(tint.name) label", mode)
-                }
-            }
-        }
-    }
-
-    /// The plan's own rule, automated as it asks: **no theme's accent may sit
-    /// within 25° of any of its four note-type hues**, because that is what keeps
-    /// "action" legible as action rather than as a fifth type.
+    /// The mark and the dot are `accent` — **the app's one dot colour**, the same
+    /// value a project chip, the tasks track's Pending dot and a Settings swatch
+    /// wear. Pinned as an identity rather than as a ratio, because the whole point
+    /// of the reversal that put it here is that a type's dot matches every other
+    /// dot in the window; a deeper value read as muted beside them.
     ///
-    /// A primary under 0.03 chroma is exempt, because a hue distance measured
-    /// against a grey means nothing. **No theme in the current set is exempt** —
-    /// the previous Bone's accent was ink and needed it, and the guard stays for
-    /// the next accent that is a value rather than a hue.
-    func testNoAccentSitsInAnyOfItsOwnTypeHues() {
-        for theme in AppTheme.allCases {
-            for mode in Appearances.both {
-                let primary = oklch(srgb(theme.primary, mode))
-                guard primary.chroma >= 0.03 else { continue }
-                for tint in Self.typeTints {
-                    // Rosé Pine's `love` and its blush Feedback mark are 19°
-                    // apart in Light and 17° in Dark. The palette is built on
-                    // that pairing and the plan records it rather than fixing it,
-                    // so it is named here rather than lowering the rule.
-                    if theme == .rosePine, tint == .purple { continue }
-                    let mark = oklch(srgb(theme.typeMark(tint), mode))
-                    let apart = hueDistance(primary.hue, mark.hue)
-                    XCTAssertGreaterThanOrEqual(
-                        apart, 25,
-                        """
-                        \(theme.label)/\(mode): the accent (h \(Int(primary.hue))) is only \
-                        \(Int(apart))° from \(tint.name) (h \(Int(mark.hue)))
-                        """)
-                }
+    /// Asserted against the *ramp*, so it also catches `accent` quietly becoming a
+    /// solved value: it must stay the vivid one, or the split with `ink` collapses
+    /// and there is no reason for two roles.
+    func testTypeGraphicsAreTheAppsOneDotColour() {
+        for mode in Appearances.both {
+            for tint in Tint.allCases {
+                // `accent` doesn't vary by appearance — one value, both modes —
+                // which is what makes a dot the same colour wherever it lands.
+                assertSame(srgb(tint.accent, mode), srgb(tint.accent, .light),
+                           "\(tint.name) accent should not follow the appearance")
+                // And it is brighter than the text value in Light, which is the
+                // difference the two roles exist for.
+                XCTAssertGreaterThan(
+                    luminance(srgb(tint.accent, .light)), luminance(srgb(tint.ink, .light)),
+                    "\(tint.name): the dot colour should be brighter than the label's")
             }
         }
     }
 
-    /// The label is *not* the mark: the plan gives it 5–8 points less lightness,
-    /// and that gap is what lets a mark stay bright enough to see while the text
-    /// beside it carries the tighter floor. Pinned because collapsing the two
-    /// back into one value is the obvious simplification, and it was the previous
-    /// set's mistake.
-    func testLabelsAreDarkerThanTheirMarksInLight() {
-        for theme in AppTheme.allCases {
-            for tint in Self.typeTints {
-                let mark = oklch(srgb(theme.typeMark(tint), .light))
-                let label = oklch(srgb(theme.typeLabel(tint), .light))
-                XCTAssertLessThan(
-                    label.lightness, mark.lightness,
-                    "\(theme.label) \(tint.name): the label is not darker than its mark")
-            }
-        }
-    }
+    /// The palette is **the same whichever theme is selected**, which is the whole
+    /// point of the reversal and the one thing a future per-theme override would
+    /// silently undo. So it selects each theme in turn and resolves the value a
+    /// card would actually draw with: nothing on `AppTheme` hands out a type colour
+    /// any more, and this is what would catch `Tint.ink` starting to read one.
+    @MainActor
+    func testTheTypeColoursDoNotFollowTheTheme() {
+        let store = SettingsStore.shared
+        let chosen = store.theme
+        defer { store.theme = chosen }
 
-    /// **The four marks form a lightness ladder** (rule 4), so a card's type is
-    /// legible in greyscale and not by hue alone. Every source palette puts three
-    /// or four of its hues at one lightness — that is what "re-levelled" in the
-    /// theme comments means, and it is the one thing done to all five sourced
-    /// palettes.
-    ///
-    /// The previous set failed this outright (worst pair 1.00–1.07:1 by
-    /// luminance) and recorded it as a known gap; this is that gap closed, which
-    /// is why the assertion is on the **gap** rather than on an ordering: what
-    /// matters is that no two marks collapse, not which type is darkest.
-    ///
-    /// **Dracula is the recorded exception**, in both appearances: its cyan Note
-    /// and green Staffing sit at one lightness, and levelling four bright pastels
-    /// is what would stop it looking like Dracula. The mark is never the sole
-    /// carrier — the mono label spells the type out beside it.
-    func testTheFourMarksFormALightnessLadder() {
-        for theme in AppTheme.allCases where theme != .dracula {
-            for mode in Appearances.both {
-                let levels = Self.typeTints
-                    .map { oklch(srgb(theme.typeMark($0), mode)).lightness }
-                    .sorted()
-                let gaps = (0..<3).map { levels[$0 + 1] - levels[$0] }
-                XCTAssertGreaterThanOrEqual(
-                    gaps.min() ?? 0, 0.029,
-                    """
-                    \(theme.label)/\(mode): two marks collapse in greyscale \
-                    (levels \(levels.map { round($0 * 1000) / 1000 }))
-                    """)
+        for mode in Appearances.both {
+            let reference = Tint.allCases.map {
+                (label: srgb($0.ink, mode), dot: srgb($0.accent, mode))
             }
-        }
-        // And Dracula really is the exception, rather than quietly passing and
-        // making the note above wrong.
-        let levels = Self.typeTints
-            .map { oklch(srgb(AppTheme.dracula.typeMark($0), .dark)).lightness }
-            .sorted()
-        XCTAssertLessThan(
-            (0..<3).map { levels[$0 + 1] - levels[$0] }.min() ?? 1, 0.029,
-            "Dracula's ladder no longer needs its exception — take it out of the docs")
-    }
-
-    /// A type on a tint no theme overrides — Insert's types are user-extensible,
-    /// so a custom one can be any `Tint` — falls back to the app's own solved
-    /// foreground rather than to nothing.
-    func testACustomTypesTintFallsBackToTheAppsOwnInk() {
-        for theme in AppTheme.allCases {
-            for tint in [Tint.teal, .pink, .red, .gray, .orange] {
-                for mode in Appearances.both {
-                    let mark = srgb(theme.typeMark(tint), mode)
-                    let ink = srgb(tint.ink, mode)
-                    let what = "\(theme.label)/\(mode) \(tint.name) should fall back to Tint.ink"
-                    XCTAssertEqual(mark.r, ink.r, accuracy: 0.002, what)
-                    XCTAssertEqual(mark.g, ink.g, accuracy: 0.002, what)
-                    XCTAssertEqual(mark.b, ink.b, accuracy: 0.002, what)
+            for theme in AppTheme.allCases {
+                store.theme = theme
+                for (tint, expected) in zip(Tint.allCases, reference) {
+                    assertSame(srgb(tint.ink, mode), expected.label,
+                               "\(tint.name)'s label changed under \(theme.label)/\(mode)")
+                    assertSame(srgb(tint.accent, mode), expected.dot,
+                               "\(tint.name)'s dot changed under \(theme.label)/\(mode)")
                 }
             }
         }
@@ -432,9 +429,10 @@ final class ThemePaletteTests: XCTestCase {
                        "\(theme.label)/\(mode) metadata under Increase Contrast", mode)
                 assert(theme.link, on: theme.cardFace, floor: contrastFloor,
                        "\(theme.label)/\(mode) link under Increase Contrast", mode)
-                for tint in Self.typeTints {
-                    assert(theme.typeLabel(tint), on: theme.cardFace, floor: contrastFloor,
-                           "\(theme.label)/\(mode) \(tint.name) label under Increase Contrast", mode)
+                for tint in Tint.allCases {
+                    assert(tint.ink, on: theme.cardFace, floor: contrastFloor,
+                           "\(theme.label)/\(mode) \(tint.name) type colour under Increase Contrast",
+                           mode)
                 }
             }
         }
@@ -483,10 +481,6 @@ final class ThemePaletteTests: XCTestCase {
 
     // MARK: - Measuring
 
-    /// The four tints the default note types wear, which is what a theme's
-    /// palette overrides (`AppTheme.typePalette` is keyed by tint, not by type).
-    private static let typeTints: [Tint] = [.blue, .yellow, .purple, .green]
-
     private func assert(
         _ fg: Color, on bg: Color, floor: Double, _ what: String, _ mode: Appearances,
         file: StaticString = #filePath, line: UInt = #line
@@ -498,6 +492,14 @@ final class ThemePaletteTests: XCTestCase {
     }
 
     private func round(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+
+    /// A sourced hue as it is written in the palette it came from, so a test reads
+    /// the same string the upstream file does.
+    private func hex(_ value: Int) -> RGB {
+        RGB(r: Double((value >> 16) & 0xFF) / 255,
+            g: Double((value >> 8) & 0xFF) / 255,
+            b: Double(value & 0xFF) / 255)
+    }
 
     private func assertSame(
         _ a: RGB, _ b: RGB, _ what: String,

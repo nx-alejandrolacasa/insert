@@ -37,7 +37,23 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
     var name: String { rawValue.capitalized }
 
-    /// The vivid accent colour (dots, swatches, decorative strokes, washes).
+    /// The vivid accent colour, and **the app's one dot colour**: a project's chip
+    /// dot and its sidebar wash, the tasks track's Pending and Done dots, the type
+    /// swatches in Settings, and a note type's own two graphics — its 3×16pt capsule
+    /// mark beside the title and its dot in the notes filter track.
+    ///
+    /// **It is held to no contrast floor, and that is the deliberate half of the
+    /// split with `ink`.** These are bright values by design: yellow measures
+    /// 1.28:1 as a dot on Dracula's light filter track and 1.58:1 on Rosé Pine's
+    /// paper, which would fail the 3:1 a *required* graphic is held to. Nothing here
+    /// is required — every dot and mark in the app sits beside the name of the thing
+    /// it marks, so the colour is a second voice rather than the only one, and the
+    /// text beside it carries the floor. The note-type mark was briefly `ink`
+    /// instead, on the reasoning that a bar is big enough to be worth solving, and
+    /// it was reversed on sight: against project dots and the tasks track — both
+    /// `accent` all along — the deeper value read as *muted*, which is how it was
+    /// reported ("the tones in the settings are nice, but the ones shown in the UI
+    /// not"). One dot colour, everywhere.
     var accent: Color { ramp.accent.color }
 
     /// A solid fill that carries white type at 4.5:1 or better. Doesn't change
@@ -48,8 +64,27 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
                 lightHC: ramp.fillHC, darkHC: ramp.fillHC)
     }
 
-    /// The tint as a foreground, at 4.5:1 or better against the island, chip and
-    /// window surfaces it's drawn on — deepened in Light, brightened in Dark.
+    /// The tint as a foreground, at 4.5:1 or better against the surfaces it's drawn
+    /// on — deepened in Light, brightened in Dark.
+    ///
+    /// **This is a note type's label colour again** — the small-caps type name
+    /// leading a card's meta row — as it was before the theme system gave every
+    /// theme a palette of its own. Six themes × four types × two appearances was a
+    /// lot of decisions to keep consistent, and what it bought — hues tuned to each
+    /// band — cost the thing that mattered more: the four types are the *same four*
+    /// whatever theme is on, so they should look it. See `AppTheme` for the two
+    /// rules that retires.
+    ///
+    /// The type's two *graphics* — the capsule mark and the filter dot — are
+    /// `accent`, not this: text carries a floor, decoration doesn't.
+    ///
+    /// Which is why the surfaces it is solved against are now **every theme's**:
+    /// the twelve card faces, plus the sidebar and popover grounds it already
+    /// served. That re-solve moved four base values and eight Increase Contrast
+    /// ones, all by a few points of lightness at the same hue — the themed dark
+    /// cards are *lighter* than the flat near-black island these were first measured
+    /// on, which is what took dark purple under the floor. Worst pairing in the set
+    /// is now 4.65:1 on a card; `ThemePaletteTests` measures all of it.
     var ink: Color {
         dynamic(light: ramp.inkLight, dark: ramp.inkDark,
                 lightHC: ramp.inkLightHC, darkHC: ramp.inkDarkHC)
@@ -70,7 +105,7 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
 // ground. The strength had already been walked from the handoff's 60% down to
 // 45% for exactly that reason and it was still the wrong shape. A note's type is
 // now a 3pt capsule mark *beside* the title (`TypeMarkTitle`) in the type's
-// `ink`, which costs the title nothing — see `AppTheme`.
+// `accent`, which costs the title nothing.
 
 // `AccentColor` and `AccentPicker` — Settings → General → Accent ("Highlight
 // colour"), five swatches, blue by default — lived here. Both are gone: the
@@ -134,9 +169,9 @@ private extension Tint {
             fill:       RGB(r: 0.44, g: 0.41, b: 0.35),
             fillHC:     RGB(r: 0.37, g: 0.34, b: 0.29),
             inkLight:   RGB(r: 0.41, g: 0.39, b: 0.33),
-            inkDark:    RGB(r: 0.63, g: 0.59, b: 0.53),
+            inkDark:    RGB(r: 0.65, g: 0.61, b: 0.55),
             inkLightHC: RGB(r: 0.29, g: 0.27, b: 0.23),
-            inkDarkHC:  RGB(r: 0.76, g: 0.71, b: 0.64))
+            inkDarkHC:  RGB(r: 0.80, g: 0.75, b: 0.68))
         // Yellow's dark halves are the one aesthetic judgment in this table:
         // any yellow at 4.5:1 goes brown, and the first values leaned olive —
         // "that brown/gold-ish shade is ugly". These sit at the floor's edge
@@ -148,18 +183,18 @@ private extension Tint {
             accent:     RGB(r: 0.95, g: 0.77, b: 0.29),
             fill:       RGB(r: 0.63, g: 0.42, b: 0.00),
             fillHC:     RGB(r: 0.47, g: 0.31, b: 0.00),
-            inkLight:   RGB(r: 0.63, g: 0.42, b: 0.00),
+            inkLight:   RGB(r: 0.61, g: 0.40, b: 0.00),
             inkDark:    RGB(r: 0.95, g: 0.77, b: 0.29),
-            inkLightHC: RGB(r: 0.47, g: 0.31, b: 0.00),
+            inkLightHC: RGB(r: 0.46, g: 0.31, b: 0.00),
             inkDarkHC:  RGB(r: 0.95, g: 0.77, b: 0.29))
         case .purple: Ramp(
             accent:     RGB(r: 0.60, g: 0.45, b: 0.95),
             fill:       RGB(r: 0.45, g: 0.29, b: 0.85),
             fillHC:     RGB(r: 0.39, g: 0.25, b: 0.74),
             inkLight:   RGB(r: 0.44, g: 0.28, b: 0.82),
-            inkDark:    RGB(r: 0.63, g: 0.47, b: 1.00),
+            inkDark:    RGB(r: 0.66, g: 0.53, b: 1.00),
             inkLightHC: RGB(r: 0.31, g: 0.20, b: 0.59),
-            inkDarkHC:  RGB(r: 0.83, g: 0.63, b: 1.00))
+            inkDarkHC:  RGB(r: 0.85, g: 0.69, b: 1.00))
         case .green: Ramp(
             accent:     RGB(r: 0.35, g: 0.78, b: 0.55),
             fill:       RGB(r: 0.15, g: 0.52, b: 0.33),
@@ -167,7 +202,7 @@ private extension Tint {
             inkLight:   RGB(r: 0.12, g: 0.44, b: 0.28),
             inkDark:    RGB(r: 0.35, g: 0.78, b: 0.55),
             inkLightHC: RGB(r: 0.09, g: 0.32, b: 0.20),
-            inkDarkHC:  RGB(r: 0.35, g: 0.79, b: 0.56))
+            inkDarkHC:  RGB(r: 0.40, g: 0.84, b: 0.61))
         case .blue: Ramp(
             accent:     RGB(r: 0.30, g: 0.62, b: 0.98),
             fill:       RGB(r: 0.13, g: 0.45, b: 0.88),
@@ -175,7 +210,7 @@ private extension Tint {
             inkLight:   RGB(r: 0.11, g: 0.38, b: 0.75),
             inkDark:    RGB(r: 0.30, g: 0.62, b: 0.98),
             inkLightHC: RGB(r: 0.08, g: 0.27, b: 0.54),
-            inkDarkHC:  RGB(r: 0.36, g: 0.75, b: 1.00))
+            inkDarkHC:  RGB(r: 0.48, g: 0.79, b: 1.00))
         case .orange: Ramp(
             accent:     RGB(r: 0.98, g: 0.62, b: 0.30),
             fill:       RGB(r: 0.70, g: 0.37, b: 0.07),
@@ -183,7 +218,7 @@ private extension Tint {
             inkLight:   RGB(r: 0.59, g: 0.32, b: 0.06),
             inkDark:    RGB(r: 0.98, g: 0.62, b: 0.30),
             inkLightHC: RGB(r: 0.42, g: 0.23, b: 0.05),
-            inkDarkHC:  RGB(r: 0.99, g: 0.63, b: 0.30))
+            inkDarkHC:  RGB(r: 1.00, g: 0.68, b: 0.41))
         case .pink: Ramp(
             accent:     RGB(r: 0.96, g: 0.52, b: 0.72),
             fill:       RGB(r: 0.76, g: 0.29, b: 0.50),
@@ -191,7 +226,7 @@ private extension Tint {
             inkLight:   RGB(r: 0.65, g: 0.24, b: 0.42),
             inkDark:    RGB(r: 0.96, g: 0.52, b: 0.72),
             inkLightHC: RGB(r: 0.46, g: 0.17, b: 0.30),
-            inkDarkHC:  RGB(r: 1.00, g: 0.58, b: 0.80))
+            inkDarkHC:  RGB(r: 1.00, g: 0.65, b: 0.83))
         case .teal: Ramp(
             accent:     RGB(r: 0.30, g: 0.78, b: 0.80),
             fill:       RGB(r: 0.09, g: 0.51, b: 0.54),
@@ -199,15 +234,15 @@ private extension Tint {
             inkLight:   RGB(r: 0.07, g: 0.43, b: 0.46),
             inkDark:    RGB(r: 0.30, g: 0.78, b: 0.80),
             inkLightHC: RGB(r: 0.05, g: 0.31, b: 0.33),
-            inkDarkHC:  RGB(r: 0.30, g: 0.78, b: 0.80))
+            inkDarkHC:  RGB(r: 0.34, g: 0.82, b: 0.84))
         case .red: Ramp(
             accent:     RGB(r: 0.96, g: 0.42, b: 0.42),
             fill:       RGB(r: 0.84, g: 0.24, b: 0.24),
             fillHC:     RGB(r: 0.64, g: 0.18, b: 0.18),
             inkLight:   RGB(r: 0.71, g: 0.20, b: 0.20),
-            inkDark:    RGB(r: 0.96, g: 0.42, b: 0.42),
+            inkDark:    RGB(r: 0.98, g: 0.44, b: 0.44),
             inkLightHC: RGB(r: 0.51, g: 0.15, b: 0.15),
-            inkDarkHC:  RGB(r: 1.00, g: 0.60, b: 0.60))
+            inkDarkHC:  RGB(r: 1.00, g: 0.66, b: 0.66))
         }
     }
 }

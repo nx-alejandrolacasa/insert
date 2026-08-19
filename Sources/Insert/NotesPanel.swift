@@ -120,9 +120,12 @@ struct NotesPanel: View {
     /// types are user-extensible, and a track wider than the column should
     /// slide rather than crush its segments.
     ///
-    /// The dots take the *themed* type colour — `typeMark`, the same value the
-    /// capsule marks draw in, so the row and the cards it selects agree — and
-    /// each theme authors its own four, so the row follows the palette.
+    /// The dots take **`Tint.accent`**, the same vivid value every other dot in the
+    /// app wears — the project chips on a card, the tasks track's own Pending and
+    /// Done dots, the type swatches in Settings — and the same value the capsule
+    /// mark on a card draws in, so the row and the cards it selects agree. Not a
+    /// theme value: the four types are the same four in every theme, and not `ink`
+    /// either, which is the *text* value (see `Tint.accent` for the split).
     private var typeFilter: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             SegmentedFilter<String?>(
@@ -131,7 +134,7 @@ struct NotesPanel: View {
                         SegmentedFilter.Segment(
                             id: $0.id,
                             label: $0.name,
-                            dot: settings.theme.typeMark($0.tint))
+                            dot: $0.tint.accent)
                     },
                 selection: appState.noteTypeFilter,
                 onSelect: { appState.noteTypeFilter = $0 }
@@ -416,7 +419,7 @@ private struct NoteCardView: View {
                 // losing a line of writing width to a decoration.
                 TypeMarkTitle(
                     text: draft.displayTitle,
-                    mark: settings.theme.typeMark(type.tint))
+                    mark: type.tint.accent)
             }
 
             Spacer(minLength: 8)
@@ -522,12 +525,12 @@ private struct NoteCardView: View {
     /// which type is set is still on show, only the alternatives moved behind a
     /// click.
     ///
-    /// It is the one place a type's colour is **not** the themed one, and that is
-    /// a floor rather than an oversight: `AppTheme.typeMark`/`typeLabel` are
-    /// *foregrounds*, solved against the card faces, so several of them are bright
-    /// values that could not carry white type as a fill. `Tint.deep` is the role
-    /// that is solved for exactly this — a fill under white at 4.5:1 — so the
-    /// dropdown keeps it, and the divergence only shows while a card is open.
+    /// It is the one place a type's colour is **not** `Tint.ink`, and that is a
+    /// floor rather than an oversight: `ink` is a *foreground*, solved against the
+    /// card faces, so several of them are bright values that could not carry white
+    /// type as a fill. `Tint.deep` is the role solved for exactly this — a fill
+    /// under white at 4.5:1 — so the dropdown keeps it, and the divergence only
+    /// shows while a card is open.
     private var typeMenu: some View {
         Menu {
             // Plain buttons rather than a `Picker`: the pill itself says which

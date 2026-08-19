@@ -4,9 +4,9 @@ import SwiftUI
 // MARK: - AppTheme
 
 /// One of six named themes — Settings → Appearance → Theme. A theme is **three
-/// grounds, one accent and its own note-type palette**, and those three are the
-/// rules: a theme that breaks any of them reads as a *setting* rather than as a
-/// theme, which is exactly what the first set did.
+/// grounds and one accent**, and those two are the rules: a theme that breaks
+/// either reads as a *setting* rather than as a theme, which is exactly what the
+/// first set did.
 ///
 /// 1. **Three grounds — band, page, card.** The band is the surface behind a
 ///    column heading (`ColumnHeaderBand`); the page (`windowFill`, and so the
@@ -15,21 +15,22 @@ import SwiftUI
 ///    coloured strip on neutral grey. The glass track on the band derives from
 ///    the band and is not a token set of its own.
 /// 2. **One accent, for action only** — `primary`: "New Note" / "New Task",
-///    focus rings, selected states (CLAUDE.md decision 4). It may not sit within
-///    25° of a hue from the theme's own note-type palette, which is why Kanagawa
-///    has no orange in its types: the only orange thing on screen is the button.
-/// 3. **Its own note-type palette.** Authored per theme rather than shared, and
-///    most of what makes a theme feel designed.
-/// 4. **The four marks form a lightness ladder**, so they are told apart in
-///    greyscale as well as by hue. Every source palette puts three or four of its
-///    hues at one lightness; each theme's four are re-levelled apart. One
-///    documented exception, Dracula — see its case.
-/// 5. **Text is not themed, except metadata.** `titleText` and `bodyText` are
-///    `labelColor` in five of the six; only Dracula names its own, and it earns
-///    that by being a text palette by origin.
-/// 6. **The count chip is accented** — the accent at low alpha, composited over
-///    the band, under a legible tint of itself. System is excluded: a theme whose
-///    whole claim is that it adds no colour of its own cannot colour the chip.
+///    focus rings, selected states (CLAUDE.md decision 4).
+/// 3. **Text is not themed, except metadata and links.** `titleText` and
+///    `bodyText` are `labelColor` in five of the six; only Dracula names its own,
+///    and it earns that by being a text palette by origin.
+/// 4. **The count chip carries a second hue from the palette** — not the accent,
+///    which is the button's, and the hue itself rather than a wash of it: the
+///    chip's *fill* under a **white** numeral in Light, the numeral on a tinted
+///    fill in Dark. System is excluded: a theme whose whole claim is that it adds
+///    no colour of its own cannot colour the chip.
+///
+/// **A note type's colour is not one of a theme's values, and two of the plan's
+/// rules went with that.** Types were briefly a per-theme palette — four hues
+/// authored against each band, kept 25° clear of its accent and re-levelled into a
+/// greyscale ladder. It is `Tint.ink` again, one palette for all six; the
+/// note-type section below has the whole trade, including what the two retired
+/// rules were insurance against.
 ///
 /// **This is the second set of six, and the swap is the interesting part.** The
 /// first (Bone, Moss, Ember, Rosewood, Indigo, plus Dracula) obeyed all of the
@@ -40,10 +41,11 @@ import SwiftUI
 /// the six are now **sourced palettes**, read from the upstream project rather
 /// than designed here (each case names the repo and file it came from),
 /// and the sixth is the platform's own. What we changed, per theme, is stated in
-/// its case: **verbatim** for grounds, hairlines, links and accents;
+/// its case: **verbatim** for grounds, card edges, links and accents;
 /// **deepened** where an accent's label could not clear 4.5:1; **derived** where
-/// a palette's comment grey failed on a card; and **re-levelled**, always, for
-/// the four marks.
+/// a palette's comment grey failed on a card; and **desaturated** in one place,
+/// Kanagawa's Lotus grounds. (A fifth kind of change, re-levelling each palette's
+/// four note-type hues, went with the per-theme type palettes.)
 ///
 /// The band-is-where-colour-goes finding the first set was built on is unchanged,
 /// and so is everything in the July 2026 refresh it carried forward — including
@@ -81,9 +83,9 @@ enum AppTheme: String, CaseIterable, Identifiable {
     ///
     /// Its blues are the system's, *deepened*: `systemBlue` measures ~4.0:1 as a
     /// white-label fill and as link text on white, so the button and the light
-    /// link each step down until they clear 4.5:1. Its four type marks are the
-    /// system teal / orange / purple / green, deepened into rule 4's ladder,
-    /// because the shipping four resolve to nearly one lightness.
+    /// link each step down until they clear 4.5:1. It authored four type hues of
+    /// its own for a while — the system teal / orange / purple / green — and gave
+    /// them up with every other theme's, see the note-type section.
     ///
     /// **It is written down rather than read from semantic tokens, and that was
     /// measured rather than assumed.** The plan asks for the tokens themselves,
@@ -110,7 +112,11 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// app with no red for `Semantic.overdue`. Because it isn't a button here,
     /// this is the one theme in the set where overdue needs no special case at
     /// all. Its light-mode foregrounds are all derived — the source publishes a
-    /// light background and nothing else.
+    /// light background and nothing else. The count chip is the theme's `blue`
+    /// `#7aa2f7`, the second hue everyone knows Tokyo Night by, deliberately not
+    /// the magenta `#bb9af7` — which is Dracula's accent to within a couple of
+    /// steps. Light takes the palette's own deep `blue0` `#3d59a1` so the numeral
+    /// can be white.
     case tokyoNight
 
     /// `rebelot/kanagawa.nvim` → `lua/kanagawa/colors.lua`. Dark is Wave, Light
@@ -119,7 +125,11 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// **Orange is removed from the note types**, project dots included, so the
     /// only orange on screen is the button (`surimiOrange`). Lotus's own
     /// `#f2ecbc` page is too yellow to carry a window, so the page and cards are
-    /// derived *above* the band and the band is the only saturated surface.
+    /// derived *above* the band and the band is the only saturated surface. The
+    /// count chip is `springGreen` `#98bb6c` — a cold second voice against a warm
+    /// accent, and the one Wave colour with enough chroma to read as a colour on
+    /// Lotus paper: `waveAqua2`, the first choice, measures 0.05 C, half of what
+    /// every other chip in the set carries.
     case kanagawa
 
     /// `hmseeb/dark-owl` → `theme/dark-owl.json`. Teal-navy grounds, violet
@@ -128,17 +138,24 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// The accent is the theme's own `button.background` at **full opacity**: the
     /// shipped `cc` alpha drops the white label under 4.5:1. Its light link is a
     /// deep jade rather than the theme's `#00ff9f`, which measures 1.4:1 on white.
+    /// The count chip is the coral `#f78c6c` — the theme's strings colour, and the
+    /// only one of its brights that is neither the violet action nor next to the
+    /// spring-green link.
     case darkOwl
 
     /// `rose-pine/palette`. Dark is main, Light is Dawn — plum and rose, on
     /// Dawn's pink-cream paper.
     ///
-    /// **A recorded exception to rule 2**: `love` (343°) and the blush Feedback
-    /// mark (2°) are 19° apart in Light and 17° in Dark, inside the 25° the rule
-    /// asks for. The palette is built on that pairing, the button is a saturated
-    /// mid-tone where the mark is a pale blush, and the two never sit adjacent.
-    /// `ThemePaletteTests` records it by name rather than relaxing the rule; do
-    /// not "fix" it.
+    /// It used to carry a recorded exception to the 25° rule — `love` at 343°
+    /// against a blush Feedback mark at 2° — which is moot now that the types are
+    /// one shared palette and that rule is gone. Worth keeping only for what it
+    /// showed: the pairing was fine on screen, because the button is a saturated
+    /// mid-tone where a mark is a pale blush, and the two never sit adjacent.
+    ///
+    /// The count chip is `gold`, and it is the **main** palette's `#f6c177` in both
+    /// halves rather than Dawn's own `#ea9d34`: Dawn's gold is a mid-tone that
+    /// would need a white numeral, which is the primary button's signature and the
+    /// one thing a chip must not borrow.
     case rosePine
 
     /// The original of the set, and now the theme the other five were built to
@@ -146,22 +163,29 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// rather than as a shade, which is the observation this whole set came from.
     /// Unchanged in structure, with two changes of its own.
     ///
-    /// **Pink and purple are swapped.** The accent is the lavender `#bd93f9` and
+    /// **Pink and purple are swapped.** The accent is the lavender `#bd93f9` —
+    /// **deepened to `#8359ba`, by request, so its button label can be white**: the
+    /// lavender itself is 2.41:1 under white, and it wore a dark plum label until
+    /// then. It is the one accent in the set deepened for the *label's* sake in
+    /// **both** appearances rather than only where the ground demanded it, and the
+    /// cost is that Dracula's button is no longer the palette's bright purple; the
+    /// `ring` still is in Dark, which is where that lavender survives. And
     /// Feedback takes the pink `#ff79c6`, because with Rosé Pine in the set a
     /// rose-pink button on a plum ground made two themes read as the same idea.
     /// The bright pink moves onto the **count chip**, where it works differently
     /// per appearance because it cannot carry both ways: a pink numeral on a
     /// recessed fill in Dark, and the reverse in Light — a pink *fill* under a
-    /// dark numeral, since bright pink as text on a pale band fails badly.
+    /// **white** numeral on the pink deepened to `#b02a72`, since bright pink as
+    /// text on a pale band fails badly and white on the pink itself is 2.39:1. That
+    /// construction is **the other five's now too** (see `Band.countFill`); this is
+    /// where it was found, and Dracula's own values are unchanged by the others
+    /// adopting it.
     ///
-    /// **A recorded exception to rule 4.** Its cyan Note `#8be9fd` and green
-    /// Staffing `#50fa7b` sit at one lightness in both appearances and collapse in
-    /// greyscale — the exact thing every other theme was re-levelled to avoid. It
-    /// keeps them because levelling four bright pastels is what would stop it
-    /// looking like Dracula, and because the mark is never the sole carrier: the
-    /// mono type label spells the type out beside it. If the exception is ever
-    /// rejected, the lever is deepening the cyan to `#4fc8e8` and leaving the
-    /// other three alone.
+    /// Its own note-type hues (`#8be9fd`, `#ffb86c`, `#ff79c6`, `#50fa7b`) are
+    /// gone with every other theme's — see the note-type section — which also
+    /// retires the greyscale-ladder exception they needed, since its cyan and its
+    /// green sat at one lightness. The pink survives where it counts: it is the
+    /// count chip's.
     case dracula
 
     var id: Self { self }
@@ -378,23 +402,40 @@ enum AppTheme: String, CaseIterable, Identifiable {
         }
     }
 
-    // MARK: Note-type palette
+    // MARK: Note-type colour
 
-    /// The colour a note type's **mark** draws in: its 3pt capsule before the
-    /// title, and its dot in the notes filter track. A graphic, so it is solved
-    /// at 3:1 — against both the card and the track, since the dot sits on the
-    /// band, and the track is the tighter of the two.
-    func typeMark(_ tint: Tint) -> Color { resolved.marks[tint] ?? tint.ink }
-
-    /// The colour a note type's **label** draws in — the small-caps name leading
-    /// the meta row. Text under 14px, so 4.5:1, which is why it is a separate
-    /// value from the mark rather than the same one twice: a label sits a few
-    /// points under the mark it belongs to, and that difference is exactly what
-    /// lets the mark stay bright enough to see.
-    ///
-    /// One value per appearance in Dark, where the palettes give a single tone and
-    /// mark and label share it.
-    func typeLabel(_ tint: Tint) -> Color { resolved.labels[tint] ?? tint.ink }
+    // **A note type's colour is not a theme value.** It is `Tint.ink` — the mark
+    // beside a title, the dot in the notes filter track and the small-caps label
+    // in the meta row, all in the one value, as they were before this file
+    // existed. `typeMark(_:)` and `typeLabel(_:)` are gone with the table behind
+    // them; call sites read `type.tint.ink`.
+    //
+    // That retires the plan's "its own note-type palette" rule and, with it, two
+    // more of its acceptance criteria, so here is the whole trade. What the
+    // per-theme palettes bought was four hues tuned to each band, and 6 × 4 × 2
+    // authored values to keep consistent. What they cost was more: the four types
+    // are the *same four* in every theme, so a user learning "blue is a Note"
+    // should not have them shift under a colour preference — and tuned to sit
+    // quietly beside a band, they read **muted** against the rest of the app's
+    // colour, which is how this was reported ("the notes colours are off in all
+    // themes; the ones for tasks stay vibrant and crisp"). A maintainer's call,
+    // taken knowing what goes with it:
+    //
+    // - **The 25° accent-vs-type-hue rule can no longer hold.** One palette against
+    //   six accents means some theme's accent lands on some type's hue, and two
+    //   do: Dark Owl's violet and Dracula's lavender both sit within a couple of
+    //   degrees of the purple a Feedback note wears. The rule's *point* — that
+    //   "action" reads as action — is carried by the accent being the only thing
+    //   that fills a pill, and by nothing else on a card wearing it.
+    // - **The greyscale ladder goes too.** The app's four tints don't
+    //   form one, and levelling them apart would mean re-authoring the palette
+    //   the whole app shares to solve a problem inside one card's meta row. The
+    //   type's name is spelled out beside its mark, which is what the ladder was
+    //   insurance for.
+    //
+    // What stays is the part that can fail silently, and it got *stricter*: the
+    // one palette is measured against **every theme's** card face and filter
+    // track rather than against the six it was authored for (see `Tint.ink`).
 
     // The picker needs no values of its own: its swatch draws `band.fill` and
     // `band.primary`, the dynamic pair the window itself uses, so it shows the
@@ -440,17 +481,46 @@ enum AppTheme: String, CaseIterable, Identifiable {
 struct Band {
     let fill: RGB
     let text: RGB
-    /// The count chip's fill: the theme's **accent at low alpha over the band**,
-    /// composited offline. It used to be white at 12%, a value with no opinion,
-    /// which left the one number in the band reading as chrome.
+    /// The count chip's fill: **a second hue from the theme's own palette**, and
+    /// the one place a theme spends a colour that is not its accent.
     ///
-    /// Two of the six do something else. **System** keeps a neutral chip, because
-    /// a theme whose claim is that it adds no colour cannot spend the accent here.
-    /// And **Dracula inverts per appearance**: its bright pink is the chip's
-    /// numeral on a recessed black fill in Dark, and the chip's *fill* under a
-    /// dark numeral in Light, since bright pink as text on a pale band fails
-    /// badly. Both directions are measured on the composited value rather than on
-    /// the raw fill, which is the check that caught the most defects in design.
+    /// It has been three things. White at 12% was a value with no opinion, which
+    /// left the one number in the band reading as chrome. The **accent** at low
+    /// alpha over the band fixed that on paper and not on screen: composited into
+    /// a pale band it came out a wash of the button beside it — `L` above 0.90 in
+    /// all four sourced themes — so the chip still read as chrome while Dracula's,
+    /// which was never a wash, read as the theme. So every sourced theme now does
+    /// what Dracula does: a **vivid** hue, taken from its palette and named in its
+    /// case (Tokyo Night's `blue`, Kanagawa's `springGreen`, Dark Owl's coral,
+    /// Rosé Pine's `gold`, Dracula's pink), and never the accent — the button owns
+    /// that, and a chip repeating it is what made the wash look like chrome.
+    ///
+    /// **The hue swaps roles per appearance**, because it cannot carry both ways:
+    /// in Light it is the chip's *fill*, since a hue bright enough to read as text
+    /// on a pale band does not exist in these palettes; in Dark it is the numeral
+    /// itself, on that hue at 20% over the band, composited offline so nothing
+    /// layers alpha at draw time — lightened in-hue only where the floor needs it,
+    /// which is Tokyo Night's blue and Kanagawa's green. Dracula's Dark fill is the
+    /// one that is *recessed* below its band rather than tinted above it; that is
+    /// its own value, kept.
+    ///
+    /// **The Light numeral is white, and the fill is deepened to carry it**, by
+    /// request — the bright hue under a near-black numeral was the first cut of
+    /// this, and it read muddy. White needs the fill at `L` ≈ 0.55 or below to
+    /// clear 4.5:1, so each one is the palette's own deep member of that hue where
+    /// it publishes one (Tokyo Night's `blue0` `#3d59a1`, verbatim) and the hue
+    /// deepened in oklch at constant chroma and hue where it doesn't (Kanagawa's
+    /// `lotusGreen` → `#637c42`, Dark Owl's coral → `#bb5638`, Rosé Pine's `gold`
+    /// → `#9b6b1a`, Dracula's pink → `#b02a72`, which is the same deepening the
+    /// plan derived for its light pink). It is the "deepen and invert to
+    /// white-on-deep" move Kanagawa's and Rosé Pine's primary buttons already
+    /// make, spent here on the chip; the cost is that a light chip reads heavier
+    /// than the bright pill it replaced, which is the trade that was asked for.
+    ///
+    /// **System keeps a neutral chip**, because a theme whose claim is that it adds
+    /// no colour cannot spend one here. Both directions are measured on the
+    /// composited value rather than on the raw fill, which is the check that caught
+    /// the most defects in design.
     let countFill: RGB
     let countText: RGB
     let primary: RGB
@@ -512,8 +582,6 @@ private struct Resolved {
     let titleText: Color
     let bodyText: Color
     let link: Color
-    let marks: [Tint: Color]
-    let labels: [Tint: Color]
 
     init(_ theme: AppTheme) {
         let tones = theme.tones
@@ -529,9 +597,6 @@ private struct Resolved {
         titleText = theme.writingTones?.title.color ?? Color(nsColor: .labelColor)
         bodyText = theme.writingTones?.body.color ?? Color(nsColor: .labelColor)
         link = theme.linkTones.color
-        let palette = theme.typePalette
-        marks = palette.mapValues(\.mark.color)
-        labels = palette.mapValues(\.label.color)
     }
 }
 
@@ -545,13 +610,6 @@ private struct Grounds {
     let window: DynamicRGB
     let card: DynamicRGB
     let border: DynamicRGB
-}
-
-/// One note type's two values: the mark it is drawn with and the label that
-/// names it. Separate because they carry different floors — see `typeLabel`.
-private struct TypeTone {
-    let mark: DynamicRGB
-    let label: DynamicRGB
 }
 
 /// A theme's title and body colours, for the one theme that names them.
@@ -598,7 +656,8 @@ struct DynamicRGB {
 private extension AppTheme {
     /// Generated from each palette's own values rather than typed by hand, and
     /// regenerate it the same way if a theme is added: the band, its text, the
-    /// hairline, the accent and the chip come from the source; the track and the
+    /// hairline, the accent and the chip's hue come from the source — the chip's
+    /// being a *second* palette colour, never the accent; the track and the
     /// raised segment are derived from the band's hue by the rules on `Band`; and
     /// the accent has to clear 4.5:1 under its label in both appearances — if it
     /// can't, deepen it and invert to white-on-deep, which is what Kanagawa's
@@ -613,7 +672,7 @@ private extension AppTheme {
         // the set's rule, 26% L at the band's hue, rather than `label`, so a column
         // heading reads as a heading in all six themes. The blues are `systemBlue`
         // **deepened**: as shipped it is ~4.0:1 under a white label. And the count
-        // chip is the one neutral one in the set, which is rule 6's exclusion.
+        // chip is the one neutral one in the set, which is rule 4's exclusion.
         case .system: Tones(
             light: Band(
                 fill: RGB(r: 0.949, g: 0.949, b: 0.969),
@@ -645,13 +704,15 @@ private extension AppTheme {
         // rather than the red — see the case. Light is derived throughout: the
         // source publishes a light *background* and nothing else. The light ring
         // is the palette's deepened jade, because the mint itself is 1.67:1 on a
-        // white card.
+        // white card. The chip is the `blue` in both halves at the palette's own two
+        // depths: `blue0` as the light fill, and `blue` lightened in-hue as the dark
+        // numeral — `#7aa2f7` itself is 4.04:1 on its own composited fill.
         case .tokyoNight: Tones(
             light: Band(
                 fill: RGB(r: 0.902, g: 0.906, b: 0.929),
                 text: RGB(r: 0.169, g: 0.188, b: 0.286),
-                countFill: RGB(r: 0.847, g: 0.949, b: 0.925),
-                countText: RGB(r: 0.082, g: 0.384, b: 0.329),
+                countFill: RGB(r: 0.239, g: 0.349, b: 0.631),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
                 primary: RGB(r: 0.451, g: 0.855, b: 0.792),
                 primaryLabel: RGB(r: 0.102, g: 0.106, b: 0.149),
                 ring: RGB(r: 0.122, g: 0.616, b: 0.537),
@@ -663,8 +724,8 @@ private extension AppTheme {
             dark: Band(
                 fill: RGB(r: 0.141, g: 0.157, b: 0.231),
                 text: RGB(r: 0.753, g: 0.792, b: 0.961),
-                countFill: RGB(r: 0.203, g: 0.296, b: 0.344),
-                countText: RGB(r: 0.604, g: 0.902, b: 0.847),
+                countFill: RGB(r: 0.209, g: 0.253, b: 0.379),
+                countText: RGB(r: 0.663, g: 0.757, b: 0.984),
                 primary: RGB(r: 0.451, g: 0.855, b: 0.792),
                 primaryLabel: RGB(r: 0.102, g: 0.106, b: 0.149),
                 ring: RGB(r: 0.451, g: 0.855, b: 0.792),
@@ -679,6 +740,10 @@ private extension AppTheme {
         // band in the set and read as a khaki slab rather than as warm paper. Hue
         // and lightness are the palette's; only the saturation is ours, and the
         // page and card were eased with it so the three grounds stay one family.
+        // The chip's green follows the halves the rest of the theme does: Wave's
+        // `springGreen` in Dark, lightened in-hue for the numeral since the palette
+        // has no lighter green; Lotus's `lotusGreen` in Light, deepened to `#637c42`
+        // so a white numeral clears the floor — `lotusGreen` itself is 3.91:1.
         // The Lotus accent is the orange **deepened to
         // carry a white label** — `surimiOrange` is 1.96:1 on Lotus paper, so
         // Light inverts to white-on-deep while Dark keeps the bright original
@@ -687,8 +752,8 @@ private extension AppTheme {
             light: Band(
                 fill: RGB(r: 0.878, g: 0.867, b: 0.773),
                 text: RGB(r: 0.329, g: 0.329, b: 0.392),
-                countFill: RGB(r: 0.941, g: 0.875, b: 0.784),
-                countText: RGB(r: 0.541, g: 0.310, b: 0.000),
+                countFill: RGB(r: 0.388, g: 0.488, b: 0.259),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
                 primary: RGB(r: 0.659, g: 0.345, b: 0.000),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.659, g: 0.345, b: 0.000),
@@ -700,8 +765,8 @@ private extension AppTheme {
             dark: Band(
                 fill: RGB(r: 0.212, g: 0.212, b: 0.275),
                 text: RGB(r: 0.863, g: 0.843, b: 0.729),
-                countFill: RGB(r: 0.369, g: 0.295, b: 0.300),
-                countText: RGB(r: 1.000, g: 0.788, b: 0.647),
+                countFill: RGB(r: 0.289, g: 0.316, b: 0.304),
+                countText: RGB(r: 0.690, g: 0.812, b: 0.541),
                 primary: RGB(r: 1.000, g: 0.627, b: 0.400),
                 primaryLabel: RGB(r: 0.122, g: 0.122, b: 0.157),
                 ring: RGB(r: 1.000, g: 0.627, b: 0.400),
@@ -714,13 +779,15 @@ private extension AppTheme {
         // plan's oklch spec at the same hue, since the source is a dark theme and
         // publishes no light half. The accent is the theme's own
         // `button.background` at **full opacity** — the shipped `cc` alpha drops
-        // the white label under 4.5:1 — and the dark ring is its lifted violet.
+        // the white label under 4.5:1 — and the dark ring is its lifted violet. The
+        // coral chip is verbatim as the dark numeral and deepened to `#bb5638` as
+        // the light fill, which is the same derivation the rest of its light half is.
         case .darkOwl: Tones(
             light: Band(
                 fill: RGB(r: 0.908, g: 0.956, b: 0.992),
                 text: RGB(r: 0.060, g: 0.147, b: 0.232),
-                countFill: RGB(r: 0.902, g: 0.863, b: 0.969),
-                countText: RGB(r: 0.357, g: 0.227, b: 0.620),
+                countFill: RGB(r: 0.734, g: 0.338, b: 0.219),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
                 primary: RGB(r: 0.494, g: 0.341, b: 0.761),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.494, g: 0.341, b: 0.761),
@@ -732,8 +799,8 @@ private extension AppTheme {
             dark: Band(
                 fill: RGB(r: 0.043, g: 0.161, b: 0.259),
                 text: RGB(r: 0.902, g: 0.929, b: 0.961),
-                countFill: RGB(r: 0.178, g: 0.215, b: 0.409),
-                countText: RGB(r: 0.769, g: 0.663, b: 0.941),
+                countFill: RGB(r: 0.228, g: 0.238, b: 0.292),
+                countText: RGB(r: 0.969, g: 0.549, b: 0.424),
                 primary: RGB(r: 0.494, g: 0.341, b: 0.761),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.604, g: 0.463, b: 0.910),
@@ -745,13 +812,15 @@ private extension AppTheme {
         // `overlay` / `base` / `surface` in both halves, verbatim. Dawn's accent is
         // `love` **deepened**: the original is 2.8:1 on Dawn's paper, so Light
         // takes a white label on a deeper rose while Dark keeps `love` itself
-        // under a near-black one.
+        // under a near-black one. The chip is `gold` — verbatim as the dark numeral,
+        // deepened to `#9b6b1a` as the light fill, Dawn publishing nothing darker in
+        // that hue.
         case .rosePine: Tones(
             light: Band(
                 fill: RGB(r: 0.949, g: 0.914, b: 0.882),
                 text: RGB(r: 0.271, g: 0.247, b: 0.388),
-                countFill: RGB(r: 0.961, g: 0.867, b: 0.890),
-                countText: RGB(r: 0.561, g: 0.267, b: 0.349),
+                countFill: RGB(r: 0.610, g: 0.419, b: 0.101),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
                 primary: RGB(r: 0.659, g: 0.333, b: 0.427),
                 primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.659, g: 0.333, b: 0.427),
@@ -763,8 +832,8 @@ private extension AppTheme {
             dark: Band(
                 fill: RGB(r: 0.149, g: 0.137, b: 0.227),
                 text: RGB(r: 0.878, g: 0.871, b: 0.957),
-                countFill: RGB(r: 0.319, g: 0.203, b: 0.303),
-                countText: RGB(r: 0.941, g: 0.639, b: 0.722),
+                countFill: RGB(r: 0.312, g: 0.261, b: 0.275),
+                countText: RGB(r: 0.965, g: 0.757, b: 0.467),
                 primary: RGB(r: 0.922, g: 0.435, b: 0.573),
                 primaryLabel: RGB(r: 0.169, g: 0.102, b: 0.141),
                 ring: RGB(r: 0.922, g: 0.435, b: 0.573),
@@ -773,8 +842,8 @@ private extension AppTheme {
                 segmentLabel: RGB(r: 0.827, g: 0.817, b: 0.937),
                 segmentFill: RGB(r: 0.904, g: 0.896, b: 1.000),
                 segmentLabelSelected: RGB(r: 0.149, g: 0.137, b: 0.227)))
-        // Unchanged from the theme's first appearance in the app apart from the two
-        // swaps in its case: the accent is the lavender rather than the pink, and
+        // Unchanged from the theme's first appearance in the app apart from what its
+        // case lists: the accent is the lavender **deepened** for a white label, and
         // the pink moves onto the count chip — a numeral on a recessed black fill
         // in Dark, the chip's own fill under a dark numeral in Light. The light
         // ring is the lavender deepened, the one ring in the set this
@@ -783,10 +852,10 @@ private extension AppTheme {
             light: Band(
                 fill: RGB(r: 0.941, g: 0.910, b: 0.992),
                 text: RGB(r: 0.235, g: 0.165, b: 0.388),
-                countFill: RGB(r: 1.000, g: 0.475, b: 0.776),
-                countText: RGB(r: 0.290, g: 0.122, b: 0.235),
-                primary: RGB(r: 0.741, g: 0.576, b: 0.976),
-                primaryLabel: RGB(r: 0.290, g: 0.122, b: 0.235),
+                countFill: RGB(r: 0.690, g: 0.165, b: 0.447),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
+                primary: RGB(r: 0.515, g: 0.350, b: 0.729),
+                primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.661, g: 0.497, b: 0.890),
                 trackFill: RGB(r: 0.911, g: 0.880, b: 0.961),
                 trackHighlight: false,
@@ -798,8 +867,8 @@ private extension AppTheme {
                 text: RGB(r: 0.973, g: 0.973, b: 0.949),
                 countFill: RGB(r: 0.187, g: 0.151, b: 0.302),
                 countText: RGB(r: 1.000, g: 0.475, b: 0.776),
-                primary: RGB(r: 0.741, g: 0.576, b: 0.976),
-                primaryLabel: RGB(r: 0.169, g: 0.129, b: 0.212),
+                primary: RGB(r: 0.515, g: 0.350, b: 0.729),
+                primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
                 ring: RGB(r: 0.741, g: 0.576, b: 0.976),
                 trackFill: RGB(r: 0.305, g: 0.266, b: 0.432),
                 trackHighlight: true,
@@ -924,7 +993,7 @@ private extension AppTheme {
     }
 
     /// The title and body colours, for the **one** theme that is a text palette
-    /// by origin. `nil` everywhere else, and that is rule 5 rather than an
+    /// by origin. `nil` everywhere else, and that is rule 3 rather than an
     /// omission: five of the six leave the writing on `labelColor`, so a card's
     /// paragraph reads at the system's own contrast whatever theme is on. The
     /// other five palettes *do* publish a title and a body — this is the one
@@ -944,220 +1013,6 @@ private extension AppTheme {
                 light: RGB(r: 0.275, g: 0.239, b: 0.388),
                 dark: RGB(r: 0.812, g: 0.824, b: 0.878)))
         default: nil
-        }
-    }
-
-    /// The four note types' marks and labels, per theme — rule 3, and the part
-    /// that costs the most rows for the least code.
-    ///
-    /// Keyed by **`Tint`**, not by note-type id, and that is what makes it work
-    /// with a user-extensible list of types: the four defaults wear blue, yellow,
-    /// purple and green (Note, Meeting, Feedback, Staffing), so a theme overrides
-    /// those four and a custom type on any other tint falls through to
-    /// `Tint.ink`, the app's own solved foreground. A table keyed by the four
-    /// built-in ids would have left a custom type with no themed mark at all —
-    /// and a type whose tint the user *changed* would have kept a colour naming
-    /// the type it no longer matches.
-    ///
-    /// Each set is read from its palette's own syntax colours — the source and the
-    /// file are named on each `case` above — then held to two rules. **No mark's
-    /// hue sits within 25° of the theme's accent** (rule 2, automated by
-    /// `ThemePaletteTests`), which is what keeps "action" legible as action: it
-    /// is why Kanagawa has no orange type, why Tokyo Night's Staffing is a
-    /// yellow-green rather than a mint, and why Dracula's Feedback is the pink
-    /// now that the lavender is the button. And **the four are re-levelled into a
-    /// lightness ladder** (rule 4), because every source palette puts three or
-    /// four of its hues at one lightness and they collapse in greyscale; the
-    /// worst gap in the set is 0.03 of oklch lightness, and Dracula is the one
-    /// documented exception.
-    ///
-    /// Two kinds of value here are ours rather than the palette's, and both are
-    /// named where they occur. **Light labels** are a step under their mark
-    /// (Kanagawa's are derived outright, since Lotus publishes one value per
-    /// hue). And the **Increase Contrast variants** are derived, not solved:
-    /// ±8.5 points of lightness at the same hue, stepped further only where that
-    /// didn't reach 7:1 on the card. Stepping lightness is the one move that
-    /// can't change which colour a type *is*.
-    var typePalette: [Tint: TypeTone] {
-        switch self {
-        // The system's teal / orange / purple / green, **deepened into rule 4's
-        // ladder**: as shipped they resolve to nearly one lightness. The dark
-        // Feedback purple is a point brighter than `systemPurple` — verbatim it is
-        // 2.89:1 as a dot on the dark filter track, and a dot is held to 3:1.
-        case .system: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.051, g: 0.263, b: 0.318), dark: RGB(r: 0.541, g: 0.871, b: 1.000),
-                                 lightHC: RGB(r: 0.000, g: 0.173, b: 0.216), darkHC: RGB(r: 0.831, g: 0.950, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.039, g: 0.212, b: 0.255), dark: RGB(r: 0.541, g: 0.871, b: 1.000),
-                                  lightHC: RGB(r: 0.000, g: 0.125, b: 0.158), darkHC: RGB(r: 0.831, g: 0.950, b: 1.000))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.659, g: 0.373, b: 0.000), dark: RGB(r: 0.878, g: 0.541, b: 0.031),
-                                 lightHC: RGB(r: 0.525, g: 0.293, b: 0.000), darkHC: RGB(r: 0.993, g: 0.647, b: 0.226)),
-                label: DynamicRGB(light: RGB(r: 0.561, g: 0.314, b: 0.000), dark: RGB(r: 0.878, g: 0.541, b: 0.031),
-                                  lightHC: RGB(r: 0.432, g: 0.236, b: 0.000), darkHC: RGB(r: 0.993, g: 0.647, b: 0.226))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.490, g: 0.165, b: 0.659), dark: RGB(r: 0.768, g: 0.373, b: 0.969),
-                                 lightHC: RGB(r: 0.392, g: 0.000, b: 0.551), darkHC: RGB(r: 0.837, g: 0.545, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.420, g: 0.137, b: 0.569), dark: RGB(r: 0.768, g: 0.373, b: 0.969),
-                                  lightHC: RGB(r: 0.322, g: 0.000, b: 0.458), darkHC: RGB(r: 0.837, g: 0.545, b: 1.000))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.078, g: 0.329, b: 0.122), dark: RGB(r: 0.188, g: 0.820, b: 0.345),
-                                 lightHC: RGB(r: 0.000, g: 0.233, b: 0.051), darkHC: RGB(r: 0.338, g: 0.932, b: 0.453)),
-                label: DynamicRGB(light: RGB(r: 0.059, g: 0.247, b: 0.094), dark: RGB(r: 0.188, g: 0.820, b: 0.345),
-                                  lightHC: RGB(r: 0.000, g: 0.156, b: 0.029), darkHC: RGB(r: 0.338, g: 0.932, b: 0.453))),
-        ]
-        // Tokyo Night's blue / orange / purple / green, with Staffing kept a
-        // yellow-green rather than the palette's mint so it can't be read as the
-        // button (rule 2).
-        case .tokyoNight: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.122, g: 0.310, b: 0.659), dark: RGB(r: 0.416, g: 0.565, b: 0.902),
-                                 lightHC: RGB(r: 0.019, g: 0.210, b: 0.551), darkHC: RGB(r: 0.523, g: 0.671, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.102, g: 0.259, b: 0.565), dark: RGB(r: 0.416, g: 0.565, b: 0.902),
-                                  lightHC: RGB(r: 0.011, g: 0.161, b: 0.460), darkHC: RGB(r: 0.523, g: 0.671, b: 1.000))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.698, g: 0.376, b: 0.094), dark: RGB(r: 1.000, g: 0.671, b: 0.471),
-                                 lightHC: RGB(r: 0.573, g: 0.290, b: 0.000), darkHC: RGB(r: 1.000, g: 0.826, b: 0.726)),
-                label: DynamicRGB(light: RGB(r: 0.604, g: 0.325, b: 0.075), dark: RGB(r: 1.000, g: 0.671, b: 0.471),
-                                  lightHC: RGB(r: 0.481, g: 0.242, b: 0.000), darkHC: RGB(r: 1.000, g: 0.826, b: 0.726))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.306, g: 0.184, b: 0.471), dark: RGB(r: 0.702, g: 0.580, b: 0.949),
-                                 lightHC: RGB(r: 0.219, g: 0.088, b: 0.370), darkHC: RGB(r: 0.797, g: 0.706, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.247, g: 0.145, b: 0.388), dark: RGB(r: 0.702, g: 0.580, b: 0.949),
-                                  lightHC: RGB(r: 0.164, g: 0.051, b: 0.292), darkHC: RGB(r: 0.797, g: 0.706, b: 1.000))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.255, g: 0.427, b: 0.122), dark: RGB(r: 0.765, g: 0.906, b: 0.608),
-                                 lightHC: RGB(r: 0.167, g: 0.330, b: 0.000), darkHC: RGB(r: 0.902, g: 1.000, b: 0.800)),
-                label: DynamicRGB(light: RGB(r: 0.216, g: 0.361, b: 0.102), dark: RGB(r: 0.765, g: 0.906, b: 0.608),
-                                  lightHC: RGB(r: 0.132, g: 0.267, b: 0.000), darkHC: RGB(r: 0.902, g: 1.000, b: 0.800))),
-        ]
-        // Lotus and Wave's own hues, and the one palette here with **no orange**:
-        // that belongs to the button alone. Meeting is `sakuraPink` in Dark, which
-        // the plan asks for verbatim and which lands at 2.97:1 as a dot on
-        // Kanagawa's track — the lightest dark band in the set — so it is stepped
-        // one point of lightness to clear 3:1. The light labels are derived rather
-        // than sourced: Lotus publishes one value per hue, and a label carries the
-        // tighter floor.
-        case .kanagawa: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.322, g: 0.439, b: 0.624), dark: RGB(r: 0.576, g: 0.682, b: 0.894),
-                                 lightHC: RGB(r: 0.230, g: 0.343, b: 0.520), darkHC: RGB(r: 0.683, g: 0.789, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.257, g: 0.371, b: 0.550), dark: RGB(r: 0.576, g: 0.682, b: 0.894),
-                                  lightHC: RGB(r: 0.168, g: 0.277, b: 0.449), darkHC: RGB(r: 0.683, g: 0.789, b: 1.000))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.490, g: 0.188, b: 0.286), dark: RGB(r: 0.830, g: 0.500, b: 0.606),
-                                 lightHC: RGB(r: 0.386, g: 0.090, b: 0.199), darkHC: RGB(r: 0.943, g: 0.603, b: 0.710)),
-                label: DynamicRGB(light: RGB(r: 0.416, g: 0.120, b: 0.224), dark: RGB(r: 0.830, g: 0.500, b: 0.606),
-                                  lightHC: RGB(r: 0.314, g: 0.009, b: 0.141), darkHC: RGB(r: 0.964, g: 0.621, b: 0.728))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.275, g: 0.196, b: 0.373), dark: RGB(r: 0.788, g: 0.722, b: 0.894),
-                                 lightHC: RGB(r: 0.189, g: 0.110, b: 0.278), darkHC: RGB(r: 0.895, g: 0.830, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.213, g: 0.135, b: 0.306), dark: RGB(r: 0.788, g: 0.722, b: 0.894),
-                                  lightHC: RGB(r: 0.132, g: 0.050, b: 0.214), darkHC: RGB(r: 0.895, g: 0.830, b: 1.000))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.337, g: 0.420, b: 0.200), dark: RGB(r: 0.812, g: 0.894, b: 0.706),
-                                 lightHC: RGB(r: 0.247, g: 0.325, b: 0.103), darkHC: RGB(r: 0.928, g: 1.000, b: 0.838)),
-                label: DynamicRGB(light: RGB(r: 0.273, g: 0.352, b: 0.132), dark: RGB(r: 0.812, g: 0.894, b: 0.706),
-                                  lightHC: RGB(r: 0.187, g: 0.260, b: 0.024), darkHC: RGB(r: 0.928, g: 1.000, b: 0.838))),
-        ]
-        // Dark Owl's syntax colours: functions, types, variables, operators.
-        case .darkOwl: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.071, g: 0.290, b: 0.541), dark: RGB(r: 0.333, g: 0.647, b: 0.910),
-                                 lightHC: RGB(r: 0.000, g: 0.200, b: 0.415), darkHC: RGB(r: 0.469, g: 0.753, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.063, g: 0.239, b: 0.439), dark: RGB(r: 0.333, g: 0.647, b: 0.910),
-                                  lightHC: RGB(r: 0.000, g: 0.152, b: 0.321), darkHC: RGB(r: 0.469, g: 0.753, b: 1.000))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.541, g: 0.361, b: 0.020), dark: RGB(r: 0.933, g: 0.694, b: 0.290),
-                                 lightHC: RGB(r: 0.422, g: 0.276, b: 0.000), darkHC: RGB(r: 1.000, g: 0.817, b: 0.538)),
-                label: DynamicRGB(light: RGB(r: 0.435, g: 0.290, b: 0.016), dark: RGB(r: 0.933, g: 0.694, b: 0.290),
-                                  lightHC: RGB(r: 0.321, g: 0.208, b: 0.000), darkHC: RGB(r: 1.000, g: 0.817, b: 0.538))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.431, g: 0.071, b: 0.149), dark: RGB(r: 0.937, g: 0.322, b: 0.400),
-                                 lightHC: RGB(r: 0.306, g: 0.000, b: 0.081), darkHC: RGB(r: 1.000, g: 0.490, b: 0.530)),
-                label: DynamicRGB(light: RGB(r: 0.361, g: 0.059, b: 0.122), dark: RGB(r: 0.937, g: 0.322, b: 0.400),
-                                  lightHC: RGB(r: 0.240, g: 0.000, b: 0.056), darkHC: RGB(r: 1.000, g: 0.526, b: 0.559))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.051, g: 0.498, b: 0.612), dark: RGB(r: 0.490, g: 0.933, b: 1.000),
-                                 lightHC: RGB(r: 0.000, g: 0.395, b: 0.490), darkHC: RGB(r: 0.896, g: 0.986, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.039, g: 0.420, b: 0.518), dark: RGB(r: 0.490, g: 0.933, b: 1.000),
-                                  lightHC: RGB(r: 0.000, g: 0.320, b: 0.399), darkHC: RGB(r: 0.896, g: 0.986, b: 1.000))),
-        ]
-        // `foam` / `gold` / `rose` / `iris`. Rose against `love` is the recorded
-        // 25-degree exception — see the case.
-        case .rosePine: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.137, g: 0.412, b: 0.478), dark: RGB(r: 0.557, g: 0.765, b: 0.804),
-                                 lightHC: RGB(r: 0.000, g: 0.316, b: 0.380), darkHC: RGB(r: 0.662, g: 0.873, b: 0.913)),
-                label: DynamicRGB(light: RGB(r: 0.110, g: 0.357, b: 0.416), dark: RGB(r: 0.557, g: 0.765, b: 0.804),
-                                  lightHC: RGB(r: 0.000, g: 0.263, b: 0.317), darkHC: RGB(r: 0.662, g: 0.873, b: 0.913))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.604, g: 0.416, b: 0.071), dark: RGB(r: 0.984, g: 0.847, b: 0.600),
-                                 lightHC: RGB(r: 0.487, g: 0.326, b: 0.000), darkHC: RGB(r: 1.000, g: 0.974, b: 0.929)),
-                label: DynamicRGB(light: RGB(r: 0.522, g: 0.349, b: 0.059), dark: RGB(r: 0.984, g: 0.847, b: 0.600),
-                                  lightHC: RGB(r: 0.407, g: 0.262, b: 0.000), darkHC: RGB(r: 1.000, g: 0.974, b: 0.929))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.420, g: 0.141, b: 0.149), dark: RGB(r: 0.867, g: 0.569, b: 0.561),
-                                 lightHC: RGB(r: 0.317, g: 0.038, b: 0.066), darkHC: RGB(r: 0.980, g: 0.673, b: 0.663)),
-                label: DynamicRGB(light: RGB(r: 0.353, g: 0.114, b: 0.122), dark: RGB(r: 0.867, g: 0.569, b: 0.561),
-                                  lightHC: RGB(r: 0.254, g: 0.016, b: 0.042), darkHC: RGB(r: 0.980, g: 0.673, b: 0.663))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.384, g: 0.286, b: 0.498), dark: RGB(r: 0.639, g: 0.510, b: 0.804),
-                                 lightHC: RGB(r: 0.293, g: 0.196, b: 0.399), darkHC: RGB(r: 0.744, g: 0.612, b: 0.915)),
-                label: DynamicRGB(light: RGB(r: 0.325, g: 0.239, b: 0.427), dark: RGB(r: 0.639, g: 0.510, b: 0.804),
-                                  lightHC: RGB(r: 0.237, g: 0.151, b: 0.331), darkHC: RGB(r: 0.744, g: 0.612, b: 0.915))),
-        ]
-        // The real Dracula hues in Dark. **Feedback is the pink now** — the swap
-        // that freed the lavender for the button — and in Light each is the
-        // palette darkened in oklch until it clears its floor on white, since the
-        // published light values land at 4.1–4.3:1: fine for a capsule, short for
-        // the label beside it.
-        case .dracula: [
-            // Note
-            .blue: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.090, g: 0.525, b: 0.612), dark: RGB(r: 0.545, g: 0.914, b: 0.992),
-                                 lightHC: RGB(r: 0.000, g: 0.422, b: 0.496), darkHC: RGB(r: 0.883, g: 0.978, b: 1.000)),
-                label: DynamicRGB(light: RGB(r: 0.086, g: 0.467, b: 0.541), dark: RGB(r: 0.545, g: 0.914, b: 0.992),
-                                  lightHC: RGB(r: 0.000, g: 0.365, b: 0.429), darkHC: RGB(r: 0.883, g: 0.978, b: 1.000))),
-            // Meeting
-            .yellow: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.706, g: 0.404, b: 0.039), dark: RGB(r: 1.000, g: 0.722, b: 0.424),
-                                 lightHC: RGB(r: 0.575, g: 0.320, b: 0.000), darkHC: RGB(r: 1.000, g: 0.869, b: 0.740)),
-                label: DynamicRGB(light: RGB(r: 0.639, g: 0.373, b: 0.031), dark: RGB(r: 1.000, g: 0.722, b: 0.424),
-                                  lightHC: RGB(r: 0.511, g: 0.290, b: 0.000), darkHC: RGB(r: 1.000, g: 0.869, b: 0.740))),
-            // Feedback
-            .purple: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.690, g: 0.165, b: 0.447), dark: RGB(r: 1.000, g: 0.475, b: 0.776),
-                                 lightHC: RGB(r: 0.574, g: 0.000, b: 0.352), darkHC: RGB(r: 1.000, g: 0.680, b: 0.849)),
-                label: DynamicRGB(light: RGB(r: 0.612, g: 0.141, b: 0.392), dark: RGB(r: 1.000, g: 0.475, b: 0.776),
-                                  lightHC: RGB(r: 0.495, g: 0.000, b: 0.299), darkHC: RGB(r: 1.000, g: 0.680, b: 0.849))),
-            // Staffing
-            .green: TypeTone(
-                mark: DynamicRGB(light: RGB(r: 0.102, g: 0.561, b: 0.290), dark: RGB(r: 0.314, g: 0.980, b: 0.482),
-                                 lightHC: RGB(r: 0.000, g: 0.453, b: 0.216), darkHC: RGB(r: 0.814, g: 1.000, b: 0.835)),
-                label: DynamicRGB(light: RGB(r: 0.094, g: 0.498, b: 0.259), dark: RGB(r: 0.314, g: 0.980, b: 0.482),
-                                  lightHC: RGB(r: 0.000, g: 0.393, b: 0.186), darkHC: RGB(r: 0.814, g: 1.000, b: 0.835))),
-        ]
         }
     }
 }

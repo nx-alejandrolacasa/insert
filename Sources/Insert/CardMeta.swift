@@ -20,10 +20,13 @@ import SwiftUI
 /// ground, so the title's contrast had to be argued per type instead of being
 /// the one thing on a card that never varies.
 ///
-/// Beside the title, the type's colour costs the words nothing: the mark is a
-/// graphic, so it is solved at 3:1 (`AppTheme.typeMark`) and can stay bright
-/// enough to see, where the label naming the same type in the meta row is text
-/// and takes a darker value of it (`AppTheme.typeLabel`).
+/// Beside the title, the type's colour costs the words nothing — and it is the
+/// type's own tint, shared by every theme rather than themed per band (see
+/// `AppTheme`'s note-type section for what that retires). **The mark is
+/// `Tint.accent` and the label is `Tint.ink`**, which is the graphic/text split
+/// `Tint` is built around: the mark is decoration next to a name, so it takes the
+/// vivid value every other dot in the app wears, while the word naming the type is
+/// text and takes the value solved at 4.5:1 on the card.
 ///
 /// Two details. The mark is **fixed at 16pt tall** and top-aligned to the title's
 /// first line rather than stretched to the text's height, so a title that wraps
@@ -80,14 +83,12 @@ struct TypeMarkTitle: View {
 struct TypeCapsLabel: View {
     let type: NoteType
 
-    @Environment(SettingsStore.self) private var settings
-
     var body: some View {
         Text(type.name.uppercased())
             .font(Mono.font(size: 10.5, weight: .semibold))
             // 0.06em at 10.5pt.
             .tracking(0.63)
-            .foregroundStyle(settings.theme.typeLabel(type.tint))
+            .foregroundStyle(type.tint.ink)
             .lineLimit(1)
             // The uppercase is presentation; VoiceOver should say "Meeting",
             // not spell out an initialism.
