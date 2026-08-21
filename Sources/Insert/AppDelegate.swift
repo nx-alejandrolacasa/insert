@@ -344,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The flag is set here rather than in the pre-pass so that a launch which never
     /// finds a window doesn't count — it'll be retried next time instead of leaving
     /// the sidebar wrong forever. `attemptsLeft` exists because a SwiftUI
-    /// `WindowGroup` window isn't guaranteed to exist yet at
+    /// scene's window isn't guaranteed to exist yet at
     /// `applicationDidFinishLaunching`.
     @MainActor
     private static func normalizeSidebarWidth(attemptsLeft: Int = 20) {

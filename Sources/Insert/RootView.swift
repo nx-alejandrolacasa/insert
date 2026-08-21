@@ -466,12 +466,26 @@ private final class WindowProbe: NSView {
     /// all three column titles on one baseline — and the traffic lights' own
     /// centre line, which the sidebar's buttons align to. The two differ: a
     /// unified toolbar makes the band taller than the lights' row.
+    ///
+    /// Measured now, written a turn later: this runs from `layout()` — the
+    /// window's own display cycle — and from `updateNSView`, a SwiftUI view
+    /// update, and an `@Observable` write belongs in neither. 0.14.2 crashed on
+    /// closing one of two open windows, and the trace is exactly that shape: an
+    /// observation mutation applied while an `NSHostingView` laid out, whose
+    /// invalidation reached `setNeedsUpdateConstraints` on a window mid-flush —
+    /// which macOS 26 answers with an NSException that `+[NSApplication
+    /// _crashOnException:]` makes fatal. That *this* write was the mutation in
+    /// that trace was not instrumented; it is the one write the app makes from a
+    /// layout pass, and with two windows both probes wrote this one shared
+    /// `AppState`. The deferral costs the labels one frame on the rare tick the
+    /// geometry actually changes; the comparisons stay synchronous, so the
+    /// common pass schedules nothing.
     func publishGeometry() {
         guard let window, let contentView = window.contentView else { return }
 
         let titlebar = contentView.bounds.height - window.contentLayoutRect.height
         if titlebar > 0, abs(titlebar - AppState.shared.titlebarHeight) > 0.5 {
-            AppState.shared.titlebarHeight = titlebar
+            Task { @MainActor in AppState.shared.titlebarHeight = titlebar }
         }
 
         guard let close = window.standardWindowButton(.closeButton) else { return }
@@ -483,8 +497,7 @@ private final class WindowProbe: NSView {
         // sidebar's buttons at the bottom of the window.
         guard centre > 0, centre < max(titlebar, Metrics.titlebarHeight) else { return }
         if abs(centre - AppState.shared.trafficLightCenterY) > 0.5 {
-            AppState.shared.trafficLightCenterY = centre
+            Task { @MainActor in AppState.shared.trafficLightCenterY = centre }
         }
-
     }
 }

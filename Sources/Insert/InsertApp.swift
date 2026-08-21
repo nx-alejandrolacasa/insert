@@ -16,7 +16,15 @@ struct InsertApp: App {
     @State private var clock = DayClock.shared
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        // A `Window`, not a `WindowGroup`: Insert is a one-window app — the
+        // stores are shared singletons, so two windows fight over one selection.
+        // A group nonetheless allowed a second instance, and 0.14.2 was seen
+        // running two windows of the same data, with closing one crashing the
+        // app (see `WindowProbe.publishGeometry`). How the second window came to
+        // exist wasn't established — state restoration after a crash and
+        // File → New Window are both routes a group leaves open. A `Window`
+        // scene is one instance by construction, so it closes every such route.
+        Window("Insert", id: "main") {
             RootView()
                 .environment(library)
                 .environment(appState)
