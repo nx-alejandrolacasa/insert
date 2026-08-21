@@ -25,7 +25,13 @@ Everything is saved as **plain Markdown** in a folder you choose, so your data s
 
 ## Download
 
-Grab the latest build from the
+With Homebrew:
+
+```sh
+brew install nx-alejandrolacasa/tap/insert
+```
+
+Or grab the latest build from the
 **[Releases page](https://github.com/nx-alejandrolacasa/insert/releases/latest)**.
 
 > These builds aren't notarized by Apple, so Gatekeeper blocks them on first
