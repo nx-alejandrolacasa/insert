@@ -516,6 +516,25 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   layout — out of the interval the peek lives in. Whether those writes contributed
   at all is untested; the guard costs nothing either way. Both now run from one
   `configureSplitViews()`, so the hot path walks for the split view once.
+- **The main scene is a `Window`, not a `WindowGroup`, and `WindowProbe` defers
+  its writes.** 0.14.2 was seen running **two** windows of the same data, and
+  closing one crashed the app — an NSException from
+  `_postWindowNeedsUpdateConstraints` that `+[NSApplication _crashOnException:]`
+  made fatal, thrown when an observation mutation applied during an
+  `NSHostingView`'s layout invalidated a window mid-display-cycle. Two facts, two
+  fixes. Insert is a one-window app (the stores are shared singletons, so two
+  windows fight over one selection), and a `WindowGroup` still allowed a second
+  instance — so the scene is a **`Window`**, one instance by construction, which
+  closes every route to a duplicate at once; how the second window came to exist
+  (state restoration after a crash, or File → New Window) was not established.
+  And `WindowProbe.publishGeometry()` was the app's one `@Observable` write made
+  *from a layout pass* — `AppState.shared.titlebarHeight` /
+  `trafficLightCenterY`, written from `layout()` and `updateNSView`, and with two
+  windows both probes wrote that one shared `AppState` — so the writes are now
+  **deferred a main-actor turn** while the change comparisons stay synchronous,
+  meaning the common pass schedules nothing and the rare change lands one frame
+  late. That this write was the mutation in the trace was not instrumented —
+  don't repeat it as fact; the write-during-layout was a violation regardless.
 - **The toolbar's leading side is the show button and AppKit's own title, and
   nothing else.** A project icon sat between them from an earlier design and was
   **removed**, along with every attempt to space it: the whole episode is kept
@@ -778,7 +797,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   cuts read as one gesture. The line is laid out at its natural width
   (`fixedSize`), clipped, and masked; the fade appears only when that width
   measurably exceeds the box's, because a fade over a line that fits would
-  promise more where there isn't any. How many lines a row previews is the
+  promise more where there isn't any. The containing frame's **`minWidth: 0`
+  is load-bearing**: a `frame(maxWidth:)` with no minimum is "no smaller than
+  its child", so without it the `fixedSize`d line's natural width became the
+  whole card's *minimum* — a task whose first line outmeasured the column blew
+  its island past the window edge, centered, with the checkbox pushed
+  off-screen (measured: a 200pt proposal answered 370pt). Pinned by
+  `CollapsibleLayoutTests`. How many lines a row previews is the
   "Preview lines" setting — the folding is `CollapsibleMarkdown`, shared with
   the note card; see the notes bullet for the whole design.
   **A task doesn't move while you're looking at it either**, the notes column's

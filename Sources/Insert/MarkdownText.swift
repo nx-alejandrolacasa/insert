@@ -632,6 +632,13 @@ struct CollapsibleMarkdown: View {
     /// `**Ship it**` as asterisks. Laid out at its natural width so a line
     /// longer than the row overflows into the clip instead of truncating — the
     /// fade is the truncation mark, never an ellipsis.
+    ///
+    /// The frame's `minWidth: 0` is load-bearing: a `frame(maxWidth:)` with no
+    /// minimum is "no smaller than its child", so the `fixedSize`d line's
+    /// natural width became the whole card's minimum — a task whose first line
+    /// outmeasured the column blew the island past the window edge and pushed
+    /// the checkbox off-screen. With an explicit 0 the frame takes the proposed
+    /// width and the long line overflows into the clip, which is the design.
     private var teaser: some View {
         MarkdownText.inline(MarkdownParser.lead(markdown), in: nsFont)
             .font(Font(nsFont))
@@ -640,7 +647,7 @@ struct CollapsibleMarkdown: View {
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserWidth = $0 }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserBoxWidth = $0 }
             .clipped()
             .mask(teaserFade)
