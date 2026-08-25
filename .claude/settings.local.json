@@ -25,7 +25,10 @@
       "Bash(sed -i '' 's/@State private var assigned: \\\\[String\\\\] = \\\\[\\\\]/@State private var assigned: [UUID] = []/' Tests/InsertTests/TmpInsetTests.swift)",
       "Bash(swift test *)",
       "Bash(log show *)",
-      "Bash(/usr/bin/log show *)"
+      "Bash(/usr/bin/log show *)",
+      "WebFetch(domain:release-assets.githubusercontent.com)",
+      "WebFetch(domain:results-receiver.actions.githubusercontent.com)",
+      "Bash(XDG_CACHE_HOME=__TRACKED_VAR__ gh run view 32483117187 --log)"
     ]
   },
   "outputStyle": "Concise & Clear"
