@@ -676,14 +676,15 @@ private struct NoteCardView: View {
             // it — a menu item's shortcut is live for as long as the item's view
             // is, so every card on screen would claim ⌘C at once and take it off
             // the text selection in whichever card is open.
+            let copyText = MarkdownFiles.copyText(draft)
             Button {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
-                pasteboard.setString(MarkdownFiles.copyText(draft), forType: .string)
+                pasteboard.setString(copyText, forType: .string)
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
-            .disabled(MarkdownFiles.copyText(draft).isEmpty)
+            .disabled(copyText.isEmpty)
             Button(role: .destructive) {
                 saveTask?.cancel()
                 if isEditing { appState.selectedNoteID = nil }

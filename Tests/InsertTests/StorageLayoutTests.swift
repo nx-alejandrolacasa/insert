@@ -122,6 +122,9 @@ final class StorageLayoutTests: XCTestCase {
         var touched = resident
         touched.body = "edited in place"
         library.updateNote(touched)
+        // Writes land on a serial background queue; drain it before reading the
+        // disk back. Same at every disk assertion below.
+        library.flushDiskWrites()
         let after = library.notes.first { $0.id == resident.id }!
         check("file still there", fm.fileExists(atPath: after.fileURL!.path), true)
         check("and holds the edit",
@@ -134,6 +137,7 @@ final class StorageLayoutTests: XCTestCase {
         let oldURL = renamed.fileURL!
         renamed.title = "A completely different title"
         library.updateNote(renamed)
+        library.flushDiskWrites()
         let moved = library.notes.first { $0.id == renamed.id }!
         check("new filename", moved.fileURL!.lastPathComponent.hasPrefix("a-completely"), true)
         check("old file gone", fm.fileExists(atPath: oldURL.path), false)
@@ -142,6 +146,7 @@ final class StorageLayoutTests: XCTestCase {
         print("\n— toggling done moves the file —")
         let pending = library.tasks.first { !$0.done }!
         library.toggleTask(id: pending.id)
+        library.flushDiskWrites()
         let ticked = library.tasks.first { $0.id == pending.id }!
         check("now under Done/",
               ticked.fileURL!.deletingLastPathComponent().lastPathComponent, "Done")
@@ -156,12 +161,14 @@ final class StorageLayoutTests: XCTestCase {
         print("\n— the retention purge —")
         library.setRoot(root)
         check("purged", library.purgeCompletedTasks(retention: .month, now: now), 20)
+        library.flushDiskWrites()
         check("Tasks/Done/ on disk", mdCount(library.tasksDoneDir), 10)
         check("tasks left in memory", library.tasks.count, 20)
 
         print("\n— deleting a project unassigns it everywhere —")
         library.setRoot(root)
         library.deleteProject(id: projectB)
+        library.flushDiskWrites()
         check("no note still holds Beta",
               library.notes.contains { $0.projectIDs.contains(projectB) }, false)
         // And on disk, not merely in the index.

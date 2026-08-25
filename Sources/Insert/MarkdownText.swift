@@ -176,15 +176,30 @@ struct MarkdownText: View {
         return Text("\(result)\(inlineFragment(String(rest), in: font))")
     }
 
+    /// Memoised like `parse`, and for the same reason: `AttributedString`'s
+    /// Markdown initialiser spins up Foundation's parser per call, and this runs
+    /// once per block, per card, per render. The font is part of the key because
+    /// the italic pass bakes it into the result.
     private static func inlineFragment(_ text: String, in font: NSFont) -> Text {
-        if let attr = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            return Text(italicised(attr, in: font))
+        let key = InlineKey(text: text, font: font.fontName, size: font.pointSize)
+        if let attr = inlines.value(for: key, make: {
+            (try? AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )).map { italicised($0, in: font) }
+        }) {
+            return Text(attr)
         }
         return Text(text)
     }
+
+    private struct InlineKey: Hashable {
+        let text: String
+        let font: String
+        let size: CGFloat
+    }
+
+    private static let inlines = MemoCache<InlineKey, AttributedString?>(limit: 1024)
 
     /// Gives every *italic* run an explicit font, because SwiftUI resolving the
     /// emphasis itself is not enough: a design with no italic face falls back to
@@ -283,7 +298,19 @@ enum MarkdownParser {
         case rule
     }
 
+    /// Memoised on the whole source, because this runs on the render path: every
+    /// visible card parses its body per body evaluation (a collapsed teaser
+    /// twice — once for `lead`, once for the hidden measuring proxy), so a
+    /// column resize or an `@Observable` write was re-parsing every card on
+    /// screen per frame. Bodies being edited don't churn the cache — the cards
+    /// only show this view outside edit mode.
     static func parse(_ text: String) -> [Block] {
+        parsed.value(for: text) { parseUncached(text) }
+    }
+
+    private static let parsed = MemoCache<String, [Block]>(limit: 512)
+
+    private static func parseUncached(_ text: String) -> [Block] {
         var blocks: [Block] = []
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         var i = 0
@@ -586,9 +613,25 @@ struct CollapsibleMarkdown: View {
         // box, and top-aligning the boxes sat it below the line of text it
         // belongs to — `centredOnTextCap()` puts its centre on the first line's
         // cap height instead.
+        //
+        // The chevron's slot is held open whenever the body *can* fold, visible
+        // or not, so the content's width never depends on whether the chevron is
+        // showing. Structurally (`if showsChevron`) it fed back into its own
+        // condition: adding the chevron narrows the content, which wraps taller,
+        // which is what `collapsible` is measured from — and a body whose render
+        // sat within a chevron's width of the preview cap had no fixed point, so
+        // the chevron flickered in and out while the layout re-ran, re-parsing
+        // the card each cycle. The cost is the slot's width on every collapsed
+        // first line, chevron or not — a fade that starts a chevron earlier, on
+        // the axis the ⋯ menu already owns.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             content
-            if showsChevron { chevron }
+            if previewLines != nil {
+                chevron
+                    .opacity(showsChevron ? 1 : 0)
+                    .allowsHitTesting(showsChevron)
+                    .accessibilityHidden(!showsChevron)
+            }
         }
     }
 

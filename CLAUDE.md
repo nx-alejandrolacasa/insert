@@ -99,6 +99,8 @@ Sources/Insert/
   Frontmatter.swift           YAML-subset frontmatter reader/writer + date coding
   MarkdownFiles.swift         model <-> Markdown + filename conventions
   DirectoryWatcher.swift      debounced FS watcher (external edits)
+  MemoCache.swift             locked memo for immutable derived values (resolved
+                              fonts, parsed Markdown, relative-day labels)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
   TaskReminder.swift          the once-a-day "N tasks for today" notification
   DayClock.swift              today, as observable state, so date labels age
@@ -585,7 +587,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `Projects.md`'s line order *is* that order, so there is no sort control and
   nothing to persist beyond the file the list already lives in. (`lastUsed` is
   still recorded per project, and nothing reads it — it outlived the "Latest used"
-  sort it was added for.)
+  sort it was added for. Only creation and selection bump it now: the save
+  debounce stopped doing so in the August 2026 freeze pass, which is where the
+  per-save `Projects.md` rewrites went.)
   **The drag is a `DragGesture`, and both of the platform's own ways of doing it
   were observed not to work here.** `ForEach.onMove` gives an AppKit reorder for
   free and no row could be picked up; `.draggable` per row plus `.dropDestination`
@@ -1545,6 +1549,60 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   The lesson generalises — the apparatus was also paying its own per-record costs,
   normalising a path per file to track what was loaded, to avoid work that cost less
   than the accounting.
+- **The August 2026 freeze pass — writes off the main thread, derived values
+  memoised.** Intermittent UI freezes were reported on a small library, which rules
+  out load size; an audit found the stalls' candidates in the *steady state*, and
+  this pass removed them. No single cause was confirmed by a trace — what follows
+  is what the code demonstrably did per event or per render, all of it now fixed:
+  - **Disk writes are queued, not inlined.** `Library.write`/`remove`/`trash` land
+    on one **serial background queue** (`diskQueue`) instead of the main actor. A
+    debounced save was an atomic write (temp file + rename) between one frame and
+    the next, into a root that defaults to `~/Documents` — where iCloud's
+    "Desktop & Documents" sync can hold a rename arbitrarily long. Serial, so the
+    order the main actor decided is the order the disk sees, which is what keeps
+    `persistNote`'s write-then-unlink safe. Everything that reads the folders back
+    **drains the queue first** — `reloadAll`, `moveRoot`,
+    `applicationWillTerminate`, and `StorageLayoutTests` before each on-disk
+    assertion (`flushDiskWrites()`). Don't add a new read-back without a drain.
+  - **A save no longer touches `Projects.md`.** `updateNote`/`updateTask` ran
+    `touchProject` per assigned project, per ~0.4s debounce — each one rewriting
+    the whole projects file *and* invalidating every view of `library.projects`,
+    for a `lastUsed` nothing reads. Creation and sidebar selection still record it.
+  - **`Tint`'s five roles are materialised once** (`TintPalette`). They were
+    computed properties building a fresh dynamic `NSColor` per access — and two of
+    those never compare equal, so any card holding one could never be skipped by
+    SwiftUI's diffing. Same move `Stone`'s `static let`s and `AppTheme`'s resolved
+    table already made; appearance and Increase Contrast behave identically since
+    the providers still resolve per appearance.
+  - **Font resolution is memoised** (`MemoCache` in `Card`, `BundledFonts`,
+    `Card.italic`): a descriptor match per card per render, and per *event* in
+    `restyleWindowTitle`, is now a dictionary hit. The cache key includes the
+    typeface, so a Settings change needs no invalidation.
+  - **Markdown is parsed once per distinct source** — `MarkdownParser.parse` and
+    the per-block `AttributedString(markdown:)` are memoised. Every visible card
+    re-parsed per body evaluation (a collapsed teaser twice: `lead` plus the
+    hidden measuring proxy), which multiplied every other invalidation.
+  - **`DueFormat` builds one `RelativeDateTimeFormatter` per day-count**, not per
+    call — it ran twice per due-soon task per render, the `DateCoding`
+    formatter-per-call lesson on the render path. The *strings* are cached (eight
+    of them), which is what stays Sendable-clean.
+  - **The column-divider drag commits on release.** Mid-drag the split lives in
+    `RootView.liveSplit` (`@State`); writing the `@AppStorage` per pointer event
+    hit `UserDefaults` at pointer rate. The accessibility actions still write the
+    stored value directly — they are discrete steps.
+  - **`configureSplitViews` stopped walking windows that can't match.**
+    `splitView(in:)` visits *every* view of a window with no split view before
+    answering nil, per `applicationDidUpdate` tick — the Settings form, the
+    menu-bar extra, every popover. Now gated to toolbar windows, Settings excluded
+    by name, and the found split view remembered weakly per window
+    (validated by `cached.window === window`, so a torn-down one is re-found).
+  - **`CollapsibleMarkdown` holds the chevron's slot open** whenever the body can
+    fold, invisible when unearned, because the structural `if showsChevron` fed
+    back into its own condition: the chevron narrows the content, the content
+    wraps taller, and the height is what `collapsible` is measured from — a body
+    within a chevron's width of the preview cap had **no fixed point** and
+    re-laid-out (and re-parsed) in a loop. The cost is the slot's width on every
+    collapsed first line, on the axis the ⋯ menu already owns.
 - **Compare paths, never `URL`s.** Use `Library.key(_:)`. A URL built by appending
   to a folder and one handed back by `FileManager` can name the very same file and
   still compare unequal. Not fussiness — it bit twice: it had a load re-decode notes

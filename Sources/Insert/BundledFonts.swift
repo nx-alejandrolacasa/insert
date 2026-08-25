@@ -154,16 +154,31 @@ enum BundledFonts {
     ///   named instance for Grotesk and on the right static for Plex Mono.
     static func font(family: String, size: CGFloat, weight: NSFont.Weight?) -> NSFont? {
         register()
-        var attributes: [NSFontDescriptor.AttributeName: Any] = [.family: family]
-        if let weight, weight != .regular {
-            if family == grotesk, weight == .semibold {
-                attributes[Self.variation] = [Self.wghtAxis: 600]
-            } else {
-                attributes[.traits] = [NSFontDescriptor.TraitKey.weight: weight.rawValue]
+        // Memoised: the family-name descriptor match is the slow form of font
+        // resolution, and `Mono` asks for it per count, timestamp and type label,
+        // per render. A `nil` (no resource bundle) is cached too — registration
+        // is a one-shot `static let`, so the answer can't change mid-process.
+        let key = FontKey(family: family, size: size, weight: weight?.rawValue)
+        return resolved.value(for: key) {
+            var attributes: [NSFontDescriptor.AttributeName: Any] = [.family: family]
+            if let weight, weight != .regular {
+                if family == grotesk, weight == .semibold {
+                    attributes[Self.variation] = [Self.wghtAxis: 600]
+                } else {
+                    attributes[.traits] = [NSFontDescriptor.TraitKey.weight: weight.rawValue]
+                }
             }
+            return NSFont(descriptor: NSFontDescriptor(fontAttributes: attributes), size: size)
         }
-        return NSFont(descriptor: NSFontDescriptor(fontAttributes: attributes), size: size)
     }
+
+    private struct FontKey: Hashable {
+        let family: String
+        let size: CGFloat
+        let weight: CGFloat?
+    }
+
+    private static let resolved = MemoCache<FontKey, NSFont?>()
 
     private static let variation = NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String)
     /// `'wght'` as the four-character code CoreText wants. The axis runs

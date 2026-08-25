@@ -89,13 +89,21 @@ enum DueFormat {
         return sentenceCased(label)
     }
 
-    /// Formatters are built per call: a shared one isn't safe to hold under
-    /// Swift 6 strict concurrency.
+    /// The *strings* are memoised, not the formatter: a shared formatter isn't
+    /// safe to hold under Swift 6 strict concurrency, but its output for a day
+    /// count is a constant (the locale here is fixed), and this branch runs
+    /// twice per due-soon task card per render — `DateCoding`'s
+    /// formatter-per-call lesson, met on the render path instead of the load
+    /// path. Only -6…1 ever reaches it, so the cache holds eight entries.
+    private static let relativeLabels = MemoCache<Int, String>()
+
     private static func relativeDays(_ days: Int) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.locale = Formatting.locale
-        f.dateTimeStyle = .named
-        return f.localizedString(from: DateComponents(day: days))
+        relativeLabels.value(for: days) {
+            let f = RelativeDateTimeFormatter()
+            f.locale = Formatting.locale
+            f.dateTimeStyle = .named
+            return f.localizedString(from: DateComponents(day: days))
+        }
     }
 
     /// Lifts the first character the way the locale would.

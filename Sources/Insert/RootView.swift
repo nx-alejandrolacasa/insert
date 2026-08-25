@@ -19,6 +19,13 @@ struct RootView: View {
     /// view's own sidebar width, so the arrangement survives relaunches.
     @AppStorage("notesTasksSplit") private var notesSplit: Double = 0.5
 
+    /// The split while the divider is mid-drag. Local state, not the
+    /// `@AppStorage` above: a drag moves at pointer rate, and writing the stored
+    /// value per event hit `UserDefaults` sixty-plus times a second for a value
+    /// only the last event of the drag decides. `ColumnDivider` commits it into
+    /// `notesSplit` when the drag ends.
+    @State private var liveSplit: Double?
+
     /// The detail toolbar's "show sidebar" button, tracked as presence *and*
     /// opacity rather than straight off `appState.sidebarVisible` — see
     /// `syncShowButton`. Both start closed because the sidebar starts open and
@@ -165,6 +172,7 @@ struct RootView: View {
             .overlay(alignment: .leading) {
                 ColumnDivider(
                     fraction: $notesSplit,
+                    liveFraction: $liveSplit,
                     notesWidth: notesWidth,
                     totalWidth: geo.size.width
                 )
@@ -197,7 +205,7 @@ struct RootView: View {
     private func notesWidth(in total: CGFloat) -> CGFloat {
         let floor = Metrics.minPanelWidth
         guard total > floor * 2 else { return total / 2 }
-        return max(floor, min(total - floor, total * notesSplit))
+        return max(floor, min(total - floor, total * (liveSplit ?? notesSplit)))
     }
 
     /// Bridges the app's simple `sidebarVisible` flag to the split view's
@@ -343,8 +351,14 @@ private struct ColumnDivider: View {
     /// Width of the invisible hit strip straddling the boundary.
     static let hitWidth: CGFloat = 11
 
-    /// The stored split (notes' share of the width), written as the drag moves.
+    /// The stored split (notes' share of the width), written when the drag
+    /// ends — and directly by the accessibility actions, which are discrete
+    /// steps rather than a stream.
     @Binding var fraction: Double
+    /// The split while a drag is in flight, cleared on release. What the columns
+    /// lay out from, so the stored value is written once per drag instead of
+    /// once per pointer event.
+    @Binding var liveFraction: Double?
     /// The notes column's *rendered* width — the clamped value, which is what
     /// a drag starts from, not whatever stale fraction is on disk.
     let notesWidth: CGFloat
@@ -388,9 +402,11 @@ private struct ColumnDivider: View {
                         let proposed = (dragBase ?? notesWidth) + value.translation.width
                         let floor = Metrics.minPanelWidth
                         let clamped = max(floor, min(totalWidth - floor, proposed))
-                        fraction = clamped / totalWidth
+                        liveFraction = clamped / totalWidth
                     }
                     .onEnded { _ in
+                        if let liveFraction { fraction = liveFraction }
+                        liveFraction = nil
                         dragging = false
                         dragBase = nil
                     }

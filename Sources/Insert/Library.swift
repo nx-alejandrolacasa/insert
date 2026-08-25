@@ -162,6 +162,9 @@ final class Library {
     /// than replaced for the same reason.
     @discardableResult
     func moveRoot(to url: URL) throws -> MoveResult {
+        // A pending save must land in the old folders before they are walked, or
+        // the relocation moves a file the queue is about to rewrite.
+        flushDiskWrites()
         let fm = FileManager.default
         let source = rootURL.standardizedFileURL
         guard url.standardizedFileURL != source else { return MoveResult() }
@@ -246,6 +249,9 @@ final class Library {
 
     /// Reads the entire library — every note, every task — into the index.
     func reloadAll() {
+        // Queued writes first, or this reads the files they are about to replace
+        // and reverts the in-memory index to what the disk still says.
+        flushDiskWrites()
         projects = loadProjects()
         notes = deduped(Self.decoded(markdownFiles(in: notesDir), MarkdownFiles.decodeNote))
         tasks = deduped(Self.decoded(
@@ -393,23 +399,50 @@ final class Library {
 
     // MARK: - Writing helpers
 
+    /// Where the disk I/O happens — a serial queue, **not** the main thread.
+    ///
+    /// The three helpers below used to write synchronously from the main actor,
+    /// which put an atomic write (temp file + rename) between every debounced
+    /// save and the next frame — and the root defaults to `~/Documents`, where
+    /// iCloud's "Desktop & Documents" sync can hold a rename for tens to
+    /// hundreds of milliseconds, non-deterministically. That is a UI stall per
+    /// keystroke pause on an ordinary Mac.
+    ///
+    /// Serial, so the order the main actor decided is the order the disk sees —
+    /// `persistNote` writes the renamed file *before* unlinking the old one, and
+    /// that ordering is what makes a failure lose nothing. Anything that reads
+    /// the folders back (`reloadAll`, `moveRoot`) drains the queue first, and
+    /// `AppDelegate.applicationWillTerminate` drains it so a quit can't outrun a
+    /// pending save. `StorageLayoutTests` drains it before asserting on disk.
+    private static let diskQueue = DispatchQueue(
+        label: "com.alejandrolacasa.insert.disk", qos: .utility)
+
+    /// Blocks until every queued write has landed. Cheap when the queue is idle.
+    func flushDiskWrites() {
+        Self.diskQueue.sync {}
+    }
+
     private func suppressReload() {
         suppressReloadUntil = Date().addingTimeInterval(1.0)
     }
 
     private func write(_ string: String, to url: URL) {
         suppressReload()
-        do {
-            try string.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            log.error("write failed \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+        Self.diskQueue.async {
+            do {
+                try string.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                log.error("write failed \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
     private func remove(_ url: URL?) {
         guard let url else { return }
         suppressReload()
-        try? FileManager.default.removeItem(at: url)
+        Self.diskQueue.async {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     /// Moves a file to the Trash, falling back to a plain delete where that
@@ -417,11 +450,13 @@ final class Library {
     private func trash(_ url: URL?) {
         guard let url else { return }
         suppressReload()
-        do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        } catch {
-            log.error("trash failed \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
-            remove(url)
+        Self.diskQueue.async {
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            } catch {
+                log.error("trash failed \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
@@ -543,7 +578,11 @@ final class Library {
         updated.updated = Date()
         persistNote(&updated)
         notes[idx] = updated
-        for id in updated.projectIDs { touchProject(id: id) }
+        // Deliberately no `touchProject` here: this runs on every ~0.4s save
+        // debounce while typing, and bumping `lastUsed` — which nothing reads —
+        // rewrote `Projects.md` once per assigned project per save and
+        // invalidated every view of `projects` with it. Creation and selection
+        // still record it.
     }
 
     func deleteNote(id: UUID) {
@@ -577,7 +616,7 @@ final class Library {
         updated.updated = Date()
         persistTask(&updated)
         tasks[idx] = updated
-        for pid in updated.projectIDs { touchProject(id: pid) }
+        // No `touchProject`, for `updateNote`'s reason.
     }
 
     func toggleTask(id: UUID) {

@@ -54,15 +54,12 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
     /// `accent` all along — the deeper value read as *muted*, which is how it was
     /// reported ("the tones in the settings are nice, but the ones shown in the UI
     /// not"). One dot colour, everywhere.
-    var accent: Color { ramp.accent.color }
+    var accent: Color { palette.accent }
 
     /// A solid fill that carries white type at 4.5:1 or better. Doesn't change
     /// between Light and Dark — white-on-fill contrast doesn't depend on what's
     /// behind the fill — but it does deepen when Increase Contrast is on.
-    var deep: Color {
-        dynamic(light: ramp.fill, dark: ramp.fill,
-                lightHC: ramp.fillHC, darkHC: ramp.fillHC)
-    }
+    var deep: Color { palette.deep }
 
     /// The tint as a foreground, at 4.5:1 or better against the surfaces it's drawn
     /// on — deepened in Light, brightened in Dark.
@@ -85,16 +82,13 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
     /// cards are *lighter* than the flat near-black island these were first measured
     /// on, which is what took dark purple under the floor. Worst pairing in the set
     /// is now 4.65:1 on a card; `ThemePaletteTests` measures all of it.
-    var ink: Color {
-        dynamic(light: ramp.inkLight, dark: ramp.inkDark,
-                lightHC: ramp.inkLightHC, darkHC: ramp.inkDarkHC)
-    }
+    var ink: Color { palette.ink }
 
     /// A subtle background wash for note "islands" of this type.
-    var soft: Color { accent.opacity(0.14) }
+    var soft: Color { palette.soft }
 
     /// A slightly stronger fill for pills/chips.
-    var chip: Color { accent.opacity(0.20) }
+    var chip: Color { palette.chip }
 }
 
 // The `marker` role — the highlighter band a note title used to wear (the July
@@ -161,7 +155,37 @@ private struct Ramp {
     let inkLightHC: RGB, inkDarkHC: RGB
 }
 
+/// One tint's five role colours, materialised **once**.
+///
+/// The roles were computed properties, and every access built a fresh dynamic
+/// `NSColor` — a new provider closure wrapped in a new `Color`. Two of those
+/// never compare equal, so any view holding one compared unequal to its
+/// predecessor on every pass and SwiftUI could not skip an unchanged card; the
+/// dots, chips and labels also allocated per item, per render. One instance per
+/// role is the same move `Stone`'s `static let`s and `AppTheme`'s resolved table
+/// already make. The providers still resolve per appearance, so Light/Dark and
+/// Increase Contrast behave exactly as before.
+private struct TintPalette {
+    let accent, deep, ink, soft, chip: Color
+}
+
 private extension Tint {
+    var palette: TintPalette { Self.palettes[self]! }
+
+    static let palettes: [Tint: TintPalette] = Dictionary(
+        uniqueKeysWithValues: allCases.map { tint in
+            let ramp = tint.ramp
+            let accent = ramp.accent.color
+            return (tint, TintPalette(
+                accent: accent,
+                deep: dynamic(light: ramp.fill, dark: ramp.fill,
+                              lightHC: ramp.fillHC, darkHC: ramp.fillHC),
+                ink: dynamic(light: ramp.inkLight, dark: ramp.inkDark,
+                             lightHC: ramp.inkLightHC, darkHC: ramp.inkDarkHC),
+                soft: accent.opacity(0.14),
+                chip: accent.opacity(0.20)))
+        })
+
     var ramp: Ramp {
         switch self {
         case .gray: Ramp(
@@ -435,26 +459,50 @@ enum Card {
         typeface: Typeface,
         base: NSFont? = nil
     ) -> NSFont {
-        // A bundled family is reached by name at the requested point size, not by
-        // transforming the system font's descriptor — `withDesign(_:)` has no
-        // idea Space Grotesk exists. Falls through to the system face if the
-        // resource bundle isn't there, which is the one way this can be asked
-        // for a family that isn't registered.
-        if let family = typeface.bundledFamily,
-           let bundled = BundledFonts.font(family: family, size: size, weight: weight) {
-            return bundled
+        // Memoised: the descriptor work below is a CoreText match, and this is
+        // asked per card per render — and per event by
+        // `AppDelegate.restyleWindowTitle()`. `base` only ever contributes its
+        // face (a `preferredFont` or the titlebar's own field font), so its name
+        // plus the explicit size identifies it.
+        let key = FontKey(size: size, weight: weight?.rawValue,
+                          typeface: typeface, base: base?.fontName)
+        return resolvedFonts.value(for: key) {
+            // A bundled family is reached by name at the requested point size, not by
+            // transforming the system font's descriptor — `withDesign(_:)` has no
+            // idea Space Grotesk exists. Falls through to the system face if the
+            // resource bundle isn't there, which is the one way this can be asked
+            // for a family that isn't registered.
+            if let family = typeface.bundledFamily,
+               let bundled = BundledFonts.font(family: family, size: size, weight: weight) {
+                return bundled
+            }
+            let start = base ?? NSFont.systemFont(ofSize: size)
+            let sized = weight.map { NSFont.systemFont(ofSize: size, weight: $0) } ?? start
+            var descriptor = sized.fontDescriptor
+            if let design = typeface.design, let styled = descriptor.withDesign(design) {
+                descriptor = styled
+            }
+            if typeface.prefersOneStoreyA {
+                descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
+            }
+            return NSFont(descriptor: descriptor, size: size) ?? sized
         }
-        let start = base ?? NSFont.systemFont(ofSize: size)
-        let sized = weight.map { NSFont.systemFont(ofSize: size, weight: $0) } ?? start
-        var descriptor = sized.fontDescriptor
-        if let design = typeface.design, let styled = descriptor.withDesign(design) {
-            descriptor = styled
-        }
-        if typeface.prefersOneStoreyA {
-            descriptor = descriptor.addingAttributes([.featureSettings: [oneStoreyA]])
-        }
-        return NSFont(descriptor: descriptor, size: size) ?? sized
     }
+
+    private struct FontKey: Hashable {
+        let size: CGFloat
+        let weight: CGFloat?
+        let typeface: Typeface
+        let base: String?
+    }
+
+    private struct ItalicKey: Hashable {
+        let name: String
+        let size: CGFloat
+    }
+
+    private static let resolvedFonts = MemoCache<FontKey, NSFont>()
+    private static let italicFonts = MemoCache<ItalicKey, NSFont>()
 
     /// The face the cards are set in, at an explicit size — the `@MainActor`
     /// partner of the overload above, reading the setting the way `nsFont(_:)`
@@ -490,17 +538,20 @@ enum Card {
     /// that check honest, since both names then come from the same descriptor and
     /// differ only if an italic face was really found.
     static func italic(_ font: NSFont) -> NSFont {
-        let traits = font.fontDescriptor.symbolicTraits
-        let italicised = font.fontDescriptor.withSymbolicTraits(traits.union(.italic))
-        if let real = NSFont(descriptor: italicised, size: font.pointSize),
-           real.fontName != font.fontName {
-            return real
+        // Memoised for `MarkdownText`, which asks once per italic run per render.
+        italicFonts.value(for: ItalicKey(name: font.fontName, size: font.pointSize)) {
+            let traits = font.fontDescriptor.symbolicTraits
+            let italicised = font.fontDescriptor.withSymbolicTraits(traits.union(.italic))
+            if let real = NSFont(descriptor: italicised, size: font.pointSize),
+               real.fontName != font.fontName {
+                return real
+            }
+            var skew = CGAffineTransform(a: 1, b: 0, c: obliqueSkew, d: 1, tx: 0, ty: 0)
+            let sheared = CTFontCreateWithFontDescriptor(
+                font.fontDescriptor as CTFontDescriptor, font.pointSize, &skew
+            )
+            return sheared as NSFont
         }
-        var skew = CGAffineTransform(a: 1, b: 0, c: obliqueSkew, d: 1, tx: 0, ty: 0)
-        let sheared = CTFontCreateWithFontDescriptor(
-            font.fontDescriptor as CTFontDescriptor, font.pointSize, &skew
-        )
-        return sheared as NSFont
     }
 
     /// `tan` of the system italic's own angle, so the shear matches it.

@@ -63,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         housekeepingTimer?.invalidate()
+        // Disk writes are queued off the main thread; a quit must not outrun them.
+        Library.shared.flushDiskWrites()
     }
 
     /// Where the toolbar's glass is flattened and the focused editor is told
@@ -416,13 +418,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The split view's two corrections, so the hot path walks for it once.
+    ///
+    /// "Once" now means once per *window*, not once per tick: only the main
+    /// window has a column split view to police, and `splitView(in:)` visits
+    /// **every** view of a window that has none — the Settings form, the
+    /// menu-bar extra, each open popover — before answering nil, per event. The
+    /// toolbar gate drops the chromeless windows outright, Settings is excluded
+    /// by name the way `restyleWindowTitle` excludes it, and a found split view
+    /// is remembered weakly so the walk doesn't repeat while it lives.
     @MainActor
     private static func configureSplitViews() {
         for window in NSApp.windows {
-            guard let split = splitView(in: window.contentView) else { continue }
+            guard window.toolbar != nil,
+                  !SettingsWindowController.shared.owns(window),
+                  let split = columnSplitView(in: window)
+            else { continue }
             constrainSidebarWidth(in: split)
             disableSidebarPeek(in: split)
         }
+    }
+
+    /// Weak on both sides, so neither a closed window nor a torn-down split view
+    /// is kept alive by the memo. Validated against the window before use — a
+    /// split view SwiftUI has replaced answers `window == nil` and is re-found.
+    @MainActor
+    private static let splitViews = NSMapTable<NSWindow, NSSplitView>.weakToWeakObjects()
+
+    @MainActor
+    private static func columnSplitView(in window: NSWindow) -> NSSplitView? {
+        if let cached = splitViews.object(forKey: window), cached.window === window {
+            return cached
+        }
+        guard let found = splitView(in: window.contentView) else { return nil }
+        splitViews.setObject(found, forKey: window)
+        return found
     }
 
     /// AppKit's own accessor for the invisible view that watches the collapsed
