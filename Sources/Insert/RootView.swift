@@ -333,8 +333,31 @@ struct RootView: View {
                 Task { @MainActor in toggleSidebar() }
                 return nil
             }
+            if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+               event.charactersIgnoringModifiers?.lowercased() == "k" {
+                // In a Markdown body ⌘K means "insert link" — `MarkdownTextView`
+                // answers it as a key equivalent — so the monitor stands down
+                // and lets the event reach the editor. Card titles are field
+                // editors, not `MarkdownTextView`s, so they keep the search.
+                let editing = MainActor.assumeIsolated {
+                    NSApp.keyWindow?.firstResponder is MarkdownTextView
+                }
+                if editing { return event }
+                Task { @MainActor in focusSearch() }
+                return nil
+            }
             return event
         }
+    }
+
+    /// ⌘K puts the caret in the toolbar's search field, ready to type into.
+    /// The field is the system's search toolbar item, and its own
+    /// `beginSearchInteraction()` both focuses it and expands it if the
+    /// toolbar has collapsed it to a button.
+    private func focusSearch() {
+        guard let toolbar = NSApp.keyWindow?.toolbar else { return }
+        let searchItem = toolbar.items.compactMap { $0 as? NSSearchToolbarItem }.first
+        searchItem?.beginSearchInteraction()
     }
 
     private func removeKeyMonitor() {

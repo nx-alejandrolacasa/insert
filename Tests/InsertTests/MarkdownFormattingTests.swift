@@ -1,7 +1,8 @@
 import XCTest
 @testable import Insert
 
-/// Pins the selection-wrapping behind the formatting shortcuts (⌘B/⌘I/⌘U/⇧⌘X).
+/// Pins the selection-wrapping behind the formatting shortcuts
+/// (⌘B/⌘I/⌘U/⇧⌘X, and ⌘K for links).
 /// This code rewrites the user's Markdown around an arbitrary selection, so the
 /// interesting cases are the ones that would corrupt text: delimiters landing on
 /// whitespace (which un-parses them), unwrapping from either side of the
@@ -164,6 +165,104 @@ final class MarkdownFormattingTests: XCTestCase {
     func testSelectionClampedToTextBounds() {
         let change = MarkdownFormatting.toggleWrap("hi", selection: 0..<99, delimiter: "**")
         XCTAssertEqual(change?.text, "**hi**")
+    }
+
+    // MARK: Links (⌘K)
+
+    func testWrapsSelectionAsLinkLabel() {
+        let text = "see the docs here"
+        let change = MarkdownFormatting.insertLink(
+            text, selection: range(of: "the docs", in: text)
+        )
+        XCTAssertEqual(change?.text, "see [the docs]() here")
+        // The caret lands between the parens, ready for the URL.
+        XCTAssertEqual(change?.selection, 15..<15)
+    }
+
+    func testClipboardURLFillsTheDestinationSelected() {
+        let text = "see the docs here"
+        let change = MarkdownFormatting.insertLink(
+            text, selection: range(of: "the docs", in: text), clipboard: " https://example.com "
+        )
+        XCTAssertEqual(change?.text, "see [the docs](https://example.com) here")
+        // Selected, so a wrong guess is overtyped rather than deleted.
+        XCTAssertEqual(change.map(selected), "https://example.com")
+    }
+
+    func testClipboardProseIsIgnored() {
+        let text = "see docs now"
+        let change = MarkdownFormatting.insertLink(
+            text, selection: range(of: "docs", in: text), clipboard: "not a url"
+        )
+        XCTAssertEqual(change?.text, "see [docs]() now")
+    }
+
+    func testLinkBracketsHugTheWords() {
+        let text = "a  word  b"
+        let change = MarkdownFormatting.insertLink(text, selection: range(of: " word ", in: text))
+        XCTAssertEqual(change?.text, "a  [word]()  b")
+    }
+
+    func testSelectedURLBecomesTheDestination() {
+        let text = "go to https://example.com now"
+        let change = MarkdownFormatting.insertLink(
+            text, selection: range(of: "https://example.com", in: text),
+            clipboard: "https://other.com"
+        )
+        XCTAssertEqual(change?.text, "go to [](https://example.com) now")
+        // The caret sits in the empty label — and the clipboard is ignored,
+        // since the selection already said which URL is meant.
+        XCTAssertEqual(change?.selection, 7..<7)
+    }
+
+    func testBareWWWCountsAsAURL() {
+        let change = MarkdownFormatting.insertLink("www.example.com", selection: 0..<15)
+        XCTAssertEqual(change?.text, "[](www.example.com)")
+    }
+
+    func testUnwrapsAWhollySelectedLink() {
+        let text = "see [docs](https://x.y) now"
+        let change = MarkdownFormatting.insertLink(
+            text, selection: range(of: "[docs](https://x.y)", in: text)
+        )
+        XCTAssertEqual(change?.text, "see docs now")
+        XCTAssertEqual(change.map(selected), "docs")
+    }
+
+    func testUnwrapsWhenTheLabelIsSelected() {
+        let text = "see [docs](https://x.y) now"
+        let change = MarkdownFormatting.insertLink(text, selection: range(of: "docs", in: text))
+        XCTAssertEqual(change?.text, "see docs now")
+        XCTAssertEqual(change.map(selected), "docs")
+    }
+
+    func testLinkToggleRoundTrips() {
+        let text = "see docs now"
+        let wrapped = MarkdownFormatting.insertLink(
+            text, selection: range(of: "docs", in: text), clipboard: "https://x.y"
+        )!
+        XCTAssertEqual(wrapped.text, "see [docs](https://x.y) now")
+        let unwrapped = MarkdownFormatting.insertLink(
+            wrapped.text, selection: range(of: "[docs](https://x.y)", in: wrapped.text)
+        )
+        XCTAssertEqual(unwrapped?.text, text)
+    }
+
+    func testEmptySelectionInsertsTheSkeleton() {
+        let change = MarkdownFormatting.insertLink("ab", selection: 1..<1)
+        XCTAssertEqual(change?.text, "a[]()b")
+        // Caret in the label: with no words selected, they get typed first.
+        XCTAssertEqual(change?.selection, 2..<2)
+    }
+
+    func testEmptySelectionTakesTheClipboardURL() {
+        let change = MarkdownFormatting.insertLink("", selection: 0..<0, clipboard: "https://x.y")
+        XCTAssertEqual(change?.text, "[](https://x.y)")
+        XCTAssertEqual(change?.selection, 1..<1)
+    }
+
+    func testMultilineSelectionMakesNoLink() {
+        XCTAssertNil(MarkdownFormatting.insertLink("a b\nc d", selection: 2..<5))
     }
 
     // MARK: Continuing a list on Return

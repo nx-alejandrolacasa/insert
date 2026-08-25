@@ -6,7 +6,12 @@ import SwiftUI
 /// ⌘U underline, ⇧⌘X strikethrough. Each wraps (or unwraps) the *selected* text
 /// in the matching Markdown delimiters and does nothing when nothing is
 /// selected; the actual string surgery lives in `MarkdownFormatting` so it can
-/// be tested without a view.
+/// be tested without a view. The keys are answered by the text view itself
+/// (`performKeyEquivalent`), like Tab and Esc below — they were invisible
+/// SwiftUI `keyboardShortcut` buttons reading the `selection` binding, and that
+/// path stopped firing when the editor became a hosted text view (which link
+/// broke was not instrumented; the buttons also applied the edit by assigning
+/// the `text` binding, which never had undo).
 ///
 /// **This was a SwiftUI `TextEditor` until spell checking had to work, and the
 /// reason it isn't one any more is measured, not stylistic.** SwiftUI writes
@@ -35,11 +40,8 @@ import SwiftUI
 /// rather than a `Font`: `Card` hands out both spellings of the same face, and
 /// the call sites' sizing proxies keep using the SwiftUI one.
 ///
-/// The formatting shortcuts stay invisible zero-size buttons carrying
-/// `keyboardShortcut`s, mounted only while the editor is focused — key
-/// equivalents resolve before the focused text view sees the event, and gating
-/// them on focus means two editors on screen never compete for ⌘B. Placeholders
-/// and sizing proxies stay with the callers, which each have their own.
+/// Placeholders and sizing proxies stay with the callers, which each have
+/// their own.
 struct MarkdownEditor: View {
     @Binding var text: String
     /// The card's face, as AppKit's. `Card.nsFont(_:)` is the same font the
@@ -82,46 +84,6 @@ struct MarkdownEditor: View {
             focused: $focused,
             selection: $selection
         )
-        .background {
-            if focused { formattingShortcuts }
-        }
-    }
-
-    private var formattingShortcuts: some View {
-        Group {
-            Button("Bold") { toggle("**") }
-                .keyboardShortcut("b", modifiers: .command)
-            Button("Italic") { toggle("*") }
-                .keyboardShortcut("i", modifiers: .command)
-            // Markdown has no underline; `<u>…</u>` is the Obsidian convention,
-            // and `MarkdownText` renders it.
-            Button("Underline") { toggle("<u>", closing: "</u>") }
-                .keyboardShortcut("u", modifiers: .command)
-            Button("Strikethrough") { toggle("~~") }
-                .keyboardShortcut("x", modifiers: [.command, .shift])
-        }
-        .opacity(0)
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    /// Apply a delimiter toggle to the current selection, keeping the same text
-    /// selected afterwards so toggles chain (⌘B ⌘B is a no-op).
-    private func toggle(_ delimiter: String, closing: String? = nil) {
-        guard let selection,
-              case .selection(let range) = selection.indices,
-              !range.isEmpty else { return }
-        let lo = text.distance(from: text.startIndex, to: range.lowerBound)
-        let hi = text.distance(from: text.startIndex, to: range.upperBound)
-        guard let change = MarkdownFormatting.toggleWrap(
-            text, selection: lo..<hi, delimiter: delimiter, closing: closing
-        ) else { return }
-
-        text = change.text
-        let start = change.text.index(change.text.startIndex, offsetBy: change.selection.lowerBound)
-        let end = change.text.index(change.text.startIndex, offsetBy: change.selection.upperBound)
-        self.selection = TextSelection(range: start..<end)
     }
 }
 
@@ -407,6 +369,68 @@ final class MarkdownTextView: NSTextView {
         onBacktab()
     }
 
+    /// The formatting shortcuts — ⌘B bold, ⌘I italic, ⌘U underline, ⇧⌘X
+    /// strikethrough — toggle the Markdown delimiters around the selection,
+    /// and ⌘K makes it a link.
+    ///
+    /// Answered here rather than as SwiftUI `keyboardShortcut` buttons in the
+    /// editor's background, which is what they were until the text view was
+    /// hosted and they stopped firing. Unlike `keyDown`, a key equivalent is
+    /// offered to **every** view in the window, so the first-responder guard is
+    /// what keeps two open cards from both applying the toggle. A matched key is
+    /// swallowed even when there is no selection to style — the buttons
+    /// swallowed it too, and letting it fall through would beep.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self,
+              event.modifierFlags.intersection([.command, .control, .option]) == .command,
+              let key = event.charactersIgnoringModifiers?.lowercased()
+        else { return super.performKeyEquivalent(with: event) }
+
+        let shifted = event.modifierFlags.contains(.shift)
+        switch (key, shifted) {
+        case ("b", false): toggleWrapAroundSelection("**")
+        case ("i", false): toggleWrapAroundSelection("*")
+        // Markdown has no underline; `<u>…</u>` is the Obsidian convention,
+        // and `MarkdownText` renders it.
+        case ("u", false): toggleWrapAroundSelection("<u>", closing: "</u>")
+        case ("x", true): toggleWrapAroundSelection("~~")
+        // ⌘K means search everywhere else; `RootView`'s monitor stands down
+        // while a Markdown body is first responder so it can mean "link" here.
+        case ("k", false): insertLinkAroundSelection()
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+
+    private func toggleWrapAroundSelection(_ delimiter: String, closing: String? = nil) {
+        let selected = selectedRange()
+        guard selected.length > 0,
+              let lo = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+              let hi = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location + selected.length),
+              let change = MarkdownFormatting.toggleWrap(
+                  string, selection: lo..<hi, delimiter: delimiter, closing: closing
+              )
+        else { return }
+        _ = MarkdownEdits.apply(change, to: self)
+    }
+
+    /// ⌘K, unlike the toggles above, accepts an empty selection — the inserted
+    /// skeleton is the point — and reads the clipboard so a copied URL fills
+    /// the destination in the same keystroke.
+    private func insertLinkAroundSelection() {
+        let selected = selectedRange()
+        guard let lo = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+              let hi = MarkdownEdits.characterOffset(
+                  in: string, utf16Offset: selected.location + selected.length
+              ),
+              let change = MarkdownFormatting.insertLink(
+                  string, selection: lo..<hi,
+                  clipboard: NSPasteboard.general.string(forType: .string)
+              )
+        else { return }
+        _ = MarkdownEdits.apply(change, to: self)
+    }
+
     /// ⌘Return leaves the card too, and it is caught here rather than as a
     /// command because AppKit binds it to nothing: Return alone is
     /// `insertNewline(_:)`, and with ⌘ held there is no action to override. Only
@@ -599,6 +623,35 @@ enum MarkdownEdits {
         return true
     }
 
+    /// The formatting toggles hand back a whole new string plus the range to
+    /// keep selected (`Change`) rather than an `Edit`, so this variant reduces
+    /// the change to the smallest contiguous replacement before going through
+    /// the same path — one undo step, and the styled text stays selected so
+    /// toggles chain (⌘B ⌘B is a no-op).
+    static func apply(_ change: MarkdownFormatting.Change, to textView: NSTextView) -> Bool {
+        let old = Array(textView.string)
+        let new = Array(change.text)
+
+        var prefix = 0
+        while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < old.count - prefix, suffix < new.count - prefix,
+              old[old.count - 1 - suffix] == new[new.count - 1 - suffix] { suffix += 1 }
+
+        let replacement = String(new[prefix..<(new.count - suffix)])
+        guard let range = nsRange(of: prefix..<(old.count - suffix), in: textView.string),
+              textView.shouldChangeText(in: range, replacementString: replacement)
+        else { return false }
+
+        textView.textStorage?.replaceCharacters(in: range, with: replacement)
+        textView.didChangeText()
+
+        if let selection = nsRange(of: change.selection, in: textView.string) {
+            textView.setSelectedRange(selection)
+        }
+        return true
+    }
+
     /// The text view counts in UTF-16 and `MarkdownFormatting` counts in
     /// `Character`s, so every offset crosses this pair. `nil` when the caret
     /// isn't on a character boundary — mid-emoji, where there's no sensible
@@ -676,6 +729,81 @@ enum MarkdownFormatting {
         out.insert(contentsOf: close, at: hi)
         out.insert(contentsOf: open, at: lo)
         return Change(text: String(out), selection: (lo + open.count)..<(hi + open.count))
+    }
+
+    // MARK: Links
+
+    /// ⌘K: make the selection a Markdown link, or take one apart.
+    ///
+    /// Plain text selected becomes the label — `[text](‸)`, or `[text](url)`
+    /// with the URL *selected* when the clipboard already holds one, so the
+    /// copy-then-link flow is a single key and a wrong guess is overtyped. A
+    /// selected URL inverts (`[‸](url)`), since a URL as its own label says
+    /// nothing. Reapplied to a link — the whole of one selected, or just its
+    /// label — it unwraps back to plain text, which is what makes the key a
+    /// toggle like the ones above. An empty selection inserts the skeleton
+    /// with the caret in the label.
+    static func insertLink(_ text: String, selection: Range<Int>, clipboard: String? = nil) -> Change? {
+        let chars = Array(text)
+        var lo = max(0, min(selection.lowerBound, chars.count))
+        var hi = max(lo, min(selection.upperBound, chars.count))
+        // Like the wraps above, the brackets must hug the words.
+        while lo < hi, chars[lo].isWhitespace { lo += 1 }
+        while hi > lo, chars[hi - 1].isWhitespace { hi -= 1 }
+
+        let clip = clipboard?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let url = isLinkDestination(clip) ? clip : ""
+
+        guard lo < hi else {
+            var out = chars
+            out.insert(contentsOf: "[](\(url))", at: lo)
+            return Change(text: String(out), selection: (lo + 1)..<(lo + 1))
+        }
+
+        // A label can't span lines.
+        guard !chars[lo..<hi].contains(where: \.isNewline) else { return nil }
+
+        // Unwrap a wholly selected link…
+        if hi - lo >= 4, chars[lo] == "[", chars[hi - 1] == ")",
+           let mid = ((lo + 1)..<(hi - 2)).first(where: { chars[$0] == "]" && chars[$0 + 1] == "(" }) {
+            let label = chars[(lo + 1)..<mid]
+            var out = chars
+            out.replaceSubrange(lo..<hi, with: label)
+            return Change(text: String(out), selection: lo..<(lo + label.count))
+        }
+        // …or the link whose label is selected.
+        if lo > 0, chars[lo - 1] == "[", hi + 1 < chars.count, chars[hi] == "]", chars[hi + 1] == "(",
+           let close = ((hi + 2)..<chars.count).first(where: { chars[$0] == ")" }),
+           !chars[(hi + 2)..<close].contains(where: \.isNewline) {
+            var out = chars
+            out.replaceSubrange((lo - 1)...close, with: chars[lo..<hi])
+            return Change(text: String(out), selection: (lo - 1)..<(lo - 1 + hi - lo))
+        }
+        // A selected URL becomes the destination, the caret ready for its label.
+        if isLinkDestination(String(chars[lo..<hi])) {
+            var out = chars
+            out.insert(")", at: hi)
+            out.insert(contentsOf: "[](", at: lo)
+            return Change(text: String(out), selection: (lo + 1)..<(lo + 1))
+        }
+        // Otherwise the selection is the label.
+        var out = chars
+        out.insert(contentsOf: "](\(url))", at: hi)
+        out.insert("[", at: lo)
+        let urlStart = hi + 3
+        return Change(text: String(out), selection: urlStart..<(urlStart + url.count))
+    }
+
+    /// Whether `text` reads as a link destination: one unbroken run with a
+    /// web-ish scheme, or a bare `www.` host.
+    static func isLinkDestination(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else { return false }
+        if trimmed.lowercased().hasPrefix("www."), trimmed.count > "www.".count { return true }
+        guard let scheme = URL(string: trimmed)?.scheme else { return false }
+        return ["http", "https", "mailto", "ftp"].contains(scheme.lowercased())
     }
 
     // MARK: Lists and quotes

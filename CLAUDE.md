@@ -1008,6 +1008,23 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   single-line field where Return submits — the note title and the `@project`
   field keep their own behaviour. The event is swallowed *only* when `listReturn`
   returns an edit, so Return is ordinary everywhere else.
+- **⌘K is "insert link" in a Markdown body, and search everywhere else.** The
+  key was search alone until August 2026, and the link meaning was added because
+  `[text](url)` is the one piece of Markdown its author can never remember —
+  the syntax should be the editor's problem. `RootView`'s search monitor
+  **stands down when the first responder is a `MarkdownTextView`** (the
+  first-responder-is-the-truth rule again) and lets the event through to the
+  editor, where ⌘K is a `performKeyEquivalent` case beside ⌘B/⌘I; card titles
+  are field editors, not `MarkdownTextView`s, so they keep the search. What the
+  key does is `MarkdownFormatting.insertLink`, a pure function like the toggles
+  beside it, pinned by `MarkdownFormattingTests`: a plain selection becomes the
+  label with the caret between the parens; a clipboard already holding a URL
+  fills the destination *selected*, so the copy-then-link flow is one keystroke
+  and a wrong guess is overtyped; a selected URL inverts to `[‸](url)`; and
+  reapplied to a link — the whole of one, or just its label — it unwraps, which
+  makes ⌘K a toggle like ⌘B. An empty selection inserts the skeleton with the
+  caret in the label. A multiline selection does nothing (a label can't span
+  lines), and the edit goes through `MarkdownEdits.apply` for native undo.
 - **Cards read in one of five faces** — Settings → Appearance offers Standard /
   Rounded / **Grotesk** / Serif / Monospace (`Typeface.swift`, resolved by
   `Card` and nowhere else). **Grotesk is the default for a new install**;
