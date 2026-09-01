@@ -543,7 +543,9 @@ private struct TasksSettingsTab: View {
                 // Apply the new rule at once, so the choice has a visible
                 // effect rather than waiting for the next launch.
                 .onChange(of: settings.doneTaskRetention) { _, retention in
-                    Library.shared.purgeCompletedTasks(retention: retention)
+                    Task {
+                        await Library.shared.purgeCompletedTasks(retention: retention)
+                    }
                 }
             } footer: {
                 Text(retentionFooter)

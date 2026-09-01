@@ -168,6 +168,10 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         return view
     }
 
+    static func dismantleNSView(_ view: MarkdownTextView, coordinator: Coordinator) {
+        view.prepareForDismantle()
+    }
+
     /// Makes a tab a **four-space step, anywhere in the line**.
     ///
     /// An `NSTextView` arrives with twelve tab stops 28pt apart and a
@@ -298,7 +302,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
     }
 }
 
-/// The text view itself, a subclass for exactly two jobs.
+/// The text view itself, a subclass for three jobs.
 ///
 /// **The keys it gets first.** Tab, ⇧Tab and Esc are answered by the text view
 /// before SwiftUI's `onKeyPress` sees them — the wall `ProjectMentionField`
@@ -308,7 +312,19 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 ///
 /// **The focus it reports.** A `@FocusState` the owner drives has to know when
 /// the user clicks *into* the editor, so first-responder changes are handed back.
+///
+/// **The undo history it owns.** Each editor has a private manager so actions for
+/// its AppKit text system cannot outlive the card that owns it.
 final class MarkdownTextView: NSTextView {
+    /// A body editor's undo history belongs to that editor, not to the window.
+    ///
+    /// Using the responder chain's shared manager left actions for this text
+    /// system behind after its card was deleted. A later Cmd-Z outside edit mode
+    /// then asked `NSUndoManager` to invoke a dismantled AppKit target.
+    private let editorUndoManager = UndoManager()
+
+    override var undoManager: UndoManager? { editorUndoManager }
+
     // Plain closure types, called from overrides that are already on the main
     // actor. Annotating them `@MainActor` would make them `@Sendable` too, which
     // the owner's own closures are not.
@@ -319,6 +335,14 @@ final class MarkdownTextView: NSTextView {
     /// Cleared around a `makeFirstResponder` we asked for ourselves, so the
     /// callback can't write SwiftUI state from inside a view update.
     var reportsFocus = true
+
+    func prepareForDismantle() {
+        editorUndoManager.removeAllActions()
+        delegate = nil
+        onBacktab = nil
+        onEscape = nil
+        onFocusChange = nil
+    }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

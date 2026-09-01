@@ -531,7 +531,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Clears out completed tasks that have outlived the retention setting.
     @MainActor
     private static func runHousekeeping() {
-        Library.shared.purgeCompletedTasks(retention: SettingsStore.shared.doneTaskRetention)
+        Task {
+            await Library.shared.purgeCompletedTasks(
+                retention: SettingsStore.shared.doneTaskRetention
+            )
+        }
     }
 
     /// The red button closes the window, not the app: Insert lives on in the

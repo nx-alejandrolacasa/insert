@@ -227,6 +227,8 @@ private struct NoteCardView: View {
     @State private var draft: Note
     /// The in-flight debounced save, cancelled and restarted on every edit.
     @State private var saveTask: Task<Void, Never>?
+    /// Holds every save path closed while the Trash move is being confirmed.
+    @State private var deleting = false
 
     /// Height of the rendered body text, so the editor grows with content
     /// instead of the greedy `TextEditor` filling the whole scroll viewport.
@@ -295,6 +297,10 @@ private struct NoteCardView: View {
             }
         }
         .onDisappear {
+            guard !deleting else {
+                saveTask?.cancel()
+                return
+            }
             // Settle any pending edit — including mid-edit, where an empty
             // note must still be discarded rather than flushed.
             if isEditing { finishEditing() } else { flushSave() }
@@ -685,9 +691,18 @@ private struct NoteCardView: View {
             }
             .disabled(copyText.isEmpty)
             Button(role: .destructive) {
-                saveTask?.cancel()
+                if isEditing {
+                    saveTask?.cancel()
+                    saveTask = nil
+                    library.updateNote(draft)
+                }
+                deleting = true
                 if isEditing { appState.selectedNoteID = nil }
-                library.deleteNote(id: draft.id)
+                Task {
+                    if !(await library.deleteNote(id: draft.id)) {
+                        deleting = false
+                    }
+                }
             } label: {
                 Label("Delete", systemImage: "trash")
             }
@@ -724,12 +739,19 @@ private struct NoteCardView: View {
     /// with no text at all, discards it — which is also how a just-created
     /// note is cancelled: blur the empty card and it's gone.
     private func finishEditing() {
+        guard !deleting else { return }
         let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if blank {
+            library.updateNote(draft)
+            deleting = true
             saveTask?.cancel()
             saveTask = nil
-            library.deleteNote(id: draft.id)
+            Task {
+                if !(await library.deleteNote(id: draft.id)) {
+                    deleting = false
+                }
+            }
         } else {
             flushSave()
         }

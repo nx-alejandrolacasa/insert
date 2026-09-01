@@ -18,16 +18,24 @@ import XCTest
 final class StorageLayoutTests: XCTestCase {
 
     @MainActor
-    func testFolderLayoutAndWrites() throws {
+    func testFolderLayoutAndWrites() async throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("insert-storage-\(UUID().uuidString)", isDirectory: true)
         let notes = root.appendingPathComponent("Notes", isDirectory: true)
         let tasks = root.appendingPathComponent("Tasks", isDirectory: true)
-        for dir in [notes, tasks] {
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [notes, tasks, trashBin] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         defer { try? fm.removeItem(at: root) }
+        let moveToTestTrash: Library.TrashOperation = { source in
+            let destination = trashBin.appendingPathComponent(
+                "\(UUID().uuidString)-\(source.lastPathComponent)"
+            )
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
 
         let cal = Calendar.current
         let now = Date()
@@ -160,10 +168,70 @@ final class StorageLayoutTests: XCTestCase {
 
         print("\n— the retention purge —")
         library.setRoot(root)
-        check("purged", library.purgeCompletedTasks(retention: .month, now: now), 20)
+        check(
+            "purged",
+            await library.purgeCompletedTasks(
+                retention: .month,
+                now: now,
+                trashOperation: moveToTestTrash
+            ),
+            20
+        )
         library.flushDiskWrites()
         check("Tasks/Done/ on disk", mdCount(library.tasksDoneDir), 10)
         check("tasks left in memory", library.tasks.count, 20)
+
+        print("\n— manual deletion is confirmed at the Trash destination —")
+        let disposableNote = library.addNote(title: "Disposable note")
+        let noteSource = disposableNote.fileURL!
+        library.flushDiskWrites()
+        let trashCountBeforeNote = mdCount(trashBin)
+        let noteDeleted = await library.deleteNote(
+            id: disposableNote.id,
+            trashOperation: moveToTestTrash
+        )
+        check("note deletion confirmed", noteDeleted, true)
+        check("deleted note left the index",
+              library.notes.contains { $0.id == disposableNote.id }, false)
+        check("deleted note left its source", fm.fileExists(atPath: noteSource.path), false)
+        check("deleted note reached Trash", mdCount(trashBin), trashCountBeforeNote + 1)
+
+        let disposableTask = library.addTask(title: "Disposable task")
+        let taskSource = disposableTask.fileURL!
+        library.flushDiskWrites()
+        let trashCountBeforeTask = mdCount(trashBin)
+        let taskDeleted = await library.deleteTask(
+            id: disposableTask.id,
+            trashOperation: moveToTestTrash
+        )
+        check("task deletion confirmed", taskDeleted, true)
+        check("deleted task left the index",
+              library.tasks.contains { $0.id == disposableTask.id }, false)
+        check("deleted task left its source", fm.fileExists(atPath: taskSource.path), false)
+        check("deleted task reached Trash", mdCount(trashBin), trashCountBeforeTask + 1)
+
+        print("\n— a failed Trash move keeps the record and file —")
+        let retained = library.addNote(title: "Must stay")
+        let retainedSource = retained.fileURL!
+        library.flushDiskWrites()
+        let refuseTrash: Library.TrashOperation = { _ in
+            throw NSError(
+                domain: "StorageLayoutTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Test refusal"]
+            )
+        }
+        let refused = await library.deleteNote(
+            id: retained.id,
+            trashOperation: refuseTrash
+        )
+        check("failed deletion was refused", refused, false)
+        check("failed note stayed in the index",
+              library.notes.contains { $0.id == retained.id }, true)
+        check("failed note stayed on disk", fm.fileExists(atPath: retainedSource.path), true)
+        check("failed delete was surfaced", library.deletionFailure != nil, true)
+        library.clearDeletionFailure()
+        _ = await library.deleteNote(id: retained.id, trashOperation: moveToTestTrash)
 
         print("\n— deleting a project unassigns it everywhere —")
         library.setRoot(root)

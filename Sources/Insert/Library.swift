@@ -29,9 +29,17 @@ private let log = Logger(subsystem: "com.alejandrolacasa.insert", category: "Lib
 final class Library {
     static let shared = Library()
 
+    struct DeletionFailure: Identifiable, Equatable {
+        let id = UUID()
+        let message: String
+    }
+
+    typealias TrashOperation = @Sendable (URL) throws -> URL
+
     private(set) var projects: [Project] = []
     private(set) var notes: [Note] = []
     private(set) var tasks: [TaskItem] = []
+    private(set) var deletionFailure: DeletionFailure?
 
     /// Root storage folder. Setting it re-homes the index and reloads.
     private(set) var rootURL: URL
@@ -39,6 +47,38 @@ final class Library {
     private var watcher: DirectoryWatcher?
     /// While true, watcher-triggered reloads are ignored (our own writes).
     private var suppressReloadUntil = Date.distantPast
+    private var pendingDeletions: Set<DeletionKey> = []
+    private var pendingNoteUpdates: [UUID: Note] = [:]
+    private var pendingTaskUpdates: [UUID: TaskItem] = [:]
+
+    private enum DeletionKey: Hashable {
+        case note(UUID)
+        case task(UUID)
+    }
+
+    private enum TrashMoveError: Error, LocalizedError, Sendable {
+        case missingFile
+        case failed(String)
+        case unconfirmed
+
+        var errorDescription: String? {
+            switch self {
+            case .missingFile:
+                "The Markdown file could not be found."
+            case .failed(let message):
+                message
+            case .unconfirmed:
+                "macOS did not confirm the file at its Trash destination."
+            }
+        }
+    }
+
+    private static let systemTrash: TrashOperation = { source in
+        var destination: NSURL?
+        try FileManager.default.trashItem(at: source, resultingItemURL: &destination)
+        guard let destination else { throw TrashMoveError.unconfirmed }
+        return destination as URL
+    }
 
     // MARK: - Paths
 
@@ -371,7 +411,7 @@ final class Library {
         }
         for url in stale {
             log.error("duplicate id, trashing \(url.lastPathComponent, privacy: .public)")
-            trash(url)
+            enqueueTrash(url)
         }
         // Keep the on-disk order of the survivors; sorting is the caller's job.
         return items.filter { newest[$0.id]?.fileURL == $0.fileURL }
@@ -445,19 +485,60 @@ final class Library {
         }
     }
 
-    /// Moves a file to the Trash, falling back to a plain delete where that
-    /// isn't possible (a volume with no trash, say).
-    private func trash(_ url: URL?) {
-        guard let url else { return }
+    /// Moves a file to Trash and verifies both sides of the move. The source is
+    /// never unlinked as a fallback: a failed Trash operation must leave the only
+    /// copy where it was.
+    private func trash(
+        _ url: URL?,
+        using operation: @escaping TrashOperation
+    ) async throws {
+        guard let url else { throw TrashMoveError.missingFile }
         suppressReload()
-        Self.diskQueue.async {
-            do {
-                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            } catch {
-                log.error("trash failed \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
-                try? FileManager.default.removeItem(at: url)
+
+        let result: Result<Void, TrashMoveError> = await withCheckedContinuation { continuation in
+            Self.diskQueue.async {
+                continuation.resume(returning: Self.performTrash(url, using: operation))
             }
         }
+        if case .failure(let error) = result {
+            log.error("trash failed \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        try result.get()
+    }
+
+    /// Best-effort cleanup for duplicate files found while loading. Unlike a
+    /// user-requested deletion this has no index entry to settle afterward, but
+    /// it follows the same no-fallback rule and leaves a failed source untouched.
+    private func enqueueTrash(_ url: URL) {
+        suppressReload()
+        let operation = Self.systemTrash
+        Self.diskQueue.async {
+            if case .failure(let error) = Self.performTrash(url, using: operation) {
+                log.error("trash failed \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated private static func performTrash(
+        _ source: URL,
+        using operation: TrashOperation
+    ) -> Result<Void, TrashMoveError> {
+        do {
+            let destination = try operation(source)
+            let fm = FileManager.default
+            guard !fm.fileExists(atPath: source.path),
+                  fm.fileExists(atPath: destination.path)
+            else { return .failure(.unconfirmed) }
+            return .success(())
+        } catch let error as TrashMoveError {
+            return .failure(error)
+        } catch {
+            return .failure(.failed(error.localizedDescription))
+        }
+    }
+
+    func clearDeletionFailure() {
+        deletionFailure = nil
     }
 
     private func persistProjects() {
@@ -466,6 +547,10 @@ final class Library {
 
     /// Writes the note to disk, renaming its file if the slug changed.
     private func persistNote(_ note: inout Note) {
+        if pendingDeletions.contains(.note(note.id)) {
+            pendingNoteUpdates[note.id] = note
+            return
+        }
         let desired = notesDir.appendingPathComponent(MarkdownFiles.noteFilename(note))
         let existing = note.fileURL
         note.fileURL = desired
@@ -484,6 +569,10 @@ final class Library {
     /// pending in `Tasks/`, completed in `Tasks/Done/`, so ticking a task off moves
     /// its file. Organisational only — both folders are read in full.
     private func persistTask(_ task: inout TaskItem) {
+        if pendingDeletions.contains(.task(task.id)) {
+            pendingTaskUpdates[task.id] = task
+            return
+        }
         let directory = task.done ? tasksDoneDir : tasksDir
         let desired = directory.appendingPathComponent(MarkdownFiles.taskFilename(task))
         let existing = task.fileURL
@@ -585,14 +674,35 @@ final class Library {
         // still record it.
     }
 
-    func deleteNote(id: UUID) {
-        guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
-        // Trash rather than unlink: deleting a note is a one-click, unconfirmed
-        // action, and Settings promises "moved to the Trash, so you can always
-        // get them back" — that has to hold for this path too, not just for the
-        // completed-task sweep.
-        trash(notes[idx].fileURL)
-        notes.remove(at: idx)
+    func deleteNote(
+        id: UUID,
+        trashOperation: @escaping TrashOperation = Library.systemTrash
+    ) async -> Bool {
+        guard let idx = notes.firstIndex(where: { $0.id == id }) else { return false }
+        let key = DeletionKey.note(id)
+        guard pendingDeletions.insert(key).inserted else { return false }
+
+        let note = notes[idx]
+        do {
+            try await trash(note.fileURL, using: trashOperation)
+            pendingDeletions.remove(key)
+            pendingNoteUpdates.removeValue(forKey: id)
+            notes.removeAll { $0.id == id }
+            return true
+        } catch {
+            pendingDeletions.remove(key)
+            if var update = pendingNoteUpdates.removeValue(forKey: id) {
+                persistNote(&update)
+                if let current = notes.firstIndex(where: { $0.id == id }) {
+                    notes[current] = update
+                }
+            }
+            let name = note.title.isEmpty ? "Untitled note" : note.title
+            deletionFailure = DeletionFailure(
+                message: "“\(name)” was not deleted. \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     // MARK: - Tasks CRUD
@@ -640,11 +750,35 @@ final class Library {
         }
     }
 
-    func deleteTask(id: UUID) {
-        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
-        // Recoverable, for the same reason `deleteNote` is.
-        trash(tasks[idx].fileURL)
-        tasks.remove(at: idx)
+    func deleteTask(
+        id: UUID,
+        trashOperation: @escaping TrashOperation = Library.systemTrash
+    ) async -> Bool {
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return false }
+        let key = DeletionKey.task(id)
+        guard pendingDeletions.insert(key).inserted else { return false }
+
+        let task = tasks[idx]
+        do {
+            try await trash(task.fileURL, using: trashOperation)
+            pendingDeletions.remove(key)
+            pendingTaskUpdates.removeValue(forKey: id)
+            tasks.removeAll { $0.id == id }
+            return true
+        } catch {
+            pendingDeletions.remove(key)
+            if var update = pendingTaskUpdates.removeValue(forKey: id) {
+                persistTask(&update)
+                if let current = tasks.firstIndex(where: { $0.id == id }) {
+                    tasks[current] = update
+                }
+            }
+            let name = task.title.isEmpty ? "Untitled task" : task.title
+            deletionFailure = DeletionFailure(
+                message: "“\(name)” was not deleted. \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     // MARK: - Housekeeping
@@ -658,17 +792,47 @@ final class Library {
     /// so the user has to be able to get their notes back if the setting turns
     /// out to be more aggressive than they meant.
     @discardableResult
-    func purgeCompletedTasks(retention: DoneTaskRetention, now: Date = Date()) -> Int {
+    func purgeCompletedTasks(
+        retention: DoneTaskRetention,
+        now: Date = Date(),
+        trashOperation: @escaping TrashOperation = Library.systemTrash
+    ) async -> Int {
         guard let cutoff = retention.cutoff(from: now) else { return 0 }
 
         let expired = tasks.filter { $0.done && ($0.completed ?? $0.updated) < cutoff }
         guard !expired.isEmpty else { return 0 }
 
-        for task in expired { trash(task.fileURL) }
-        let expiredIDs = Set(expired.map(\.id))
-        tasks.removeAll { expiredIDs.contains($0.id) }
-        log.info("purged \(expired.count, privacy: .public) completed task(s) to the Trash")
-        return expired.count
+        var trashed = 0
+        var failed = 0
+        for task in expired {
+            let key = DeletionKey.task(task.id)
+            guard pendingDeletions.insert(key).inserted else { continue }
+            do {
+                try await trash(task.fileURL, using: trashOperation)
+                pendingTaskUpdates.removeValue(forKey: task.id)
+                tasks.removeAll { $0.id == task.id }
+                trashed += 1
+            } catch {
+                if var update = pendingTaskUpdates.removeValue(forKey: task.id) {
+                    pendingDeletions.remove(key)
+                    persistTask(&update)
+                    if let current = tasks.firstIndex(where: { $0.id == task.id }) {
+                        tasks[current] = update
+                    }
+                }
+                failed += 1
+            }
+            pendingDeletions.remove(key)
+        }
+
+        if failed > 0 {
+            let noun = failed == 1 ? "task was" : "tasks were"
+            deletionFailure = DeletionFailure(
+                message: "\(failed) completed \(noun) not removed because macOS could not confirm the move to Trash."
+            )
+        }
+        log.info("purged \(trashed, privacy: .public) completed task(s) to the Trash")
+        return trashed
     }
 
     /// How many tasks `purgeCompletedTasks` would remove right now — lets the

@@ -145,6 +145,17 @@ struct RootView: View {
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
         .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in toggleSidebar() }
+        .alert(
+            "Couldn’t Move to Trash",
+            isPresented: Binding(
+                get: { library.deletionFailure != nil },
+                set: { shown in if !shown { library.clearDeletionFailure() } }
+            )
+        ) {
+            Button("OK") { library.clearDeletionFailure() }
+        } message: {
+            Text(library.deletionFailure?.message ?? "")
+        }
         // Watched rather than driven from `toggleSidebar`, so the button keeps up
         // with the column however it moved — including a drag of the split view's
         // own divider, which never goes through our toggle.

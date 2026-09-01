@@ -326,6 +326,8 @@ private struct TaskCardView: View {
     @State private var draft: TaskItem
     /// The in-flight debounced save, cancelled and restarted on every edit.
     @State private var saveTask: Task<Void, Never>?
+    /// Holds every save path closed while the Trash move is being confirmed.
+    @State private var deleting = false
     @State private var expanded = false
     @State private var showDuePopover = false
     /// The ⋯ menu's box, which the expand chevron takes as its own so the two line
@@ -381,6 +383,10 @@ private struct TaskCardView: View {
             if editing { focusForEntry() } else { finishEditing() }
         }
         .onDisappear {
+            guard !deleting else {
+                saveTask?.cancel()
+                return
+            }
             // Settle any pending edit so nothing is lost when the row scrolls
             // out or the project changes — including mid-edit, where an empty
             // task must still be discarded rather than flushed.
@@ -855,9 +861,18 @@ private struct TaskCardView: View {
                 Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
             }
             Button(role: .destructive) {
-                saveTask?.cancel()
+                if isEditing {
+                    saveTask?.cancel()
+                    saveTask = nil
+                    library.updateTask(draft)
+                }
+                deleting = true
                 if isEditing { appState.selectedTaskID = nil }
-                library.deleteTask(id: draft.id)
+                Task {
+                    if !(await library.deleteTask(id: draft.id)) {
+                        deleting = false
+                    }
+                }
             } label: {
                 Label("Delete", systemImage: "trash")
             }
@@ -930,12 +945,19 @@ private struct TaskCardView: View {
     /// nothing to keep. This is also how "New Task" gets cancelled: blur the
     /// empty card and it's gone.
     private func finishEditing() {
+        guard !deleting else { return }
         let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if blank {
+            library.updateTask(draft)
+            deleting = true
             saveTask?.cancel()
             saveTask = nil
-            library.deleteTask(id: draft.id)
+            Task {
+                if !(await library.deleteTask(id: draft.id)) {
+                    deleting = false
+                }
+            }
         } else {
             flushSave()
         }

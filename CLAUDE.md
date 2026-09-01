@@ -1487,7 +1487,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   suppressed (`reportsFocus`) around a `makeFirstResponder` the bridge asks for
   itself, since that one happens inside a view update. And `allowsUndo` plus
   `isRichText = false` are what keep native undo and stop a paste arriving as
-  styled text.
+  styled text. **Each editor owns its own `UndoManager`**, rather than inheriting
+  the window's shared one, and its actions are cleared when the representable is
+  dismantled. The shared manager retained actions for a deleted card's dismantled
+  text system; pressing ⌘Z later outside edit mode reached `_NSUndoStack
+  popAndInvoke` and crashed on that stale AppKit target. Per-editor managers also
+  keep tearing down one open card from discarding another open card's history.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three
@@ -1584,6 +1589,17 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
     **drains the queue first** — `reloadAll`, `moveRoot`,
     `applicationWillTerminate`, and `StorageLayoutTests` before each on-disk
     assertion (`flushDiskWrites()`). Don't add a new read-back without a drain.
+    **Trash has no permanent-delete fallback.** A note, task or retention
+    candidate leaves the in-memory index only after `trashItem` returns a
+    destination, the source no longer exists and that destination does. If any
+    part fails, the record and Markdown file stay put and the window reports the
+    failure; recovery is therefore a guarantee rather than the best-effort
+    promise the old `trash` helper made. Mutations arriving while that move is
+    pending are buffered at `persistNote` / `persistTask`, the two disk choke
+    points: success discards them with the record, while failure persists the
+    newest value. That is what prevents a project deletion or late card save from
+    recreating the file after a successful move without losing the edit when the
+    move fails.
   - **A save no longer touches `Projects.md`.** `updateNote`/`updateTask` ran
     `touchProject` per assigned project, per ~0.4s debounce — each one rewriting
     the whole projects file *and* invalidating every view of `library.projects`,
