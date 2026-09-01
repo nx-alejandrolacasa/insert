@@ -6,13 +6,22 @@ import SwiftUI
 /// The design is the shipped icon's (two stacked cards, a check badge) with the
 /// theme's own values in the two places colour lives: the tile is a subtle
 /// vertical gradient of the theme's **band** — the band lightened a step at the
-/// top, darkened a step at the bottom — and the badge wears the **accent**, with
-/// the tick in the theme's **second** colour, the one its count chip spends
-/// (asked for over `primaryLabel`: the chip hue carries more contrast on the
-/// badge and reads as the theme where a near-black tick read as chrome). The
-/// chip's two halves are a deep fill in Light and a bright numeral in Dark, so
-/// the tick takes whichever of the two sits further from the badge it's drawn
-/// on — a pale badge gets the deep half, a deep badge the bright one.
+/// top, darkened a step at the bottom — and the badge wears the theme's
+/// **accent**, with the tick plain white or black, whichever the badge carries.
+/// A tick is a glyph on a small circle, so the only thing asked of it is that it
+/// be unmistakable; a third hue there competes with the badge it sits in.
+///
+/// **Nuevo Tokyo is the one exception**: its badge wears the hue its **count
+/// chip** spends rather than its accent, and that is a judgement made on sight
+/// rather than a rule. Every theme was tried that way — the chip is the band's
+/// second voice, so on paper the badge is the place to spend it — and only this
+/// one read better for it; its accent is the palest in the set (`#B4CECE`), so
+/// an accent badge is a pale disc on a pale tile where the chip's sage-teal is
+/// the icon's one piece of colour. Everywhere else the accent won. The chip's
+/// two halves swap roles per appearance (a deep fill under a white numeral in
+/// Light, a muted fill under a bright numeral in Dark), so the badge takes the
+/// *coloured* half: the fill in Light, the numeral in Dark.
+///
 /// Cards stay white with grey lines whatever the theme, exactly as on screen.
 ///
 /// Set through `NSApp.applicationIconImage`, which is the only way to change a
@@ -21,7 +30,7 @@ import SwiftUI
 /// keep the shipped icon**; the swap covers the Dock, the app switcher and
 /// Mission Control, and only while Insert is running. Re-applied on a theme
 /// change (`SettingsStore.theme`) and on every effective-appearance flip
-/// (`AppDelegate`'s KVO), because the band and accent resolve per appearance and
+/// (`AppDelegate`'s KVO), because the band and the badge resolve per appearance and
 /// a Dock icon rendered once would keep the wrong half.
 ///
 /// The geometry mirrors `tools/IconGenerator.swift`'s `Design` fractions for the
@@ -42,6 +51,7 @@ enum ThemedAppIcon {
 
     private static func render(_ theme: AppTheme, under appearance: NSAppearance) -> NSImage? {
         let canvas = 1024
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: canvas, pixelsHigh: canvas,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -54,7 +64,7 @@ enum ThemedAppIcon {
         // Pin the appearance while the dynamic colours resolve, so the icon
         // drawn is the half the window is actually wearing.
         appearance.performAsCurrentDrawingAppearance {
-            draw(theme, in: ctx.cgContext, canvas: CGFloat(canvas))
+            draw(theme, in: ctx.cgContext, canvas: CGFloat(canvas), isDark: isDark)
         }
         NSGraphicsContext.restoreGraphicsState()
 
@@ -63,16 +73,16 @@ enum ThemedAppIcon {
         return image
     }
 
-    private static func draw(_ theme: AppTheme, in cg: CGContext, canvas: CGFloat) {
+    private static func draw(_ theme: AppTheme, in cg: CGContext, canvas: CGFloat, isDark: Bool) {
         let band = NSColor(theme.band.fill)
-        let accent = NSColor(theme.primary)
-        let tick = tickColor(for: theme, on: accent)
+        let badge = badgeColor(for: theme, isDark: isDark)
+        let tick = tickColor(on: badge)
 
         // "Subtle gradient": the band's own tone, lifted and settled a step.
         let bgTop = band.blended(withFraction: 0.08, of: .white) ?? band
         let bgBottom = band.blended(withFraction: 0.12, of: .black) ?? band
-        let badgeTop = accent.blended(withFraction: 0.18, of: .white) ?? accent
-        let badgeBottom = accent.blended(withFraction: 0.18, of: .black) ?? accent
+        let badgeTop = badge.blended(withFraction: 0.18, of: .white) ?? badge
+        let badgeBottom = badge.blended(withFraction: 0.18, of: .black) ?? badge
 
         let inset = canvas * 96 / 1024
         let content = CGRect(x: inset, y: inset, width: canvas - 2 * inset, height: canvas - 2 * inset)
@@ -197,22 +207,23 @@ enum ThemedAppIcon {
         cg.restoreGState()
     }
 
-    /// The chip colour half that contrasts more with the badge. Resolved under
-    /// explicit appearances, because the two halves live in one dynamic colour
-    /// and the deep one is the *light* half whatever the window is wearing.
-    private static func tickColor(for theme: AppTheme, on badge: NSColor) -> NSColor {
-        let deep = resolved(theme.band.countFill, under: .aqua)
-        let bright = resolved(theme.band.countText, under: .darkAqua)
-        let base = luminance(badge)
-        return abs(luminance(deep) - base) >= abs(luminance(bright) - base) ? deep : bright
+    /// The theme's accent, except for Nuevo Tokyo, which spends the coloured half
+    /// of its count chip — its fill in Light, its numeral in Dark. Both are read
+    /// inside the drawing appearance, so the dynamic colour hands back the half
+    /// in effect.
+    private static func badgeColor(for theme: AppTheme, isDark: Bool) -> NSColor {
+        guard theme == .nuevoTokyo else { return NSColor(theme.primary) }
+        return NSColor(isDark ? theme.band.countText : theme.band.countFill)
     }
 
-    private static func resolved(_ color: Color, under name: NSAppearance.Name) -> NSColor {
-        var out = NSColor(color)
-        NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
-            out = NSColor(cgColor: NSColor(color).cgColor) ?? out
-        }
-        return out
+    /// Plain white or plain black, whichever the badge carries.
+    private static func tickColor(on badge: NSColor) -> NSColor {
+        contrast(.white, badge) >= contrast(.black, badge) ? .white : .black
+    }
+
+    private static func contrast(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        let (l, d) = (max(luminance(a), luminance(b)), min(luminance(a), luminance(b)))
+        return (l + 0.05) / (d + 0.05)
     }
 
     private static func luminance(_ color: NSColor) -> CGFloat {
