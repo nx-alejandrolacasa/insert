@@ -185,10 +185,23 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             palette: MarkdownHighlight.Palette(
                 text: textColor,
                 marker: NSColor(SettingsStore.shared.theme.metaText),
+                // The alpha is applied to the SwiftUI `Color`, not to the
+                // `NSColor` after conversion: `withAlphaComponent` on a dynamic
+                // colour is documented to be allowed to hand back one that no
+                // longer adapts, where `Color.opacity` stays dynamic through
+                // the bridge.
+                faintMarker: NSColor(
+                    SettingsStore.shared.theme.metaText.opacity(Self.faintMarkerOpacity)
+                ),
                 link: NSColor(SettingsStore.shared.theme.link)
             )
         )
     }
+
+    /// How far syntax recedes on the lines the caret isn't on. Low enough that
+    /// a page of Markdown reads as its words, high enough that the markers can
+    /// still be found by looking — the value is meant to be tuned by eye.
+    private static let faintMarkerOpacity = 0.42
 
     /// Makes a tab a **four-space step, anywhere in the line**.
     ///
@@ -320,6 +333,9 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
+            // Which line's syntax is at full strength is a function of the
+            // selection, so the pass has a second trigger — see `rehighlight`.
+            (view as? MarkdownTextView)?.rehighlightForRevealedLine()
             parent.selection = MarkdownTextViewBridge.selection(
                 of: view.selectedRange(), in: view.string)
         }
@@ -376,6 +392,31 @@ final class MarkdownTextView: NSTextView {
     /// re-runs a pass when an input really changed. Set by the bridge.
     var highlightConfig: MarkdownHighlight.Config?
 
+    /// Whether this editor holds the keyboard, tracked here rather than read
+    /// off `window?.firstResponder`, whose value during the two overrides below
+    /// is AppKit's business and not documented either way.
+    private var hasKeyboard = false
+
+    /// The line the last pass revealed, so a caret moving *within* one line
+    /// re-runs nothing. Arrow keys post a selection change per keystroke and a
+    /// pass is a linear scan of the body.
+    private var lastRevealedLine: NSRange?
+
+    /// The lines whose syntax draws at full strength — none while another field
+    /// has the keyboard, since "the line you are editing" is only a thing when
+    /// this is where the typing goes.
+    private var revealedLine: NSRange? {
+        guard hasKeyboard else { return nil }
+        return MarkdownHighlight.revealedLines(in: string, selection: selectedRange())
+    }
+
+    /// The selection's half of the pass. Same work as `rehighlight`, run only
+    /// when the caret has actually crossed into another line.
+    func rehighlightForRevealedLine() {
+        guard revealedLine != lastRevealedLine else { return }
+        rehighlight()
+    }
+
     /// Re-styles the whole storage from the source — see `MarkdownHighlight`.
     /// Attribute-only edits register no undo and post no `textDidChange`, so
     /// this is safe to run from inside the change notification; per keystroke
@@ -388,10 +429,13 @@ final class MarkdownTextView: NSTextView {
     func rehighlight() {
         guard let config = highlightConfig, let storage = textStorage,
               !hasMarkedText() else { return }
+        let revealing = revealedLine
+        lastRevealedLine = revealing
         MarkdownHighlight.apply(
             to: storage,
             config: config,
-            paragraphStyle: defaultParagraphStyle ?? .default
+            paragraphStyle: defaultParagraphStyle ?? .default,
+            revealing: revealing
         )
         // Typing continues in the base attributes, never in whatever run the
         // caret happens to sit after — the pass above corrects the styled runs
@@ -405,13 +449,21 @@ final class MarkdownTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
-        if became, reportsFocus { onFocusChange?(true) }
+        if became {
+            hasKeyboard = true
+            rehighlight()
+            if reportsFocus { onFocusChange?(true) }
+        }
         return became
     }
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned, reportsFocus { onFocusChange?(false) }
+        if resigned {
+            hasKeyboard = false
+            rehighlight()
+            if reportsFocus { onFocusChange?(false) }
+        }
         return resigned
     }
 

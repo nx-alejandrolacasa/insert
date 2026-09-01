@@ -145,6 +145,44 @@ final class MarkdownHighlightTests: XCTestCase {
         XCTAssertTrue(hasStyle("bold", in: text) { $0.bold })
     }
 
+    // MARK: The revealed line
+
+    private func revealed(_ text: String, _ selection: NSRange) -> String {
+        (text as NSString).substring(with:
+            MarkdownHighlight.revealedLines(in: text, selection: selection))
+    }
+
+    func testACaretRevealsWholeLineItSitsOn() {
+        let text = "# One\n**two**\n> three"
+        // Mid-line, at its start and at its end all name the same line — the
+        // markers come in pairs, so half a line would be worse than none.
+        XCTAssertEqual(revealed(text, NSRange(location: 9, length: 0)), "**two**\n")
+        XCTAssertEqual(revealed(text, NSRange(location: 6, length: 0)), "**two**\n")
+        XCTAssertEqual(revealed(text, NSRange(location: 13, length: 0)), "**two**\n")
+    }
+
+    func testACaretOnALineBoundaryBelongsToTheLineItStarts() {
+        let text = "# One\n**two**"
+        XCTAssertEqual(revealed(text, NSRange(location: 5, length: 0)), "# One\n")
+        XCTAssertEqual(revealed(text, NSRange(location: 6, length: 0)), "**two**")
+    }
+
+    func testASelectionRevealsEveryLineItCrosses() {
+        let text = "# One\n**two**\n> three"
+        XCTAssertEqual(
+            revealed(text, NSRange(location: 3, length: 8)), "# One\n**two**\n")
+    }
+
+    func testARangePastTheEndDoesNotTrap() {
+        // The selection and the string are handed over separately, so they can
+        // disagree for an update; answering an empty range beats crashing.
+        XCTAssertEqual(revealed("", NSRange(location: 0, length: 0)), "")
+        XCTAssertEqual(
+            MarkdownHighlight.revealedLines(in: "ab", selection: NSRange(location: 9, length: 4)),
+            NSRange(location: 0, length: 0))
+        XCTAssertEqual(revealed("ab", NSRange(location: 1, length: 40)), "ab")
+    }
+
     // MARK: Layout flag
 
     func testOnlyFontChangingStylesAffectLayout() {

@@ -8,6 +8,15 @@ import SwiftUI
 /// link colour. The structure a note's Markdown carries stays readable while it
 /// is being typed, which is what a raw-source editor loses.
 ///
+/// **Syntax recedes off the line being edited.** Every marker is still there
+/// and still laid out at its own width — nothing here hides a character — but
+/// on the lines the selection isn't touching it drops to `faintMarker`, so a
+/// note reads as its words while the line under the caret shows what it is
+/// made of. Deliberately the cheap half of the idea: real marker *hiding*
+/// (Typora's, Obsidian's) reflows the line as the caret enters it, and inside a
+/// card whose height is animated that is louder than in a full-window editor.
+/// This cut is what tells us whether the noise was the markers or their width.
+///
 /// The split mirrors `MarkdownFormatting`: `spans(of:)` is a pure function over
 /// the source (pinned by `MarkdownHighlightTests`), and the two appliers turn
 /// its answer into attributes — `apply(to:…)` onto the editor's `NSTextStorage`,
@@ -66,6 +75,12 @@ enum MarkdownHighlight {
     struct Palette: Equatable {
         var text: NSColor
         var marker: NSColor
+        /// Syntax on a line the caret isn't on. Deliberately an *alpha wash* of
+        /// `marker`, and deliberately held to no contrast floor: a marker is
+        /// scaffolding the writer put there, not text anybody reads, and the
+        /// word it wraps carries the meaning — `Tint.accent`'s argument, one
+        /// file over. It only has to stay findable when you look for it.
+        var faintMarker: NSColor
         var link: NSColor
     }
 
@@ -75,6 +90,31 @@ enum MarkdownHighlight {
         var base: NSFont
         var typeface: Typeface
         var palette: Palette
+    }
+
+    // MARK: The revealed line
+
+    /// The stretch of source whose syntax stays at full strength: the lines the
+    /// selection touches. Everything else fades to `faintMarker`, so a note
+    /// reads as its writing with the markers receding, and the line being
+    /// worked on shows what it is made of.
+    ///
+    /// Whole *lines* rather than the spans under the caret, because a marker
+    /// comes in pairs and revealing half of `**bold**` would be worse than
+    /// revealing neither. A multi-line selection reveals every line it crosses.
+    ///
+    /// Nothing here moves a glyph — every character is laid out at the same
+    /// width it always was, so the caret line does not reflow as it is entered.
+    /// That is the whole point of this cut; see CLAUDE.md on marker *hiding*,
+    /// which does reflow and is the question this is meant to answer.
+    static func revealedLines(in text: String, selection: NSRange) -> NSRange {
+        let ns = text as NSString
+        guard selection.location <= ns.length else { return NSRange(location: 0, length: 0) }
+        let clamped = NSRange(
+            location: selection.location,
+            length: min(selection.length, ns.length - selection.location)
+        )
+        return ns.lineRange(for: clamped)
     }
 
     // MARK: Fonts
@@ -109,7 +149,12 @@ enum MarkdownHighlight {
     /// no `textDidChange`, so this can run from inside the change notification
     /// without feeding back into itself.
     @MainActor
-    static func apply(to storage: NSTextStorage, config: Config, paragraphStyle: NSParagraphStyle) {
+    static func apply(
+        to storage: NSTextStorage,
+        config: Config,
+        paragraphStyle: NSParagraphStyle,
+        revealing: NSRange? = nil
+    ) {
         let text = storage.string
         let full = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
@@ -124,7 +169,10 @@ enum MarkdownHighlight {
             let resolved = font(for: span.style, base: config.base, typeface: config.typeface)
             if resolved != config.base { attrs[.font] = resolved }
             switch span.style.colour {
-            case .marker: attrs[.foregroundColor] = config.palette.marker
+            case .marker:
+                let revealed = revealing.map { NSIntersectionRange(span.range, $0).length > 0 }
+                attrs[.foregroundColor] = revealed == true
+                    ? config.palette.marker : config.palette.faintMarker
             case .link: attrs[.foregroundColor] = config.palette.link
             case nil: break
             }

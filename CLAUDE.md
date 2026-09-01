@@ -1511,6 +1511,35 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   inline and fenced code go monospaced, a checked `- [x]` strikes its text
   through, link labels take `theme.link`, and every syntax character (`#`,
   `**`, list markers, `>`s, fences, URLs) dims to `theme.metaText`.
+  **Syntax then recedes further off the line being edited.** Markers draw at
+  `theme.metaText` on the lines the selection touches and at 42% of it
+  everywhere else, so a note reads as its words and the line under the caret
+  shows what it is made of. Whole *lines*, never the spans under the caret — a
+  marker comes in pairs and revealing half of `**bold**` is worse than
+  revealing neither — and nothing while another field holds the keyboard, since
+  "the line you are editing" is only a thing when this is where the typing
+  goes. `MarkdownHighlight.revealedLines(in:selection:)` is the pure half,
+  pinned; `rehighlightForRevealedLine()` is the second trigger the pass now has,
+  early-outing when the caret moves *within* a line so arrow keys don't re-scan
+  the body per keystroke. The alpha is applied to the SwiftUI `Color` rather
+  than through `NSColor.withAlphaComponent`, which is documented to be allowed
+  to hand back a colour that stops adapting.
+  **This is deliberately the cheap half of marker-hiding, and it is a
+  probe.** Hiding the characters outright — Typora's and Obsidian's behaviour,
+  and what was asked for — reflows the line as the caret enters it, which
+  inside a card whose height is animated is louder than in a full-window
+  editor; that is the objection this bullet already recorded. Fading costs no
+  reflow at all, so it answers whether the noise was the markers or their
+  **width** before anything is spent on the hard version. It is also *not*
+  held to a contrast floor, on `Tint.accent`'s grounds: a marker is scaffolding
+  the writer typed, the word it wraps carries the meaning, and it only has to
+  stay findable when looked for. If the answer is "still too noisy", the next
+  step is real hiding, and the notes for it are: collapse marker runs to a
+  ~0.01pt font (offsets stay byte-identical, no TextKit 2 glyph hook needed —
+  the text view has no `layoutManager` and shouldn't grow one), leave the
+  sizing proxies on the **full** source since hiding only ever shortens a line
+  and the full-source measurement stays a valid upper bound, and leave list
+  markers and `[label](url)` revealed in a first cut.
   The shape mirrors `MarkdownFormatting`: `spans(of:)` is a **pure function**
   over the source (UTF-16 offsets, anchored only on ASCII so a range can't
   split a surrogate pair; pinned by `MarkdownHighlightTests`), and two appliers
