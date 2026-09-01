@@ -702,8 +702,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   briefly a per-theme palette; the Theme bullet has why that was reversed and the
   two rules it took with it.
   A note's **type** is, while editing, a pill-shaped dropdown in that type's
-  colour leading the chips row — type, hairline, then the chips, the meta row's
-  own order, so closing the card rearranges nothing. It replaced a row of one filter
+  colour leading the chips row — type, hairline, chips, the timestamp
+  right-aligned: the meta row's own order, so closing the card rearranges
+  nothing. It replaced a row of one filter
   pill per type, whose selected state is where the `deep`-and-white comes
   from: the control shows exactly one type and it is always the current one. The
   row cost a line of every open card and grew with every type added in Settings,

@@ -332,7 +332,6 @@ private struct NoteCardView: View {
             bodyArea
             if isEditing {
                 projectRow
-                footer
             } else {
                 // View mode collapses type, projects and timestamp onto one
                 // meta line (CLAUDE.md decision 3).
@@ -463,8 +462,9 @@ private struct NoteCardView: View {
     // MARK: Project assignments
 
     /// The edit-mode projects row, in the meta row's order — type first, a
-    /// hairline, then the projects — so closing the card rearranges nothing:
-    /// the dropdown becomes the caps label and the chips stay where they are.
+    /// hairline, then the projects, the timestamp right-aligned — so closing
+    /// the card rearranges nothing: the dropdown becomes the caps label and
+    /// everything else stays where it is.
     private var projectRow: some View {
         HStack(spacing: 6) {
             typeMenu
@@ -488,6 +488,8 @@ private struct NoteCardView: View {
                 draft.projectIDs.append($0)
             }
             Spacer(minLength: 0)
+
+            footer
         }
     }
 
