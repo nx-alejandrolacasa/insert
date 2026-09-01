@@ -17,8 +17,8 @@ import SwiftUI
 /// 2. **One accent, for action only** — `primary`: "New Note" / "New Task",
 ///    focus rings, selected states (CLAUDE.md decision 4).
 /// 3. **Text is not themed, except metadata and links.** `titleText` and
-///    `bodyText` are `labelColor` in five of the six; only Dracula names its own,
-///    and it earns that by being a text palette by origin.
+///    `bodyText` are `labelColor` in every theme. (Dracula, the one theme that
+///    named its own, is gone.)
 /// 4. **The count chip carries a second hue from the palette** — not the accent,
 ///    which is the button's, and the hue itself rather than a wash of it: the
 ///    chip's *fill* under a **white** numeral in Light, the numeral on a tinted
@@ -119,6 +119,23 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// can be white.
     case tokyoNight
 
+    /// The app's own — sourced from the maintainer's six-stop gradient rather
+    /// than an upstream project, which makes it the set's one palette whose
+    /// source is this repo: `#C9DBD5 → #A6C3C3 → #88AAB5 → #7290A7 → #667595 →
+    /// #63597D`, sage through steel blue into dusky violet. **Only the first
+    /// four stops are used** — the violet end is deliberately left out, by
+    /// request, so nothing in the theme tends to purple. The band is the first
+    /// stop `#C9DBD5` (the icon tile's own sage); the accent is `#B4CECE`, a
+    /// pale tone between the first two stops, chosen by request — pale enough
+    /// that its button wears a **dark** label in both appearances, and the
+    /// light ring deepens in-hue to `#689797` since `#B4CECE` on a white card
+    /// is 1.66:1; the count chip is the sage-teal `#88AAB5` — deepened for a
+    /// white numeral in Light, lightened as the numeral in Dark. Light grounds
+    /// stay in the sage family with white cards (the icon's paper is white
+    /// too); Dark takes the gradient's steel blue down to a slate-blue ink,
+    /// which is the "Tokyo" in the name.
+    case nuevoTokyo
+
     /// `rebelot/kanagawa.nvim` → `lua/kanagawa/colors.lua`. Dark is Wave, Light
     /// is Lotus: warm cream on cold ink, and the set's one warm theme.
     ///
@@ -167,35 +184,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// is stated against; see `Band.countFill`.
     case rosePine
 
-    /// The original of the set, and now the theme the other five were built to
-    /// match — it was the only one in the first cut that read as an identity
-    /// rather than as a shade, which is the observation this whole set came from.
-    /// Unchanged in structure, with two changes of its own.
-    ///
-    /// **Pink and purple are swapped.** The accent is the lavender `#bd93f9` —
-    /// **deepened to `#8359ba`, by request, so its button label can be white**: the
-    /// lavender itself is 2.41:1 under white, and it wore a dark plum label until
-    /// then. It is the one accent in the set deepened for the *label's* sake in
-    /// **both** appearances rather than only where the ground demanded it, and the
-    /// cost is that Dracula's button is no longer the palette's bright purple; the
-    /// `ring` still is in Dark, which is where that lavender survives. And
-    /// Feedback takes the pink `#ff79c6`, because with Rosé Pine in the set a
-    /// rose-pink button on a plum ground made two themes read as the same idea.
-    /// The bright pink moves onto the **count chip**, where it works differently
-    /// per appearance because it cannot carry both ways: a pink numeral on a
-    /// recessed fill in Dark, and the reverse in Light — a pink *fill* under a
-    /// **white** numeral on the pink deepened to `#b02a72`, since bright pink as
-    /// text on a pale band fails badly and white on the pink itself is 2.39:1. That
-    /// construction is **the other five's now too** (see `Band.countFill`); this is
-    /// where it was found, and Dracula's own values are unchanged by the others
-    /// adopting it.
-    ///
-    /// Its own note-type hues (`#8be9fd`, `#ffb86c`, `#ff79c6`, `#50fa7b`) are
-    /// gone with every other theme's — see the note-type section — which also
-    /// retires the greyscale-ladder exception they needed, since its cyan and its
-    /// green sat at one lightness. The pink survives where it counts: it is the
-    /// count chip's.
-    case dracula
+    // Dracula was the sixth — the original of the set, and the theme the
+    // sourced five were built to match. **Removed September 2026** at the
+    // maintainer's request; the count-chip construction the whole set uses (a
+    // vivid palette hue swapping roles per appearance) was found there before
+    // it went. A saved `"dracula"` migrates to Dark Owl, the remaining dark
+    // theme with a violet action — see `migrated(theme:tint:accent:)`.
 
     var id: Self { self }
 
@@ -206,11 +200,15 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .system: "System"
-        case .tokyoNight: "Tokyo Night"
+        // Renamed from "Tokyo Night" in September 2026 — the label only. The
+        // case and its raw value stay `tokyoNight`, because the raw value is
+        // what the `theme` default holds and renaming it would silently reset
+        // every install that had picked it.
+        case .tokyoNight: "Neon"
+        case .nuevoTokyo: "Nuevo Tokyo"
         case .kanagawa: "Kanagawa"
         case .darkOwl: "Dark Owl"
         case .rosePine: "Rosé Pine"
-        case .dracula: "Dracula"
         }
     }
 
@@ -232,9 +230,11 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// 3. The retired **accent** (Accent → Highlight colour), which decides only
     ///    where the tint was Plain, since that was then the only colour chosen.
     ///
-    /// **Nobody arrives at Dracula.** It is an identity rather than a shade, so it
-    /// has to be picked — and a saved `"dracula"` never reaches this function,
-    /// because that raw value still decodes.
+    /// **A saved `"dracula"` lands on Dark Owl** since the theme's September
+    /// 2026 removal — the remaining dark theme with a violet action, which is
+    /// the closest thing to what that install chose. (While Dracula existed the
+    /// rule was the opposite: nobody *arrived* at it, because an identity has
+    /// to be picked.)
     ///
     /// One row is worth naming: a stored **blue** accent goes to Dark Owl, which
     /// the plan asks for and which is a change of mind from the previous
@@ -247,7 +247,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case "bone", "slate", "graphite": return .system
         case "moss", "pine": return .tokyoNight
         case "ember", "amber": return .kanagawa
-        case "indigo": return .darkOwl
+        case "indigo", "dracula": return .darkOwl
         case "rosewood": return .rosePine
         default: break
         }
@@ -307,10 +307,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// for Light (its mint is 1.67:1 on white) and Dark Owl a lifted violet for
     /// Dark.
     ///
-    /// **Dracula's light ring is the one value in the set deepened here rather
-    /// than sourced.** The table repeats the lavender in both appearances, and on
-    /// a white card that is 2.41:1 — under the 3:1 an indicator needs — so it
-    /// steps down to 3.08:1. Note the previous set's rule that a ring must differ
+    /// **Nuevo Tokyo's light ring is the one value in the set deepened here
+    /// rather than sourced**: its pale `#B4CECE` accent is 1.66:1 on a white
+    /// card — under the 3:1 an indicator needs — so the ring is the same hue at
+    /// `#689797`, 3.25:1. Note the previous set's rule that a ring must differ
     /// from the button beside it is *gone*: the ring follows the accent, and only
     /// contrast moves it.
     var ring: Color { band.ring }
@@ -353,8 +353,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// so their contrast must not become a function of a colour preference, while
     /// metadata is already deliberately quiet and a tinted grey is what makes it
     /// read as part of the theme instead of as leftover chrome. `titleText` and
-    /// `bodyText` are the system's in five of the six for that reason — Dracula
-    /// is the one exception, and it earns it by being a text palette by origin.
+    /// `bodyText` are the system's in every theme for that reason.
     ///
     /// Its Increase Contrast pair steps most of the way to the label colour, the
     /// same move `Stone.metaText` makes — and for the same reason, that the solved
@@ -363,16 +362,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var metaText: Color { resolved.metaText }
 
     /// A card's **title** colour, and the plainest statement of the rule above:
-    /// it is `labelColor` — the system's, full contrast, unthemed — for five of
-    /// the six themes, and only Dracula returns something else. If these ever
-    /// start differing per theme, a theme is reaching further than the plan
-    /// allows; `ThemePaletteTests` asserts exactly that.
+    /// it is `labelColor` — the system's, full contrast, unthemed — in every
+    /// theme. If these ever start differing per theme, a theme is reaching
+    /// further than the plan allows; `ThemePaletteTests` asserts exactly that.
     var titleText: Color { resolved.titleText }
 
-    /// A card's **body** colour, on the same terms as `titleText`. Dracula's is a
-    /// step softer than its title (`#cfd2e0` on dark, `#463d63` on light), which
-    /// is the paragraph-versus-heading contrast its palette is built around — and
-    /// the reason the two are separate values rather than one "text".
+    /// A card's **body** colour, on the same terms as `titleText`. The two stay
+    /// separate values because Dracula's body was a step softer than its title
+    /// while it existed, and a future text-palette theme would want the split.
     var bodyText: Color { resolved.bodyText }
 
     /// A link inside a card's body. The palette's own link colour, deepened in
@@ -387,18 +384,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var link: Color { resolved.link }
 
     /// The order `Library.leastUsedTint()` walks when auto-assigning a colour to
-    /// a new project, so a Dracula install's projects come out in Dracula's own
-    /// hues. Only the *auto-assigned* default follows the theme: a colour the
-    /// user picked is data, and switching theme must never rewrite it. The other
-    /// five keep the app's own dot order.
+    /// a new project. Only the *auto-assigned* default follows the theme: a
+    /// colour the user picked is data, and switching theme must never rewrite
+    /// it. Kanagawa is the one reorder left (Dracula led with its own five
+    /// until its removal); the rest keep the app's own dot order.
     var projectTintOrder: [Tint] {
         switch self {
-        case .dracula:
-            // Dracula's five: red, yellow, cyan (the app's `blue`), purple,
-            // orange — then the rest of the palette, so the order is still
-            // total and a tenth project still gets a colour.
-            let preferred: [Tint] = [.red, .yellow, .blue, .purple, .orange]
-            return preferred + Tint.allCases.filter { !preferred.contains($0) }
         case .kanagawa:
             // Kanagawa's rule is "the only orange on screen is the button", and
             // the plan says project dots are included in it — so orange goes to
@@ -617,11 +608,10 @@ private struct Resolved {
         card = grounds.card.color
         border = grounds.border.color
         metaText = theme.metaTones.color
-        // `labelColor` unless a theme names its own, which today means Dracula
-        // alone — and the fall-through is the point: the writing's contrast is
-        // the system's business in five of the six.
-        titleText = theme.writingTones?.title.color ?? Color(nsColor: .labelColor)
-        bodyText = theme.writingTones?.body.color ?? Color(nsColor: .labelColor)
+        // `labelColor`, unthemed, for every theme — the writing's contrast is
+        // the system's business (Dracula, the one exception, is gone).
+        titleText = Color(nsColor: .labelColor)
+        bodyText = Color(nsColor: .labelColor)
         link = theme.linkTones.color
     }
 }
@@ -638,11 +628,6 @@ private struct Grounds {
     let border: DynamicRGB
 }
 
-/// A theme's title and body colours, for the one theme that names them.
-private struct WritingTones {
-    let title: DynamicRGB
-    let body: DynamicRGB
-}
 
 /// One colour in its two appearances, and optionally its two Increase Contrast
 /// variants.
@@ -760,6 +745,42 @@ private extension AppTheme {
                 segmentLabel: RGB(r: 0.803, g: 0.828, b: 0.927),
                 segmentFill: RGB(r: 0.881, g: 0.905, b: 1.000),
                 segmentLabelSelected: RGB(r: 0.141, g: 0.157, b: 0.231)))
+        // The gradient's sage half (see the case): band `#C9DBD5`, accent
+        // `#B4CECE` — pale by request, so the button carries the band's own dark
+        // ink as its label in both appearances (7.9:1 light, 10.7:1 dark) and
+        // only the light ring deepens, to `#689797` at 3.25:1 on the white card.
+        // The chip is `#88AAB5` deepened to `#2F5D6B` as the light fill under a
+        // white numeral and lightened to `#8FCADC` as the dark numeral — the
+        // published teal is 0.040 C, the quietest chip hue in the set, so the
+        // numeral is saturated a step with the lightness. Track and segments
+        // derived from the band's hue by the rules on `Band`.
+        case .nuevoTokyo: Tones(
+            light: Band(
+                fill: RGB(r: 0.788, g: 0.859, b: 0.835),
+                text: RGB(r: 0.165, g: 0.196, b: 0.220),
+                countFill: RGB(r: 0.184, g: 0.365, b: 0.420),
+                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
+                primary: RGB(r: 0.706, g: 0.808, b: 0.808),
+                primaryLabel: RGB(r: 0.165, g: 0.196, b: 0.220),
+                ring: RGB(r: 0.408, g: 0.592, b: 0.592),
+                trackFill: RGB(r: 0.863, g: 0.906, b: 0.886),
+                trackHighlight: false,
+                segmentLabel: RGB(r: 0.306, g: 0.353, b: 0.333),
+                segmentFill: RGB(r: 1.000, g: 1.000, b: 1.000),
+                segmentLabelSelected: RGB(r: 0.165, g: 0.196, b: 0.220)),
+            dark: Band(
+                fill: RGB(r: 0.149, g: 0.184, b: 0.212),
+                text: RGB(r: 0.769, g: 0.824, b: 0.847),
+                countFill: RGB(r: 0.226, g: 0.281, b: 0.312),
+                countText: RGB(r: 0.561, g: 0.792, b: 0.863),
+                primary: RGB(r: 0.706, g: 0.808, b: 0.808),
+                primaryLabel: RGB(r: 0.078, g: 0.098, b: 0.114),
+                ring: RGB(r: 0.706, g: 0.808, b: 0.808),
+                trackFill: RGB(r: 0.234, g: 0.266, b: 0.291),
+                trackHighlight: true,
+                segmentLabel: RGB(r: 0.784, g: 0.839, b: 0.863),
+                segmentFill: RGB(r: 0.847, g: 0.894, b: 0.914),
+                segmentLabelSelected: RGB(r: 0.149, g: 0.184, b: 0.212)))
         // Wave's `sumiInk5` band over `sumiInk3`, and Lotus's `lotusWhite2` over a
         // page derived above it — **at half Lotus's chroma**, by request: the
         // published `lotusWhite2` is 0.060 C, which is more than twice any other
@@ -876,39 +897,6 @@ private extension AppTheme {
                 segmentLabel: RGB(r: 0.827, g: 0.817, b: 0.937),
                 segmentFill: RGB(r: 0.904, g: 0.896, b: 1.000),
                 segmentLabelSelected: RGB(r: 0.149, g: 0.137, b: 0.227)))
-        // Unchanged from the theme's first appearance in the app apart from what its
-        // case lists: the accent is the lavender **deepened** for a white label, and
-        // the pink moves onto the count chip — a numeral on a recessed black fill
-        // in Dark, the chip's own fill under a dark numeral in Light. The light
-        // ring is the lavender deepened, the one ring in the set this
-        // implementation solved rather than sourced.
-        case .dracula: Tones(
-            light: Band(
-                fill: RGB(r: 0.941, g: 0.910, b: 0.992),
-                text: RGB(r: 0.235, g: 0.165, b: 0.388),
-                countFill: RGB(r: 0.690, g: 0.165, b: 0.447),
-                countText: RGB(r: 1.000, g: 1.000, b: 1.000),
-                primary: RGB(r: 0.515, g: 0.350, b: 0.729),
-                primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
-                ring: RGB(r: 0.661, g: 0.497, b: 0.890),
-                trackFill: RGB(r: 0.911, g: 0.880, b: 0.961),
-                trackHighlight: false,
-                segmentLabel: RGB(r: 0.314, g: 0.288, b: 0.355),
-                segmentFill: RGB(r: 1.000, g: 1.000, b: 1.000),
-                segmentLabelSelected: RGB(r: 0.235, g: 0.165, b: 0.388)),
-            dark: Band(
-                fill: RGB(r: 0.227, g: 0.184, b: 0.369),
-                text: RGB(r: 0.973, g: 0.973, b: 0.949),
-                countFill: RGB(r: 0.187, g: 0.151, b: 0.302),
-                countText: RGB(r: 1.000, g: 0.475, b: 0.776),
-                primary: RGB(r: 0.515, g: 0.350, b: 0.729),
-                primaryLabel: RGB(r: 1.000, g: 1.000, b: 1.000),
-                ring: RGB(r: 0.741, g: 0.576, b: 0.976),
-                trackFill: RGB(r: 0.305, g: 0.266, b: 0.432),
-                trackHighlight: true,
-                segmentLabel: RGB(r: 0.834, g: 0.802, b: 1.000),
-                segmentFill: RGB(r: 0.909, g: 0.894, b: 1.000),
-                segmentLabelSelected: RGB(r: 0.227, g: 0.184, b: 0.369)))
         }
     }
 
@@ -939,6 +927,13 @@ private extension AppTheme {
             window: DynamicRGB(light: RGB(r: 0.949, g: 0.953, b: 0.969), dark: RGB(r: 0.102, g: 0.106, b: 0.149)),
             card: DynamicRGB(light: RGB(r: 1.000, g: 1.000, b: 1.000), dark: RGB(r: 0.118, g: 0.125, b: 0.188)),
             border: DynamicRGB(light: RGB(r: 0.875, g: 0.882, b: 0.918), dark: RGB(r: 0.188, g: 0.195, b: 0.253)))
+        // A pale sage page under white cards in Light, and the gradient's steel
+        // blue taken down to a slate-blue ink in Dark, with the edge white at
+        // 8% over the card, composited here like every other dark edge.
+        case .nuevoTokyo: Grounds(
+            window: DynamicRGB(light: RGB(r: 0.937, g: 0.957, b: 0.949), dark: RGB(r: 0.078, g: 0.098, b: 0.114)),
+            card: DynamicRGB(light: RGB(r: 1.000, g: 1.000, b: 1.000), dark: RGB(r: 0.106, g: 0.133, b: 0.157)),
+            border: DynamicRGB(light: RGB(r: 0.761, g: 0.831, b: 0.816), dark: RGB(r: 0.178, g: 0.202, b: 0.224)))
         // Lotus's own `#f2ecbc` page is too yellow to carry a window, so the page
         // and cards are derived *above* the band and the band stays the only
         // saturated surface. The cream card is one of the two in the set that
@@ -957,24 +952,17 @@ private extension AppTheme {
             window: DynamicRGB(light: RGB(r: 0.980, g: 0.957, b: 0.929), dark: RGB(r: 0.098, g: 0.090, b: 0.141)),
             card: DynamicRGB(light: RGB(r: 1.000, g: 0.980, b: 0.953), dark: RGB(r: 0.122, g: 0.114, b: 0.180)),
             border: DynamicRGB(light: RGB(r: 0.925, g: 0.886, b: 0.847), dark: RGB(r: 0.251, g: 0.239, b: 0.322)))
-        case .dracula: Grounds(
-            window: DynamicRGB(light: RGB(r: 0.980, g: 0.969, b: 1.000), dark: RGB(r: 0.157, g: 0.165, b: 0.212)),
-            card: DynamicRGB(light: RGB(r: 1.000, g: 1.000, b: 1.000), dark: RGB(r: 0.184, g: 0.192, b: 0.247)),
-            border: DynamicRGB(light: RGB(r: 0.906, g: 0.867, b: 0.969), dark: RGB(r: 0.247, g: 0.259, b: 0.337)))
         }
     }
 
     /// Metadata type, per theme, and the value most likely to fail: it is the one
     /// themed *text* colour, and it lands on the card rather than on the band.
     ///
-    /// Three of the six are their palette's own comment grey, verbatim — Tokyo
-    /// Night's `#565f89` (6.2:1 on white), Rosé Pine's `subtle` in Dark, Dracula's
-    /// own pair. The rest are derived, because the published grey failed on the
-    /// card: Rosé Pine's `subtle` measures 4.3:1 on Dawn's paper, and
-    /// `secondaryLabel` at its shipping opacity is ~3.4:1. Dracula's Dark value
-    /// is the tightest text pairing in the file at 4.52:1 — it clears the floor
-    /// and it is the palette's own, so it stands, but it has no room left and a
-    /// card face nudged lighter would take it under.
+    /// Neon's `#565f89` (6.2:1 on white) and Rosé Pine's `subtle` in Dark are
+    /// their palette's own comment grey, verbatim. The rest are derived, because
+    /// the published grey failed on the card: Rosé Pine's `subtle` measures
+    /// 4.3:1 on Dawn's paper, and `secondaryLabel` at its shipping opacity is
+    /// ~3.4:1.
     var metaTones: DynamicRGB {
         switch self {
         case .system: DynamicRGB(
@@ -983,6 +971,9 @@ private extension AppTheme {
         case .tokyoNight: DynamicRGB(
             light: RGB(r: 0.337, g: 0.373, b: 0.537), dark: RGB(r: 0.545, g: 0.576, b: 0.722),
             lightHC: RGB(r: 0.248, g: 0.280, b: 0.437), darkHC: RGB(r: 0.647, g: 0.680, b: 0.829))
+        case .nuevoTokyo: DynamicRGB(
+            light: RGB(r: 0.361, g: 0.408, b: 0.439), dark: RGB(r: 0.576, g: 0.651, b: 0.690),
+            lightHC: RGB(r: 0.275, g: 0.316, b: 0.345), darkHC: RGB(r: 0.700, g: 0.760, b: 0.790))
         case .kanagawa: DynamicRGB(
             light: RGB(r: 0.427, g: 0.408, b: 0.529), dark: RGB(r: 0.604, g: 0.592, b: 0.549),
             lightHC: RGB(r: 0.334, g: 0.314, b: 0.431), darkHC: RGB(r: 0.732, g: 0.720, b: 0.675))
@@ -992,9 +983,6 @@ private extension AppTheme {
         case .rosePine: DynamicRGB(
             light: RGB(r: 0.427, g: 0.408, b: 0.529), dark: RGB(r: 0.565, g: 0.549, b: 0.667),
             lightHC: RGB(r: 0.334, g: 0.314, b: 0.431), darkHC: RGB(r: 0.667, g: 0.651, b: 0.773))
-        case .dracula: DynamicRGB(
-            light: RGB(r: 0.420, g: 0.384, b: 0.533), dark: RGB(r: 0.565, g: 0.596, b: 0.722),
-            lightHC: RGB(r: 0.327, g: 0.291, b: 0.434), darkHC: RGB(r: 0.716, g: 0.749, b: 0.880))
         }
     }
 
@@ -1011,6 +999,9 @@ private extension AppTheme {
         case .tokyoNight: DynamicRGB(
             light: RGB(r: 0.090, g: 0.412, b: 0.561), dark: RGB(r: 0.490, g: 0.812, b: 1.000),
             lightHC: RGB(r: 0.000, g: 0.315, b: 0.443), darkHC: RGB(r: 0.747, g: 0.902, b: 1.000))
+        case .nuevoTokyo: DynamicRGB(
+            light: RGB(r: 0.200, g: 0.376, b: 0.498), dark: RGB(r: 0.561, g: 0.757, b: 0.878),
+            lightHC: RGB(r: 0.149, g: 0.286, b: 0.373), darkHC: RGB(r: 0.780, g: 0.880, b: 0.949))
         case .kanagawa: DynamicRGB(
             light: RGB(r: 0.179, g: 0.485, b: 0.596), dark: RGB(r: 0.498, g: 0.706, b: 0.792),
             lightHC: RGB(r: 0.000, g: 0.370, b: 0.476), darkHC: RGB(r: 0.602, g: 0.813, b: 0.901))
@@ -1020,35 +1011,13 @@ private extension AppTheme {
         case .rosePine: DynamicRGB(
             light: RGB(r: 0.157, g: 0.412, b: 0.514), dark: RGB(r: 0.420, g: 0.663, b: 0.769),
             lightHC: RGB(r: 0.021, g: 0.317, b: 0.415), darkHC: RGB(r: 0.523, g: 0.769, b: 0.877))
-        case .dracula: DynamicRGB(
-            light: RGB(r: 0.482, g: 0.247, b: 0.722), dark: RGB(r: 0.545, g: 0.914, b: 0.992),
-            lightHC: RGB(r: 0.387, g: 0.134, b: 0.612), darkHC: RGB(r: 0.883, g: 0.978, b: 1.000))
         }
     }
 
-    /// The title and body colours, for the **one** theme that is a text palette
-    /// by origin. `nil` everywhere else, and that is rule 3 rather than an
-    /// omission: five of the six leave the writing on `labelColor`, so a card's
-    /// paragraph reads at the system's own contrast whatever theme is on. The
-    /// other five palettes *do* publish a title and a body — this is the one
-    /// place the set deliberately declines a sourced value.
-    ///
-    /// Dracula's four are its palette's own (`#f8f8f2` / `#cfd2e0` dark,
-    /// `#2c2145` / `#463d63` light) and need no Increase Contrast variants: the
-    /// softest of them is the dark body at 8.6:1 on its card, already past the
-    /// 7:1 that switch promises.
-    var writingTones: WritingTones? {
-        switch self {
-        case .dracula: WritingTones(
-            title: DynamicRGB(
-                light: RGB(r: 0.173, g: 0.129, b: 0.271),
-                dark: RGB(r: 0.973, g: 0.973, b: 0.949)),
-            body: DynamicRGB(
-                light: RGB(r: 0.275, g: 0.239, b: 0.388),
-                dark: RGB(r: 0.812, g: 0.824, b: 0.878)))
-        default: nil
-        }
-    }
+    // `writingTones` is gone with Dracula, which was the one theme naming its
+    // own title and body — the writing is `labelColor` in all six now, with no
+    // exception left to plumb for. Every palette in the set *does* publish a
+    // title and a body; declining them is rule 3, not an omission.
 }
 
 // MARK: - Picker

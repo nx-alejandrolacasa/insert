@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
       <linearGradient id="badge" gradientUnits="userSpaceOnUse" x1="219.648" y1="80.896" x2="219.648" y2="347.136">
-        <stop offset="0" stop-color="#A885FA"/>
-        <stop offset="1" stop-color="#FCA86B"/>
+        <stop offset="0" stop-color="#7FA3D1"/>
+        <stop offset="1" stop-color="#35507F"/>
       </linearGradient>
   </defs>
   <g transform="translate(471.04 547.84) rotate(4)">

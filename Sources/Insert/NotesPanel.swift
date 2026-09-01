@@ -339,10 +339,9 @@ private struct NoteCardView: View {
                 // editing", which is an interactive state, and interactive is
                 // the primary's one job (CLAUDE.md decision 4). At full
                 // strength, not the 0.55 the accent wore — `ring` is already
-                // solved as an outline (it is where Tokyo Night's mint and
-                // Dracula's lavender each deepen a step in Light, and Dark
-                // Owl's violet lifts one in Dark), and fading it was
-                // compensating for a colour that wasn't.
+                // solved as an outline (it is where Neon's mint deepens a step
+                // in Light and Dark Owl's violet lifts one in Dark), and
+                // fading it was compensating for a colour that wasn't.
                 RoundedRectangle(cornerRadius: Metrics.islandRadius, style: .continuous)
                     .strokeBorder(settings.theme.ring, lineWidth: 1.5)
             }
@@ -607,9 +606,9 @@ private struct NoteCardView: View {
                 expandLabel: "Show the whole note",
                 collapseLabel: "Collapse note"
             )
-            // `labelColor` in five of the six themes; only Dracula names a body
-            // colour of its own. On the container, so every block inherits it and
-            // the runs that set their own colour (code, the quote bar) still win.
+            // `labelColor` in every theme (Dracula, the one exception, is gone).
+            // On the container, so every block inherits it and the runs that set
+            // their own colour (code, the quote bar) still win.
             .foregroundStyle(settings.theme.bodyText)
         }
     }

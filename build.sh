@@ -107,8 +107,13 @@ ICON_COMPILED=0
 if [[ "${INSERT_LAYERED_ICON:-1}" != "0" ]] \
     && [[ -d "Resources/AppIcon.icon" ]] && command -v actool >/dev/null 2>&1; then
   ICON_LOG="$(mktemp)"
-  ICON_CMD=(actool "Resources/AppIcon.icon"
-    --compile "$APP/Contents/Resources"
+  # Absolute paths on purpose: actool hands the job to a persistent helper
+  # agent that keeps the working directory of its *first* launch, so a relative
+  # --compile can resolve against some other checkout the agent was started
+  # from — seen here as "output directory …/prtscn/… does not exist" while
+  # building insert.
+  ICON_CMD=(actool "$PWD/Resources/AppIcon.icon"
+    --compile "$PWD/$APP/Contents/Resources"
     --platform macosx
     --minimum-deployment-target 26.0
     --app-icon AppIcon
@@ -131,7 +136,7 @@ if [[ "${INSERT_LAYERED_ICON:-1}" != "0" ]] \
   else
     echo "warning: could not compile Resources/AppIcon.icon — falling back to the"
     echo "         flat .icns, which forgoes the Liquid Glass icon treatment."
-    grep -vE '^[[:space:]]*$|Abort trap' "$ICON_LOG" | sed 's/^/         /' | head -3
+    grep -vE '^[[:space:]]*$|Abort trap' "$ICON_LOG" | sed 's/^/         /' | head -20
   fi
   rm -f "$ICON_LOG"
 elif [[ "${INSERT_LAYERED_ICON:-1}" != "0" ]] && ! command -v actool >/dev/null 2>&1; then

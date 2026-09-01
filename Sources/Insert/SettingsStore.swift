@@ -51,7 +51,11 @@ final class SettingsStore {
     /// own through a dynamic `NSColor`, so there is nothing to re-apply — unlike
     /// `appearance` itself, and unlike `appIncreaseContrast`.
     var theme: AppTheme {
-        didSet { defaults.set(theme.rawValue, forKey: Keys.theme) }
+        didSet {
+            defaults.set(theme.rawValue, forKey: Keys.theme)
+            // The Dock icon wears the theme's colours; see `ThemedAppIcon`.
+            ThemedAppIcon.apply(theme)
+        }
     }
 
     /// The face note and task cards are written in. Read by `Card` during every

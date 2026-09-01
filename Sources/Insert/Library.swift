@@ -510,8 +510,8 @@ final class Library {
     }
 
     /// The palette entry fewest projects wear, walked in the **theme's** order so
-    /// the choice is stable rather than random — and so a Dracula install's new
-    /// projects come out in Dracula's own hues (`AppTheme.projectTintOrder`).
+    /// the choice is stable rather than random — and so a Kanagawa install's new
+    /// projects keep orange for the button (`AppTheme.projectTintOrder`).
     ///
     /// Only this auto-assignment follows the theme. A colour the user picked is
     /// *data*, in `Projects.md`, and switching theme must never rewrite it.

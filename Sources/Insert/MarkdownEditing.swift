@@ -48,8 +48,8 @@ struct MarkdownEditor: View {
     /// call sites' proxies measure with through `Card.font(_:)`.
     var font: NSFont
     /// The colour the source draws in, so the editor matches the preview it
-    /// replaces — `AppTheme.bodyText`, which is `labelColor` in five of the six
-    /// themes and Dracula's own body value in the sixth. Passed in rather than
+    /// replaces — `AppTheme.bodyText`, which is `labelColor` in every theme
+    /// since Dracula's removal. Passed in rather than
     /// read here, like `font`: the call site reads it inside a view body, so the
     /// `@Observable` access registers and a theme change repaints an open editor.
     var textColor: NSColor = .labelColor

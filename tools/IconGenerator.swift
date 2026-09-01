@@ -2,7 +2,7 @@ import AppKit
 import CoreText
 
 // Insert app icon: a soft, modern mark for a projects / notes / tasks app.
-// A pastel gradient tile (lilac → warm apricot) with two stacked white "note"
+// A pastel gradient tile (sage → cool grey) with two stacked white "note"
 // cards; the front card carries a few text lines and a checkmark badge — notes +
 // tasks, at a glance. Minimalistic and "Liquid Glass" adjacent: the cards
 // themselves are opaque, and the sheen, the shadows and the corner mask are the
@@ -33,14 +33,14 @@ import CoreText
 
 // MARK: - Palette (pastel purple + warm orange)
 
-private let bgTop = NSColor(srgbRed: 0.82, green: 0.78, blue: 0.99, alpha: 1)      // pastel lilac
-private let bgBottom = NSColor(srgbRed: 0.99, green: 0.86, blue: 0.72, alpha: 1)   // warm apricot
+private let bgTop = NSColor(srgbRed: 0.533, green: 0.667, blue: 0.710, alpha: 1)   // sage-teal (#88AAB5)
+private let bgBottom = NSColor(srgbRed: 0.447, green: 0.565, blue: 0.655, alpha: 1) // steel blue (#7290A7)
 private let cardFront = NSColor(srgbRed: 1.00, green: 1.00, blue: 1.00, alpha: 1)  // clean white
 private let cardBack = NSColor(srgbRed: 0.97, green: 0.96, blue: 1.00, alpha: 1)   // faint lilac-white
 private let lineTint = NSColor(srgbRed: 0.80, green: 0.81, blue: 0.87, alpha: 1)   // soft gray text lines
-// The check badge picks up the warm end of the tile so both hues sing.
-private let badgeTop = NSColor(srgbRed: 0.66, green: 0.52, blue: 0.98, alpha: 1)   // purple
-private let badgeBottom = NSColor(srgbRed: 0.99, green: 0.66, blue: 0.42, alpha: 1) // orange
+// The check badge is the slate blue Nuevo Tokyo's count chip wears, light to deep.
+private let badgeTop = NSColor(srgbRed: 0.498, green: 0.639, blue: 0.820, alpha: 1) // light blue (#7FA3D1)
+private let badgeBottom = NSColor(srgbRed: 0.208, green: 0.314, blue: 0.498, alpha: 1) // deep blue (#35507F)
 
 private extension NSColor {
     /// `#RRGGBB`, for SVG.

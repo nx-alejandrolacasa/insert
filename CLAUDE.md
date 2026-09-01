@@ -180,9 +180,9 @@ shared note-type label against all twelve card faces (and that neither it nor th
 `accent` its mark uses moves when the theme changes, and that `accent` stays the
 brighter of the two), that only the two sourced papers are off-white in Light, that
 title and body colour are the
-**system's** in five of the six and Dracula's own in the sixth — the check that
-keeps "text is not themed" honest — and that Increase Contrast really reaches
-7:1.
+**system's** in every theme — the check that keeps "text is not themed" honest,
+with no exception left since Dracula's removal — and that Increase Contrast
+really reaches 7:1.
 
 ## Design intent
 
@@ -198,18 +198,21 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   where it is never behind text. What changed:
   - **Theme replaces both Background → Tint and Accent → Highlight colour.**
     Six themes, each with a Light and a Dark value, in `AppTheme` — **System,
-    Tokyo Night, Kanagawa, Dark Owl, Rosé Pine, Dracula** since the third cut
-    below; **System is the default and the first case**. A theme is *three
+    Neon (né Tokyo Night — the label was renamed in September 2026, the
+    `tokyoNight` case and raw value deliberately weren't, so saved settings
+    survive), Nuevo Tokyo, Kanagawa, Dark Owl, Rosé Pine**; **System is the
+    default and the first case**. **Dracula was the seventh and was removed in
+    September 2026** — a saved `"dracula"` migrates to Dark Owl, and the
+    count-chip construction the set uses was found there before it went. A theme
+    is *three
     grounds and one accent*: band / page / card, plus the primary (buttons, rings,
     selected states), with the glass track derived from the band rather than a token
-    set of its own. Note-type colour is shared by all six (`Tint.accent` and
+    set of its own. Note-type colour is shared by every theme (`Tint.accent` and
     `Tint.ink`) — see the Theme bullet for the palette-per-theme that was tried and reversed.
     Whatever colour setting an older install holds is read **once** — a theme name
     from an earlier set, else the retired tint, else the retired accent
     (`AppTheme.migrated(theme:tint:accent:)`) — and the two retired keys are then
-    **deleted**; **nothing migrates to Dracula**, which is an identity rather than
-    a shade and has to be picked. Pinned by `ThemeMigrationTests`, including a
-    sweep asserting no input reaches Dracula, and by `ThemePaletteTests`, which
+    **deleted**. Pinned by `ThemeMigrationTests` and by `ThemePaletteTests`, which
     measures every value in the table.
   - **The column header band** (`ColumnHeaderBand`) replaces the heading row and
     the loose filter row in both columns: heading, a count in a mono pill, the
@@ -1679,12 +1682,25 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `NSApp.appearance` is all it takes — nothing reads `Locale`-style globals or
   caches a resolved shade.
 - **Theme** — Settings → Appearance offers six, in this order: **System** (the
-  platform's own greys, and `systemBlue` deepened), **Tokyo Night**
-  (indigo-slate grounds, mint action), **Kanagawa** (warm cream on cold ink —
+  platform's own greys, and `systemBlue` deepened), **Neon**
+  (Tokyo Night's palette — renamed September 2026, label only; the case and raw
+  value stay `tokyoNight` so saved settings survive. Indigo-slate grounds, mint
+  action), **Nuevo Tokyo** (added September 2026
+  and still being iterated on — sourced from the maintainer's own six-stop
+  gradient, sage → steel blue → dusky violet, **first four stops only**: the
+  violet end is deliberately unused so the theme never tends to purple; band
+  `#C9DBD5`, pale `#B4CECE` action under a dark label with the light ring
+  deepened to carry 3:1, sage-teal `#88AAB5` count chip, and the gradient's
+  middle stops are the icon's background), **Kanagawa** (warm cream on cold ink —
   Wave in Dark, Lotus in Light — orange action, and the set's one warm theme),
-  **Dark Owl** (teal-navy, violet action, spring-green links), **Rosé Pine**
-  (plum and rose; Dawn is pink-cream paper) and **Dracula**.
-  **Five of the six are sourced palettes**, read from the upstream project rather
+  **Dark Owl** (teal-navy, violet action, spring-green links) and **Rosé Pine**
+  (plum and rose; Dawn is pink-cream paper). **Dracula was the seventh and was
+  removed in September 2026**: it was the original of the set and the theme the
+  sourced palettes were built to match, its count-chip construction survives in
+  all of them, and a saved `"dracula"` migrates to Dark Owl — the remaining
+  dark theme with a violet action. Its removal also took the app's one themed
+  writing exception with it (see below).
+  **Four of the six are sourced palettes**, read from the upstream project rather
   than designed here, and that is this cut's whole argument rather than a
   shortcut: a set of authored hues has nothing to be faithful to, which is why
   the previous six still read as a preference (see the theme-system bullet's
@@ -1766,24 +1782,22 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   composited offline under a legible tint of itself, fixed that on paper and not on
   screen: composited into a *pale* band it lands above `L` 0.90 in every light
   theme, so the chip was a wash of the button beside it and still read as chrome —
-  while Dracula's, which was never a wash, read as the theme. So all five sourced
-  themes now do what Dracula does: a **vivid** hue read from the palette — Tokyo
-  Night's `blue` `#7aa2f7`, Kanagawa's `springGreen` `#98bb6c`, Dark Owl's cyan
-  `#94d8ca`, Rosé Pine's `gold` `#f6c177`, Dracula's pink `#ff79c6` — and never the
+  while Dracula's, which was never a wash, read as the theme. So every theme now
+  does what Dracula (removed since) did: a **vivid** hue read from the palette —
+  Neon's `blue` `#7aa2f7`, Nuevo Tokyo's teal `#88aab5`, Kanagawa's `springGreen`
+  `#98bb6c`, Dark Owl's cyan `#94d8ca`, Rosé Pine's `gold` `#f6c177` — and never the
   accent, since the button owns that and repeating it is what made the wash look
   like chrome. **The hue swaps roles per appearance**, because it can't carry both:
   the chip's *fill* in Light, and the numeral itself in Dark, on that hue at 20% over
-  the band — lightened in-hue only where the floor needs it, which is Tokyo Night's
-  blue and Kanagawa's green. Dracula's dark fill is the one that is *recessed below*
-  its band rather than tinted above it, which is its own value and kept.
+  the band — lightened in-hue only where the floor needs it, which is Neon's
+  blue and Kanagawa's green.
   **The light numeral is white, and the fill is deepened to carry it — except in
   Rosé Pine and Dark Owl**, by request in every direction: the bright hue under a near-black
   numeral was the first cut and read muddy everywhere it was tried but the gold.
   White needs the fill at `L` ≈ 0.55 or below to clear 4.5:1, so each is the
-  palette's own deep member of that hue where it publishes one (Tokyo Night's
+  palette's own deep member of that hue where it publishes one (Neon's
   `blue0` `#3d59a1`, verbatim) and the hue deepened in oklch at constant chroma and
-  hue where it doesn't (Kanagawa's `lotusGreen` → `#637c42`, Dracula's pink →
-  `#b02a72`). It is the "deepen and invert to
+  hue where it doesn't (Kanagawa's `lotusGreen` → `#637c42`). It is the "deepen and invert to
   white-on-deep" move Kanagawa's and Rosé Pine's *buttons* already make, spent on
   the chip; the cost is that a light chip reads heavier than the bright pill it
   replaced, and that was the trade asked for. **Rosé Pine keeps `gold` `#f6c177`
@@ -1817,8 +1831,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   it can't, deepen it and invert to white-on-deep, which is what Kanagawa's Lotus
   orange and Rosé Pine's Dawn `love` do; and regenerate the whole table rather
   than nudging one entry. Every theme's worst *text* pairing, either appearance,
-  clears the **4.5:1** floor — Dracula's own named metadata value at 4.52:1 is the
-  tightest in the file — measured across eight pairings each: band text on the
+  clears the **4.5:1** floor — measured across eight pairings each: band text on the
   band, count text on the count chip, primary label on the primary fill, an
   unselected segment label on the track, a selected one on the raised pill, the
   metadata colour on the card, a link on the card, and each type label on the
@@ -1848,8 +1861,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
     shift under a colour preference — and tuned to sit quietly beside a band, they
     read **muted** against the rest of the app's colour, which is how it was
     reported.
-  - **The 25° rule can't hold** with one palette against six accents, and two
-    themes break it: Dark Owl's violet and Dracula's lavender are both within a
+  - **The 25° rule can't hold** with one palette against six accents, and one
+    theme breaks it: Dark Owl's violet is within a
     couple of degrees of the purple a Feedback note wears. What the rule was for —
     "action" reading as action — is carried instead by the accent being the only
     thing that *fills* a pill, and by nothing on a card wearing it.
@@ -1865,31 +1878,26 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   near-black island `ink` was first solved on, which is what had taken dark purple
   under the floor. Worst pairing now 4.65:1 on a card.
   The **graphics are deliberately not measured**, which is the other half and the
-  one to state plainly: `accent` is bright, and yellow lands at 1.28:1 as a dot on
-  Dracula's light track — under the 3:1 a *required* graphic answers to. Nothing here
+  one to state plainly: `accent` is bright, and yellow lands at 1.58:1 as a dot on
+  Rosé Pine's paper — under the 3:1 a *required* graphic answers to. Nothing here
   is required: a dot and a mark always sit beside the name of the type they mark, so
   the colour is a second voice and the text carries the floor. What the tests pin
   instead is that the graphics really are `accent` and that `accent` stays brighter
   than `ink`, since the moment it isn't, the two roles have no reason to exist.
-  **A theme sets exactly two text colours, and Dracula is the exception**:
+  **A theme sets exactly two text colours, with no exception left**:
   `metaText` — each palette's own comment grey where it clears 4.5:1 on the card,
   derived from the page's hue where it doesn't, for timestamps, chip names, the
   resting due badge and the `···` menu, with an Increase Contrast pair stepping to
-  ≥7:1 — and `link`, below. `titleText` and `bodyText` exist, and in five of the
-  six themes they are **`labelColor`** — unthemed, full contrast, the system's
+  ≥7:1 — and `link`, below. `titleText` and `bodyText` exist and are
+  **`labelColor`** in every theme — unthemed, full contrast, the system's
   business. That is the rule, not an omission, and it is the one place this set
-  deliberately **declines** a sourced value: all five palettes publish a title and
+  deliberately **declines** a sourced value: the palettes publish a title and
   a body, and the title and the body are the writing, read at length, so their
   contrast should not become a function of a colour preference. Metadata is
   different in kind, already quiet, and a tinted grey is what makes it read as
-  part of the theme. **Dracula keeps all three**, because it is a text palette by
-  origin — `#f8f8f2` / `#cfd2e0` / `#9098b8` dark, `#2c2145` / `#463d63` /
-  `#6b6288` light, its body deliberately a step softer than its title, and no
-  Increase Contrast variants needed since the softest of them is already 8.6:1.
-  Its metadata is also the **tightest text pairing in the file** — 4.52:1 in Dark
-  — so it clears the floor with nothing to spare, and a card face nudged lighter
-  would take it under.
-  `testTitleAndBodyAreUnthemedExceptInDracula` is what keeps "text is not themed"
+  part of the theme. (Dracula was the exception — a text palette by origin, it
+  named all three — and its removal took the `writingTones` plumbing with it.)
+  `testTitleAndBodyAreUnthemed` is what keeps "text is not themed"
   true, since the tempting next step from a themed metadata colour is a themed
   body and nothing on screen would announce it.
   **A link in a card's body is themed too**, and it had to be: SwiftUI draws a
@@ -1902,10 +1910,10 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   publishes none for Lotus at all.
   The **`ring`** follows the accent, and the previous set's rule that a ring must
   differ from the button beside it is **gone** — only contrast moves it now. Two
-  of the departures are the palettes' own (Tokyo Night's deepened jade in Light,
-  Dark Owl's lifted violet in Dark); the one solved here is Dracula's light ring,
-  because the table repeats the lavender and on white that is 2.41:1, under the
-  3:1 an indicator needs.
+  of the departures are the palettes' own (Neon's deepened jade in Light,
+  Dark Owl's lifted violet in Dark); the one solved here is Nuevo Tokyo's light
+  ring, deepened to `#689797` because the pale `#B4CECE` accent is 1.66:1 on a
+  white card, under the 3:1 an indicator needs.
   A type's colours come from its **`Tint`**, which is what makes it work with a
   user-extensible list: every one of the nine tints has both roles, so a custom type is
   no more of a special case than a default one. (The per-theme table was keyed by
@@ -1914,32 +1922,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   The edit-mode type dropdown uses a third role, `Tint.deep`, and that is a floor
   rather than an inconsistency: it is a *fill* under white type, which neither
   `accent` nor `ink` is solved for.
-  **Dracula is unchanged in structure, and is the theme the other five were built
-  to match** — it was the only one of the first cut that read as an identity, which
-  is the observation the whole sourced-palette set came from. It brings its own
-  grounds (`#282a36` / `#2f313f` dark, `#faf7ff` / white light), because a Dracula
-  that keeps the app's white card is not
-  Dracula; it ships in **both** appearances by request, though it is dark-first by
-  origin. Its three changes here are the **pink/purple swap** — the accent is the
-  lavender and Feedback takes the pink `#ff79c6`, because with Rosé Pine
-  in the set a rose-pink button on a plum ground made two themes read as the same
-  idea; the **count chip** described above, whose construction the other five
-  have since adopted with hues of their own; and the accent **deepened to
-  `#8359ba` in both appearances so its button label can be white**, by request —
-  `#bd93f9` is 2.41:1 under white and wore a dark plum label until then. It is the
-  one accent in the set deepened for the *label's* sake rather than because a ground
-  demanded it, and the cost is that the button is no longer the palette's bright
-  purple; the `ring` still is in Dark, which is where that lavender survives. Its light type values are the
-  palette darkened in oklch until each clears its floor on white, since the
-  published light ones land at 4.1–4.3:1: fine for a capsule, short for the label
-  beside it.
-  Two themes reorder which colour a **new** project is auto-assigned
-  (`AppTheme.projectTintOrder`): Dracula leads with red/yellow/cyan/purple/orange,
-  and Kanagawa pushes orange **last**, which is its "the only orange on screen is
-  the button" rule reaching the dots as the plan asks. Both orders stay total, so
-  a tenth project still gets a colour — a demotion, not a removal. Only the
-  auto-assignment: a colour the user picked is data, in `Projects.md`, and
-  switching theme must never rewrite it.
+  One theme reorders which colour a **new** project is auto-assigned
+  (`AppTheme.projectTintOrder`): Kanagawa pushes orange **last**, which is its
+  "the only orange on screen is the button" rule reaching the dots as the plan
+  asks. The order stays total, so a tenth project still gets a colour — a
+  demotion, not a removal. Only the auto-assignment: a colour the user picked is
+  data, in `Projects.md`, and switching theme must never rewrite it. (Dracula
+  led with its own five until its removal.)
   **The Settings swatch shows one half — the appearance in effect** — drawn with
   the same dynamic `band.fill` and `band.primary` the window uses, so the swatch
   and the band can't disagree. Stacking the light and dark halves in one swatch
@@ -2057,8 +2046,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   Otherwise anything the *system* draws — popover and menu shadows, the glass
   controls' own lighting — is untouched; `.shadow(…)` appears nowhere in Insert's
   own code.
-- **Icon** — minimal stacked cards on a pastel lilac → warm apricot gradient
-  with a purple/orange badge. Keep it soft and modern; palette and proportions
+- **Icon** — minimal stacked cards on a sage-teal → steel blue gradient
+  (#88AAB5 → #7290A7, the middle stops of the six-stop gradient Nuevo Tokyo is
+  sourced from) with a slate-blue check badge (#7FA3D1 → #35507F). Keep it soft and modern; palette and proportions
   live at the top of `tools/IconGenerator.swift`.
   One set of proportions drives two renders, and they differ on purpose. The
   layered `AppIcon.icon` is **full-bleed and unmasked with no baked-in effects** —

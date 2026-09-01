@@ -238,8 +238,8 @@ final class ThemePaletteTests: XCTestCase {
         // Night's `blue`, Kanagawa's `springGreen`, Dark Owl's cyan, Rosé Pine's
         // `gold`, Dracula's pink.
         let hues: [AppTheme: RGB] = [
-            .tokyoNight: hex(0x7aa2f7), .kanagawa: hex(0x98bb6c), .darkOwl: hex(0x94d8ca),
-            .rosePine: hex(0xf6c177), .dracula: hex(0xff79c6),
+            .tokyoNight: hex(0x7aa2f7), .nuevoTokyo: hex(0x88aab5), .kanagawa: hex(0x98bb6c),
+            .darkOwl: hex(0x94d8ca), .rosePine: hex(0xf6c177),
         ]
         for theme in AppTheme.allCases where theme != .system {
             guard let hue = hues[theme] else {
@@ -282,25 +282,19 @@ final class ThemePaletteTests: XCTestCase {
                 luminance(dark.text), luminance(dark.fill),
                 "\(theme.label) dark chip should be a vivid numeral on a tinted fill")
         }
-        // Dracula's dark fill is the one that is *recessed* below its band rather
-        // than the hue tinted above it — its own value, and kept.
-        let dracula = AppTheme.dracula.band
-        XCTAssertLessThan(
-            luminance(srgb(dracula.countFill, .dark)), luminance(srgb(dracula.fill, .dark)),
-            "Dracula dark chip fill should sit below its band")
     }
 
     // MARK: The writing
 
-    /// **Title and body colour are identical across the six, Dracula excepted.**
-    /// The plan's own words: if they differ, a theme is reaching further than it
-    /// allows. This is the check that keeps "text is not themed" true, since the
-    /// tempting next step from a themed metadata colour is a themed body — and
-    /// nothing on screen would announce it.
-    func testTitleAndBodyAreUnthemedExceptInDracula() {
+    /// **Title and body colour are identical across the set** — the system's
+    /// `labelColor`, unthemed. (Dracula was the one exception, gone with its
+    /// September 2026 removal.) This is the check that keeps "text is not
+    /// themed" true, since the tempting next step from a themed metadata colour
+    /// is a themed body — and nothing on screen would announce it.
+    func testTitleAndBodyAreUnthemed() {
         for mode in Appearances.both {
             let label = srgb(Color(nsColor: .labelColor), mode)
-            for theme in AppTheme.allCases where theme != .dracula {
+            for theme in AppTheme.allCases {
                 for (what, colour) in [("title", theme.titleText), ("body", theme.bodyText)] {
                     let resolved = srgb(colour, mode)
                     let message = "\(theme.label)/\(mode) \(what) is not the system label colour"
@@ -309,11 +303,6 @@ final class ThemePaletteTests: XCTestCase {
                     XCTAssertEqual(resolved.b, label.b, accuracy: 0.002, message)
                 }
             }
-            // And Dracula really is the exception, rather than quietly resolving
-            // to the same thing and making the rule above vacuous.
-            let title = srgb(AppTheme.dracula.titleText, mode)
-            XCTAssertNotEqual(title.r, label.r, accuracy: 0.002,
-                              "Dracula/\(mode) title should be its own value")
             // Leaving the writing unthemed only helps if the *card* can carry it:
             // a themed dark face nudged lighter is how `labelColor` would quietly
             // stop clearing the floor, which is the failure this half catches.
@@ -323,27 +312,6 @@ final class ThemePaletteTests: XCTestCase {
                 assert(theme.bodyText, on: theme.cardFace, floor: textFloor,
                        "\(theme.label)/\(mode) body", mode)
             }
-        }
-    }
-
-    /// Dracula's body is a step softer than its title — the paragraph-versus-
-    /// heading contrast its palette is built around — and both still clear the
-    /// floor on its own cards.
-    func testDraculasWritingClearsTheFloorAndKeepsItsHierarchy() {
-        for mode in Appearances.both {
-            let card = AppTheme.dracula.cardFace
-            assert(AppTheme.dracula.titleText, on: card, floor: textFloor,
-                   "Dracula/\(mode) title", mode)
-            assert(AppTheme.dracula.bodyText, on: card, floor: textFloor,
-                   "Dracula/\(mode) body", mode)
-            let title = contrast(AppTheme.dracula.titleText, card, mode)
-            let body = contrast(AppTheme.dracula.bodyText, card, mode)
-            XCTAssertGreaterThan(
-                title, body,
-                "Dracula/\(mode): the body should be softer than the title, not louder")
-            // Its writing needs no Increase Contrast variants — the softest of
-            // the four is already past 7:1, which is what that switch promises.
-            XCTAssertGreaterThan(body, contrastFloor, "Dracula/\(mode) body under 7:1")
         }
     }
 
@@ -459,28 +427,21 @@ final class ThemePaletteTests: XCTestCase {
         }
     }
 
-    // MARK: Dracula
+    // MARK: Project dots
 
-    /// Two themes reorder the auto-assigned project colours, and only the
-    /// *auto-assigned* ones — a colour the user picked is data in `Projects.md`,
-    /// and switching theme must never rewrite it. Both orders stay **total**, so
-    /// the tenth project still gets a colour rather than falling off the end.
-    ///
-    /// Dracula leads with its own five. Kanagawa pushes orange last instead,
-    /// which is its "the only orange on screen is the button" rule reaching the
-    /// dots as the plan asks — a demotion rather than a removal, for the totality
-    /// reason above.
-    func testOnlyDraculaAndKanagawaReorderTheProjectDots() {
-        for theme in AppTheme.allCases where theme != .dracula && theme != .kanagawa {
+    /// Kanagawa alone reorders the auto-assigned project colours — orange to the
+    /// end, its "the only orange on screen is the button" rule reaching the dots
+    /// — and only the *auto-assigned* ones: a colour the user picked is data in
+    /// `Projects.md`, and switching theme must never rewrite it. The order stays
+    /// **total**, so the tenth project still gets a colour rather than falling
+    /// off the end. (Dracula led with its own five until its removal.)
+    func testOnlyKanagawaReordersTheProjectDots() {
+        for theme in AppTheme.allCases where theme != .kanagawa {
             XCTAssertEqual(theme.projectTintOrder, Tint.allCases, "\(theme.label)")
         }
-        XCTAssertEqual(AppTheme.dracula.projectTintOrder.prefix(5),
-                       [.red, .yellow, .blue, .purple, .orange])
         XCTAssertEqual(AppTheme.kanagawa.projectTintOrder.last, .orange)
-        for theme in [AppTheme.dracula, .kanagawa] {
-            XCTAssertEqual(Set(theme.projectTintOrder), Set(Tint.allCases), "\(theme.label)")
-            XCTAssertEqual(theme.projectTintOrder.count, Tint.allCases.count, "\(theme.label)")
-        }
+        XCTAssertEqual(Set(AppTheme.kanagawa.projectTintOrder), Set(Tint.allCases))
+        XCTAssertEqual(AppTheme.kanagawa.projectTintOrder.count, Tint.allCases.count)
     }
 
     // MARK: The one red

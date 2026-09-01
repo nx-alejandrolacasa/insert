@@ -75,7 +75,12 @@ struct ColumnHeaderBand<Filters: View>: View {
         .padding(.top, Metrics.bandTopPadding)
         .padding(.bottom, Metrics.bandBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(band.fill)
+        // EXPERIMENT (September 2026, at the maintainer's request): the band
+        // paints the **page ground** instead of its own fill, so the header
+        // melts into the column behind it in every theme. The band's fill and
+        // everything derived from it stay in `AppTheme` untouched — restore
+        // `.background(band.fill)` to end the experiment.
+        .background(settings.theme.windowFill)
         // **No hairline on the bottom edge**, in any theme. A light band used to
         // take one — a dark band separates from the cards on its own — and it read
         // as a rule *drawn under* the header rather than as the edge of a surface,

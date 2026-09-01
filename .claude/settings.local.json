@@ -28,7 +28,9 @@
       "Bash(/usr/bin/log show *)",
       "WebFetch(domain:release-assets.githubusercontent.com)",
       "WebFetch(domain:results-receiver.actions.githubusercontent.com)",
-      "Bash(XDG_CACHE_HOME=__TRACKED_VAR__ gh run view 32483117187 --log)"
+      "Bash(XDG_CACHE_HOME=__TRACKED_VAR__ gh run view 32483117187 --log)",
+      "WebFetch(domain:eu-central-1-1.aws.cloud2.influxdata.com)",
+      "Bash(git -C /opt/homebrew/Library/Taps/nx-alejandrolacasa/homebrew-tap commit -am 'Use the symbol form of depends_on macos *)"
     ]
   },
   "outputStyle": "Concise & Clear"

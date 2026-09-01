@@ -21,7 +21,7 @@ import SwiftUI
 /// gets. Nothing persists the selected pane, so no migration was needed for the
 /// case that disappeared.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, appearance, notes, tasks, accessibility
+    case general, appearance, notes, tasks, accessibility, about
 
     var id: Self { self }
 
@@ -32,6 +32,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .notes: "Notes"
         case .tasks: "Tasks"
         case .accessibility: "Accessibility"
+        case .about: "About"
         }
     }
 
@@ -42,6 +43,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .notes: "note.text"
         case .tasks: "checklist"
         case .accessibility: "accessibility"
+        case .about: "info"
         }
     }
 
@@ -52,6 +54,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .notes: .purple
         case .tasks: .blue
         case .accessibility: .teal
+        case .about: .indigo
         }
     }
 }
@@ -88,6 +91,7 @@ struct SettingsDetail: View {
             case .notes: NotesSettingsTab()
             case .tasks: TasksSettingsTab()
             case .accessibility: AccessibilitySettingsTab()
+            case .about: AboutSettingsTab()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -319,7 +323,7 @@ private struct GeneralSettingsTab: View {
 /// already does that job and a bare segmented picker only needs the row label.
 ///
 /// **"Mode" moves, "Theme" stays**, and that is the cheaper direction: the
-/// palettes below *are* named themes (Dracula, Tokyo Night), which is what a user
+/// palettes below *are* named themes (Neon, Kanagawa), which is what a user
 /// already calls them, and it is what the type is called in the code (`AppTheme`)
 /// and throughout CLAUDE.md. Naming the light/dark switch "Theme" and the palettes
 /// "Colour scheme" was the other option and would have renamed the better-known of
@@ -808,5 +812,115 @@ private struct AccessibilitySettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - About
+
+/// The stand-in for the standard About panel, prtscn's arrangement: icon, name,
+/// version, author and copyright, all read from the bundle so the dev variant
+/// shows its own identity automatically — plus the update controls, since this
+/// is where "what version am I on?" gets asked.
+private struct AboutSettingsTab: View {
+    private let updater = UpdateChecker.shared
+
+    /// True for the dev variant, which opens the release page instead of
+    /// self-installing — mirror that in the button label.
+    private var isDevBuild: Bool { BuildVariant.isDev }
+
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Insert"
+    }
+
+    private var version: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        return "Version \(short) (\(build))"
+    }
+
+    private var copyright: String {
+        Bundle.main.object(forInfoDictionaryKey: "NSHumanReadableCopyright") as? String
+            ?? "© 2026 Alejandro G. Lacasa"
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 84, height: 84)
+
+            Text(appName)
+                .font(.title3.weight(.semibold))
+            Text(version)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            updateControls
+                .padding(.top, 8)
+
+            Text("Projects, notes and tasks — plain Markdown on disk.")
+                .font(.callout)
+                .padding(.top, 10)
+
+            Spacer(minLength: 0)
+
+            Text("Created by Alejandro G. Lacasa")
+                .font(.callout)
+            Text(copyright)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// One line of update state under the version: a check button, progress,
+    /// the install offer, or an error with retry.
+    @ViewBuilder
+    private var updateControls: some View {
+        switch updater.phase {
+        case .idle:
+            Button("Check for Updates…") { Task { await updater.check() } }
+                .controlSize(.small)
+        case .checking:
+            progressLine("Checking…")
+        case .upToDate:
+            Text("You're up to date.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .available:
+            HStack(spacing: 8) {
+                Text("Version \(updater.latest?.version ?? "?") is available.")
+                    .font(.caption)
+                Button(isDevBuild ? "View on GitHub…" : "Install Update") {
+                    Task { await updater.installLatest() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+            }
+        case .downloading:
+            progressLine("Downloading update…")
+        case .installing:
+            progressLine("Installing… the app will relaunch.")
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Try Again") { Task { await updater.check() } }
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private func progressLine(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }

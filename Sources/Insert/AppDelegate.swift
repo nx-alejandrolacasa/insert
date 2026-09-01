@@ -29,6 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it would only ever happen at launch.
     private var housekeepingTimer: Timer?
 
+    /// Re-renders the themed Dock icon when the effective appearance flips —
+    /// the system turning over in Auto, or the Mode picker — since the icon is
+    /// drawn once under the appearance in effect (see `ThemedAppIcon`). A theme
+    /// *change* re-applies from `SettingsStore.theme` instead.
+    private var appearanceObservation: NSKeyValueObservation?
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Before anything measures or draws in a bundled face — Grotesk is the
         // default for a new install, and an unregistered family resolves to the
@@ -50,11 +56,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // After the activation policy, so the Dock tile exists to take it.
+        ThemedAppIcon.apply(SettingsStore.shared.theme)
+        appearanceObservation = NSApp.observe(\.effectiveAppearance) { _, _ in
+            Task { @MainActor in ThemedAppIcon.apply(SettingsStore.shared.theme) }
+        }
         MarkdownReturn.install()
         TaskReminder.shared.start()
         DayClock.shared.start()
         Self.runHousekeeping()
         Self.normalizeSidebarWidth()
+        // Quiet daily update check; if a newer release exists, the menu-bar
+        // dropdown and Settings → About offer the update.
+        Task { await UpdateChecker.shared.checkAutomatically() }
 
         housekeepingTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             Task { @MainActor in Self.runHousekeeping() }
@@ -518,6 +532,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private static func runHousekeeping() {
         Library.shared.purgeCompletedTasks(retention: SettingsStore.shared.doneTaskRetention)
+    }
+
+    /// The red button closes the window, not the app: Insert lives on in the
+    /// menu bar (and the Dock), and the SwiftUI lifecycle would otherwise
+    /// terminate on the last window closing. Quit stays where it is — ⌘Q and
+    /// the menu-bar extra's own item.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     /// Re-open the main window when the Dock icon is clicked with no windows.

@@ -9,7 +9,7 @@ import XCTest
 /// with nothing on screen to say why, and no second chance to get it right. It
 /// now folds *three* generations of setting into one key, which is the part that
 /// can go wrong quietly: a theme name from the first set of six has to win over
-/// a tint, a tint over an accent, and none of the three may reach Dracula.
+/// a tint, and a tint over an accent.
 ///
 /// The first of those three is the one this pass added, and it is the dangerous
 /// one: a saved `theme` of `"indigo"` no longer decodes, so without a mapping it
@@ -35,12 +35,13 @@ final class ThemeMigrationTests: XCTestCase {
         XCTAssertEqual(AppTheme.migrated(theme: "rosewood", tint: "", accent: ""), .rosePine)
     }
 
-    /// Dracula is the one name that survived the swap, so it never reaches the
-    /// migration at all — it decodes. Pinned because renaming that case would
-    /// send every Dracula install through a function that deliberately refuses to
-    /// answer with it.
-    func testDraculaStillDecodesRatherThanMigrating() {
-        XCTAssertEqual(AppTheme(rawValue: "dracula"), .dracula)
+    /// Dracula was removed in September 2026, so its raw value no longer decodes
+    /// and an install that had picked it goes through the migration like any
+    /// retired name — landing on Dark Owl, the remaining dark theme with a
+    /// violet action, rather than silently resetting to the default.
+    func testDraculaMigratesToDarkOwl() {
+        XCTAssertNil(AppTheme(rawValue: "dracula"))
+        XCTAssertEqual(AppTheme.migrated(theme: "dracula", tint: "", accent: ""), .darkOwl)
     }
 
     func testEveryRetiredTintMapsToItsFamily() {
@@ -99,35 +100,14 @@ final class ThemeMigrationTests: XCTestCase {
     /// silently move both.
     func testSystemLeadsThePickerAndIsTheDefault() {
         XCTAssertEqual(AppTheme.allCases.first, .system)
-        XCTAssertEqual(AppTheme.allCases.last, .dracula)
+        XCTAssertEqual(AppTheme.allCases.last, .rosePine)
         XCTAssertEqual(AppTheme.default, .system)
         XCTAssertEqual(AppTheme.migrated(theme: "", tint: "", accent: ""), .system)
     }
 
-    /// Dracula is an identity, not a shade — it has to be picked, so no input may
-    /// arrive there. Written as a sweep over every value any of the three keys
-    /// ever held, because the risk is a *new* mapping accidentally pointing at
-    /// it, not the ones above.
-    func testNothingMigratesToDracula() {
-        let themes = ["", "bone", "moss", "ember", "rosewood", "indigo",
-                      "slate", "graphite", "pine", "amber", "neon"]
-        let tints = ["", "plain", "linen", "clay", "blush", "sage", "seafoam", "mist", "lilac",
-                     "cloud", "stone", "dawn", "dusk", "grove", "neon"]
-        let accents = ["", "blue", "green", "orange", "lilac", "gray", "graphite", "lightGray"]
-        for theme in themes {
-            for tint in tints {
-                for accent in accents {
-                    XCTAssertNotEqual(
-                        AppTheme.migrated(theme: theme, tint: tint, accent: accent), .dracula,
-                        """
-                        theme "\(theme)" + tint "\(tint)" + accent "\(accent)" \
-                        migrated to Dracula
-                        """
-                    )
-                }
-            }
-        }
-    }
+    // The "nothing migrates to Dracula" sweep went with the theme itself: with
+    // the case removed, no mapping *can* answer with it, so there is nothing
+    // left to pin.
 }
 
 final class CardDateCompactionTests: XCTestCase {

@@ -74,6 +74,8 @@ struct MenuBarContent: View {
     @Environment(DayClock.self) private var clock
     @Environment(\.openWindow) private var openWindow
 
+    private var updater: UpdateChecker { UpdateChecker.shared }
+
     /// Max task rows rendered per section before collapsing the remainder into
     /// a single "+ K more…" affordance — keeps the menu short and scannable.
     private let sectionCap = 6
@@ -100,6 +102,17 @@ struct MenuBarContent: View {
         }
 
         Divider()
+
+        // Surfaced by the quiet launch-time check — most users never open
+        // Settings → About, so the update offer has to live where they look.
+        if updater.phase == .available, let release = updater.latest {
+            Button {
+                Task { await updater.installLatest() }
+            } label: {
+                Label("Update to \(release.version)…", systemImage: "arrow.down.circle")
+            }
+            Divider()
+        }
 
         Section {
             // Named for the variant, so a dev menu doesn't offer to open what

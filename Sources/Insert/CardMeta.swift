@@ -61,8 +61,8 @@ struct TypeMarkTitle: View {
             Text(text)
                 .font(Card.font(.title3, weight: .semibold))
                 .tracking(-0.1)
-                // `labelColor` in five of the six themes — only Dracula names a
-                // title colour of its own (`AppTheme.titleText`).
+                // `labelColor` in every theme (`AppTheme.titleText`) — the one
+                // exception, Dracula, went with its removal.
                 .foregroundStyle(settings.theme.titleText)
                 .lineLimit(2)
         }

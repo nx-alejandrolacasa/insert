@@ -44,7 +44,7 @@ enum Tint: String, CaseIterable, Identifiable, Codable {
     ///
     /// **It is held to no contrast floor, and that is the deliberate half of the
     /// split with `ink`.** These are bright values by design: yellow measures
-    /// 1.28:1 as a dot on Dracula's light filter track and 1.58:1 on Rosé Pine's
+    /// 1.58:1 as a dot on Rosé Pine's
     /// paper, which would fail the 3:1 a *required* graphic is held to. Nothing here
     /// is required — every dot and mark in the app sits beside the name of the thing
     /// it marks, so the colour is a second voice rather than the only one, and the
