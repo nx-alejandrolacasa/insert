@@ -158,7 +158,7 @@ fi
 # comes from git (commit count — monotonic and reproducible), so About and Finder
 # always show which build this actually is. CI overrides the version from the
 # pushed tag via INSERT_VERSION.
-VERSION="${INSERT_VERSION:-0.16.2}"
+VERSION="${INSERT_VERSION:-0.16.3}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 
 /usr/libexec/PlistBuddy \
