@@ -109,6 +109,8 @@ Sources/Insert/
   BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies + the shared
                               collapsible preview (CollapsibleMarkdown)
+  MarkdownHighlight.swift     styles the Markdown *source* in the editor — the
+                              pure span scanner + the two attribute appliers
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
   AppTheme.swift              the six sourced themes: band / track / primary and
                               count-chip tones, the page and card grounds, the
@@ -700,7 +702,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   briefly a per-theme palette; the Theme bullet has why that was reversed and the
   two rules it took with it.
   A note's **type** is, while editing, a pill-shaped dropdown in that type's
-  colour at the trailing end of the chips row. It replaced a row of one filter
+  colour leading the chips row — type, hairline, then the chips, the meta row's
+  own order, so closing the card rearranges nothing. It replaced a row of one filter
   pill per type, whose selected state is where the `deep`-and-white comes
   from: the control shows exactly one type and it is always the current one. The
   row cost a line of every open card and grew with every type added in Settings,
@@ -1493,6 +1496,49 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   text system; pressing ⌘Z later outside edit mode reached `_NSUndoStack
   popAndInvoke` and crashed on that stale AppKit target. Per-editor managers also
   keep tearing down one open card from discarding another open card's history.
+- **The editor styles the source it shows** (`MarkdownHighlight`, September
+  2026) — the iA Writer/Bear reading of Markdown editing, chosen over a WYSIWYG
+  editor (which makes Markdown a lossy export format and breaks the Obsidian
+  promise) and over Typora-style marker-hiding (styled source is its
+  prerequisite anyway, and hiding characters reflows the layout under the
+  caret). The text in the editor stays the file's characters byte for byte;
+  only its **attributes** say what they mean: headings draw in the preview's
+  own heading fonts (one table, `MarkdownText.headingFont(_:typeface:)`, both
+  consumers), `**bold**`/`*italic*` draw in the faces the preview resolves —
+  the same descriptor union and `Card.italic`, so Grotesk's variable-axis trap
+  and Rounded's synthesised oblique are inherited solved, not re-fought —
+  inline and fenced code go monospaced, a checked `- [x]` strikes its text
+  through, link labels take `theme.link`, and every syntax character (`#`,
+  `**`, list markers, `>`s, fences, URLs) dims to `theme.metaText`.
+  The shape mirrors `MarkdownFormatting`: `spans(of:)` is a **pure function**
+  over the source (UTF-16 offsets, anchored only on ASCII so a range can't
+  split a surrogate pair; pinned by `MarkdownHighlightTests`), and two appliers
+  share one `font(for:)` — `apply(to:)` onto the editor's `NSTextStorage`, and
+  `attributed(_:)` into the hidden sizing proxies, **which had to change
+  together**: the proxies laid the raw source out in the flat card face, so
+  once a heading line is taller than a body line an unstyled proxy measures
+  the editor short. `attributed` bakes in only the *layout-affecting* styles
+  (fonts, not colours) and is memoised, because the task card's proxy measures
+  in view mode too — per visible row per render, `MarkdownParser.parse`'s
+  reason. The scanner is deliberately not CommonMark: it matches
+  `MarkdownParser`'s block rules and approximates inline ones **line by line**
+  (no delimiter crosses a newline), and where it declines — an unclosed `**`,
+  `2 * 3` arithmetic, `snake_case` underscores — the text stays in the base
+  attributes, which is what the preview shows for the same source.
+  Four details in the bridge carry it. The pass re-runs from
+  `textDidChange` (so undo and `MarkdownEdits.apply` are covered by the same
+  route as typing) and attribute-only edits register no undo and post no
+  `textDidChange`, so it can run from inside the notification without feeding
+  back. `typingAttributes` are reset to the base font after every pass, or
+  typing at the end of a bold run would continue bold until the next pass.
+  The pass is **skipped while `hasMarkedText()`** — an IME composition or dead
+  key owns the storage's attributes mid-composition, and the commit fires
+  `textDidChange` anyway. And `updateNSView` compares a `Config` (base font,
+  typeface, palette) stored on the view rather than `view.font`/`view.textColor`,
+  because with styled runs in the storage both getters answer with whatever run
+  the text happens to start with — comparing them would churn a full
+  re-attribution per graph update. `isRichText` stays `false`: it governs user
+  styling and pastes, not programmatic attributes.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

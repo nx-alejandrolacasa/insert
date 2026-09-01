@@ -148,9 +148,9 @@ final class MarkdownParserTests: XCTestCase {
             XCTAssertEqual(
                 list("* element 1\n\(indent)* element 1.1\n* element 2"),
                 [
-                    .init(level: 0, ordered: false, text: "element 1"),
-                    .init(level: 1, ordered: false, text: "element 1.1"),
-                    .init(level: 0, ordered: false, text: "element 2"),
+                    .init(level: 0, ordered: false, text: "element 1", line: 0),
+                    .init(level: 1, ordered: false, text: "element 1.1", line: 1),
+                    .init(level: 0, ordered: false, text: "element 2", line: 2),
                 ],
                 "indented with \(indent.count) spaces"
             )
@@ -220,9 +220,9 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(
             list("- [ ] pack\n- [x] book\n- drive"),
             [
-                .init(level: 0, ordered: false, text: "pack", checked: false),
-                .init(level: 0, ordered: false, text: "book", checked: true),
-                .init(level: 0, ordered: false, text: "drive"),
+                .init(level: 0, ordered: false, text: "pack", checked: false, line: 0),
+                .init(level: 0, ordered: false, text: "book", checked: true, line: 1),
+                .init(level: 0, ordered: false, text: "drive", line: 2),
             ]
         )
     }
@@ -271,5 +271,65 @@ final class MarkdownParserTests: XCTestCase {
         let items = list("- [ ] parent\n  - [x] child\n- plain")
         XCTAssertEqual(items?.map(\.level), [0, 1, 0])
         XCTAssertEqual(items?.map(\.checked), [false, true, nil])
+    }
+
+    // MARK: Toggling a checkbox from the render
+
+    /// An item's recorded line is its index in the whole source, not within its
+    /// block — it is what the rendered checkbox hands back to
+    /// `toggleCheckbox(_:atLine:)`, which addresses the source.
+    func testItemsRecordTheirSourceLine() {
+        XCTAssertEqual(
+            list("intro\n\n- [ ] first\n- [x] second")?.map(\.line),
+            [2, 3]
+        )
+    }
+
+    func testToggleChecksAnUncheckedBox() {
+        XCTAssertEqual(
+            MarkdownParser.toggleCheckbox("- [ ] pack\n- [x] book", atLine: 0),
+            "- [x] pack\n- [x] book"
+        )
+    }
+
+    func testToggleUnchecksACheckedBox() {
+        XCTAssertEqual(
+            MarkdownParser.toggleCheckbox("- [ ] pack\n- [x] book", atLine: 1),
+            "- [ ] pack\n- [ ] book"
+        )
+    }
+
+    /// A custom state is checked, so a click unchecks it — the same round Obsidian
+    /// takes; the custom character is not preserved.
+    func testToggleUnchecksACustomState() {
+        XCTAssertEqual(MarkdownParser.toggleCheckbox("- [-] parked", atLine: 0), "- [ ] parked")
+    }
+
+    /// The indent is part of the line and must survive the flip, however it was
+    /// typed.
+    func testToggleKeepsTheIndent() {
+        XCTAssertEqual(
+            MarkdownParser.toggleCheckbox("- [ ] parent\n  - [ ] child", atLine: 1),
+            "- [ ] parent\n  - [x] child"
+        )
+        XCTAssertEqual(
+            MarkdownParser.toggleCheckbox("\t- [ ] tabbed", atLine: 0),
+            "\t- [x] tabbed"
+        )
+    }
+
+    /// A line that isn't a checkbox — or an index the body no longer has — edits
+    /// nothing: a stale index from a render of an older body must not flip a
+    /// bystander line.
+    func testToggleRefusesANonCheckboxLine() {
+        XCTAssertNil(MarkdownParser.toggleCheckbox("- plain bullet", atLine: 0))
+        XCTAssertNil(MarkdownParser.toggleCheckbox("prose", atLine: 0))
+        XCTAssertNil(MarkdownParser.toggleCheckbox("- [ ] only line", atLine: 3))
+    }
+
+    /// `- [x](url)` is a link at the head of a plain bullet to the parser, so the
+    /// toggle must refuse it too — flipping it would corrupt the link.
+    func testToggleRefusesALinkAtTheHeadOfABullet() {
+        XCTAssertNil(MarkdownParser.toggleCheckbox("- [x](https://example.com) site", atLine: 0))
     }
 }

@@ -73,7 +73,8 @@ struct NotesPanel: View {
                             ForEach(notes) { note in
                                 NoteCardView(
                                     note: note,
-                                    showsProjectChips: appState.selectedProjectID == nil
+                                    showsProjectChips: appState.selectedProjectID == nil,
+                                    pins: $pins
                                 )
                                 .id(note.id)
                             }
@@ -216,6 +217,9 @@ private struct NoteCardView: View {
     /// Only the aggregate view labels a note with the project(s) it belongs to;
     /// inside a project that would repeat the sidebar selection on every card.
     let showsProjectChips: Bool
+    /// The panel's pins, so a view-mode mutation — a checkbox click — can hold
+    /// the card's place before its save bumps `updated` (see `toggleCheckbox`).
+    @Binding var pins: NotePins
 
     @Environment(Library.self) private var library
     @Environment(SettingsStore.self) private var settings
@@ -249,9 +253,10 @@ private struct NoteCardView: View {
     /// selection back through it.
     @State private var bodySelection: TextSelection?
 
-    init(note: Note, showsProjectChips: Bool) {
+    init(note: Note, showsProjectChips: Bool, pins: Binding<NotePins>) {
         self.note = note
         self.showsProjectChips = showsProjectChips
+        _pins = pins
         _draft = State(initialValue: note)
     }
 
@@ -457,10 +462,19 @@ private struct NoteCardView: View {
 
     // MARK: Project assignments
 
-    /// The edit-mode projects row: removable chips, a ＋ for more, and the type
-    /// dropdown on the trailing edge — exactly as on a task row.
+    /// The edit-mode projects row, in the meta row's order — type first, a
+    /// hairline, then the projects — so closing the card rearranges nothing:
+    /// the dropdown becomes the caps label and the chips stay where they are.
     private var projectRow: some View {
         HStack(spacing: 6) {
+            typeMenu
+
+            // The meta row's hairline, so the two reads don't run together
+            // in this mode either.
+            Rectangle()
+                .fill(Stone.line)
+                .frame(width: 1, height: 11)
+
             ForEach(draft.projectIDs, id: \.self) { id in
                 if let project = library.project(id: id) {
                     ProjectChip(project: project) {
@@ -474,11 +488,6 @@ private struct NoteCardView: View {
                 draft.projectIDs.append($0)
             }
             Spacer(minLength: 0)
-            // Trailing, the way a task row hangs its due badge off the end
-            // of the same chips row: the type is one value, so it belongs
-            // on the fixed edge rather than drifting rightwards as chips
-            // are added.
-            typeMenu
         }
     }
 
@@ -610,13 +619,26 @@ private struct NoteCardView: View {
                 expanded: $expanded,
                 chevronBox: actionsSize,
                 expandLabel: "Show the whole note",
-                collapseLabel: "Collapse note"
+                collapseLabel: "Collapse note",
+                onToggleCheckbox: { toggleCheckbox(at: $0) }
             )
             // `labelColor` in every theme (Dracula, the one exception, is gone).
             // On the container, so every block inherits it and the runs that set
             // their own colour (code, the quote bar) still win.
             .foregroundStyle(settings.theme.bodyText)
         }
+    }
+
+    /// A checkbox clicked in view mode: flip that source line and let the body's
+    /// `onChange` debounce the save — no edit mode, no focus. Pinned first,
+    /// because the save bumps `updated`, and under "Updated (newest)" the card
+    /// would slide to the top ~0.4s after the click — the very jump `NotePins`
+    /// exists to prevent, reached from the one route that never sets
+    /// `selectedNoteID`.
+    private func toggleCheckbox(at line: Int) {
+        guard let toggled = MarkdownParser.toggleCheckbox(draft.body, atLine: line) else { return }
+        pins.pin(note)
+        draft.body = toggled
     }
 
     // MARK: Body — edit mode
@@ -628,7 +650,14 @@ private struct NoteCardView: View {
             // Invisible sizing proxy (same font/insets as the editor). It stays
             // in the layout so the ZStack height tracks the wrapped text; the
             // editor is then pinned to that height rather than growing greedily.
-            Text(draft.body.isEmpty ? " " : draft.body)
+            // Styled the way the editor styles the source (`MarkdownHighlight`),
+            // because a heading line is taller than a body line and a proxy in
+            // the flat face would measure the editor short.
+            Text(MarkdownHighlight.attributed(
+                draft.body.isEmpty ? " " : draft.body,
+                base: Card.nsFont(.body),
+                typeface: settings.typeface
+            ))
                 .font(Card.font(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)

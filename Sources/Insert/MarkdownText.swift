@@ -13,6 +13,11 @@ struct MarkdownText: View {
     /// `NSFont.TextStyle` rather than a `Font` because the spacing below is
     /// measured off the very same font.
     var textStyle: NSFont.TextStyle = .body
+    /// Set by a card's view mode so a `- [ ]` checkbox takes a click of its own —
+    /// flip that source line, don't open the editor. `nil` (the teasers, the
+    /// hidden measuring proxies) leaves the mark plain text. The parameter is the
+    /// item's `ListItem.line`, ready for `MarkdownParser.toggleCheckbox(_:atLine:)`.
+    var onToggleCheckbox: ((Int) -> Void)? = nil
 
     private var nsFont: NSFont { Card.nsFont(textStyle) }
     private var font: Font { Font(nsFont) }
@@ -73,7 +78,7 @@ struct MarkdownText: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
                         if let checked = item.checked {
-                            checkboxMark(checked)
+                            checkboxMark(checked, line: item.line)
                         } else if let number = numbers[idx] {
                             Text("\(number).")
                                 .font(font)
@@ -141,16 +146,38 @@ struct MarkdownText: View {
     /// is declared here instead, putting the dot's centre on the body font's
     /// x-height — where the glyph's own centre sat, and read off the font so it
     /// tracks the text rather than pinning a number.
-    /// A `- [ ]` item's marker: the task row's own glyph pair at the body size,
-    /// so a ticked line in a note speaks the same language as a done task.
-    /// Rendered as a `Text` because the row aligns `.firstTextBaseline` and a
-    /// bare `Image` has no baseline — interpolated into text, the symbol takes
-    /// the font's.
-    private func checkboxMark(_ checked: Bool) -> some View {
+    /// A `- [ ]` item's marker. With a toggle handler the mark is a button, so a
+    /// click in view mode flips the box instead of opening the editor — a child
+    /// button takes the click before the card's own tap gesture, the same
+    /// precedence the expand chevron already rides. `.plain`, so the button is
+    /// its label and the row's `.firstTextBaseline` still reads the glyph's own
+    /// baseline. The hit shape is inset outward a step: the glyph is ~13pt, and
+    /// the 8pt `markerGap` beside it leaves that much slack before the item text.
+    @ViewBuilder
+    private func checkboxMark(_ checked: Bool, line: Int) -> some View {
+        if let toggle = onToggleCheckbox {
+            Button {
+                toggle(line)
+            } label: {
+                checkboxGlyph(checked)
+                    .contentShape(Rectangle().inset(by: -4))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(checked ? "Done" : "Not done")
+        } else {
+            checkboxGlyph(checked)
+                .accessibilityLabel(checked ? "Done" : "Not done")
+        }
+    }
+
+    /// The task row's own glyph pair at the body size, so a ticked line in a
+    /// note speaks the same language as a done task. Rendered as a `Text`
+    /// because the row aligns `.firstTextBaseline` and a bare `Image` has no
+    /// baseline — interpolated into text, the symbol takes the font's.
+    private func checkboxGlyph(_ checked: Bool) -> some View {
         Text("\(Image(systemName: checked ? "checkmark.circle.fill" : "circle"))")
             .font(font)
             .foregroundStyle(checked ? Self.checkColour : Color.secondary)
-            .accessibilityLabel(checked ? "Done" : "Not done")
     }
 
     /// The tick wears the theme's primary for the task checkbox's reason — read
@@ -295,11 +322,18 @@ struct MarkdownText: View {
     /// slanted at the heading's own size and weight, and that is what
     /// `inline(_:in:)` needs to do it.
     private func headingFont(_ level: Int) -> NSFont {
+        Self.headingFont(level, typeface: SettingsStore.shared.typeface)
+    }
+
+    /// The explicit-`typeface` spelling, shared with `MarkdownHighlight` so the
+    /// editor's heading lines are the very fonts the preview renders them in —
+    /// one table, two consumers, no drift.
+    nonisolated static func headingFont(_ level: Int, typeface: Typeface) -> NSFont {
         switch level {
-        case 1: Card.nsFont(.title2, weight: .semibold)
-        case 2: Card.nsFont(.title3, weight: .semibold)
-        case 3: Card.nsFont(.headline, weight: .semibold)
-        default: Card.nsFont(.subheadline, weight: .semibold)
+        case 1: Card.nsFont(.title2, weight: .semibold, typeface: typeface)
+        case 2: Card.nsFont(.title3, weight: .semibold, typeface: typeface)
+        case 3: Card.nsFont(.headline, weight: .semibold, typeface: typeface)
+        default: Card.nsFont(.subheadline, weight: .semibold, typeface: typeface)
         }
     }
 }
@@ -314,6 +348,10 @@ enum MarkdownParser {
         var text: String
         /// A `- [ ]` / `- [x]` item carries its state; `nil` is a plain item.
         var checked: Bool? = nil
+        /// The item's source line (the text split on newlines, `\r\n` normalised
+        /// first) — what lets a rendered checkbox point `toggleCheckbox(_:atLine:)`
+        /// back at the line it was parsed from.
+        var line: Int = 0
     }
 
     enum Block {
@@ -414,7 +452,8 @@ enum MarkdownParser {
                         level: nestingLevel(for: indentColumns(lines[i]), in: &indents),
                         ordered: marker.ordered,
                         text: String(l.dropFirst(marker.length)),
-                        checked: marker.checked
+                        checked: marker.checked,
+                        line: i
                     ))
                     i += 1
                 }
@@ -538,6 +577,29 @@ enum MarkdownParser {
         return (chars.count == 3 ? 3 : 4, chars[1] != " ")
     }
 
+    /// Flips the state of the checkbox on one source line — what a rendered
+    /// checkbox's click does in view mode. `atLine` is the index `parse` recorded
+    /// on the item (`ListItem.line`), against the same `\r\n`-normalised split.
+    ///
+    /// Returns `nil` when that line isn't a checkbox item, so a stale index —
+    /// a body that changed under the render — edits nothing rather than the
+    /// wrong line. Unchecking a custom state (`- [-]`) writes back `[ ]` and
+    /// re-checking writes `[x]`, which is what a click does in Obsidian too.
+    static func toggleCheckbox(_ text: String, atLine index: Int) -> String? {
+        var lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        guard lines.indices.contains(index) else { return nil }
+        let raw = lines[index]
+        guard let marker = listMarker(raw.trimmingCharacters(in: .whitespaces)),
+              let checked = marker.checked else { return nil }
+        // The state character sits three past the first non-whitespace character:
+        // indent, then `- [`, then the state.
+        var chars = Array(raw)
+        let state = chars.prefix { $0 == " " || $0 == "\t" }.count + 3
+        chars[state] = checked ? " " : "x"
+        lines[index] = String(chars)
+        return lines.joined(separator: "\n")
+    }
+
     /// Returns the length of the `1. ` or `1) ` prefix if the line starts an
     /// ordered item. Both spellings, because Return continues either one
     /// (`LineMarker`) and a body should render what the editor just wrote.
@@ -601,6 +663,10 @@ struct CollapsibleMarkdown: View {
     /// The chevron's two spoken/help names, in the card's own words.
     let expandLabel: String
     let collapseLabel: String
+    /// Forwarded to the full render, so a visible checkbox takes its click in
+    /// view mode. Not to the teaser (one line, marker already dropped) nor the
+    /// hidden measuring proxy, which hit-tests nothing.
+    var onToggleCheckbox: ((Int) -> Void)? = nil
 
     /// The body laid out unbounded — what expanding would show.
     @State private var fullHeight: CGFloat = 0
@@ -703,7 +769,7 @@ struct CollapsibleMarkdown: View {
     /// because a clamp must *clip* the blocks, not propose them less height —
     /// squeezed, they truncate themselves into ellipses.
     private var clamped: some View {
-        MarkdownText(markdown: markdown, textStyle: textStyle)
+        MarkdownText(markdown: markdown, textStyle: textStyle, onToggleCheckbox: onToggleCheckbox)
             .padding(.horizontal, 5)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {

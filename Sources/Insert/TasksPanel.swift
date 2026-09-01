@@ -779,12 +779,22 @@ private struct TaskCardView: View {
                 expanded: $expanded,
                 chevronBox: actionsSize,
                 expandLabel: "Expand notes",
-                collapseLabel: "Collapse notes"
+                collapseLabel: "Collapse notes",
+                onToggleCheckbox: { toggleCheckbox(at: $0) }
             )
             // The note card's rule, on the other card: `labelColor` unless the
             // theme names a body colour (`AppTheme.bodyText`).
             .foregroundStyle(settings.theme.bodyText)
         }
+    }
+
+    /// A checkbox clicked in view mode: flip that source line and let the body's
+    /// `onChange` debounce the save — no edit mode, no focus. No pin, unlike the
+    /// note card's: a task sorts by done / due / created, and a body edit moves
+    /// none of them.
+    private func toggleCheckbox(at line: Int) {
+        guard let toggled = MarkdownParser.toggleCheckbox(draft.body, atLine: line) else { return }
+        draft.body = toggled
     }
 
     // MARK: Body — edit mode
@@ -835,7 +845,15 @@ private struct TaskCardView: View {
     /// host's height is precisely what this is measuring: without it the proxy
     /// would report the animated height back to itself.
     private var bodySizingProxy: some View {
-        Text(draft.body.isEmpty ? " " : draft.body)
+        // Styled the way the editor styles the source (`MarkdownHighlight`) —
+        // a heading line is taller than a callout line, and a proxy in the
+        // flat face would measure the editor short. Memoised inside
+        // `attributed`, because this measures in view mode too.
+        Text(MarkdownHighlight.attributed(
+            draft.body.isEmpty ? " " : draft.body,
+            base: Card.nsFont(.callout),
+            typeface: settings.typeface
+        ))
             .font(Card.font(.callout))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)

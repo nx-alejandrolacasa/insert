@@ -117,8 +117,9 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 
         view.isEditable = true
         view.isSelectable = true
-        // Markdown source: no styling to carry, and a paste should arrive as the
-        // characters it is.
+        // Markdown source: the user can't style it and a paste arrives as the
+        // characters it is. `MarkdownHighlight`'s attributes are programmatic
+        // and unaffected — this flag governs input, not the storage.
         view.isRichText = false
         view.usesFontPanel = false
         view.usesRuler = false
@@ -165,11 +166,28 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         applyTabStops(to: view, font: font)
 
         view.string = text
+        view.highlightConfig = highlightConfig
+        view.rehighlight()
         return view
     }
 
     static func dismantleNSView(_ view: MarkdownTextView, coordinator: Coordinator) {
         view.prepareForDismantle()
+    }
+
+    /// The highlight pass's inputs, read here — inside a view update — so the
+    /// `@Observable` accesses register and a theme or typeface change re-styles
+    /// an open editor the way it re-renders a preview.
+    private var highlightConfig: MarkdownHighlight.Config {
+        MarkdownHighlight.Config(
+            base: font,
+            typeface: SettingsStore.shared.typeface,
+            palette: MarkdownHighlight.Palette(
+                text: textColor,
+                marker: NSColor(SettingsStore.shared.theme.metaText),
+                link: NSColor(SettingsStore.shared.theme.link)
+            )
+        )
     }
 
     /// Makes a tab a **four-space step, anywhere in the line**.
@@ -210,16 +228,22 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             MainActor.assumeIsolated { coordinator.report(focus: focused) }
         }
 
-        if view.font != font {
-            view.font = font
-            // The step is measured in the font, so it moves with it.
-            applyTabStops(to: view, font: font)
+        // The storage's fonts and colours are the highlighter's now, so neither
+        // `view.font` nor `view.textColor` can be compared against — both read
+        // whatever run the styled text happens to start with. The config is the
+        // record of what was last applied, and a pass only re-runs when one of
+        // its inputs (face, theme, typeface) really changed; per-keystroke
+        // passes come from `textDidChange` instead.
+        let config = highlightConfig
+        if view.highlightConfig != config {
+            if view.highlightConfig?.base != font {
+                view.font = font
+                // The step is measured in the font, so it moves with it.
+                applyTabStops(to: view, font: font)
+            }
+            view.highlightConfig = config
+            view.rehighlight()
         }
-        // Assigned only when it really differs, like the font and the text
-        // itself: `textColor` on an `NSTextView` rewrites the whole storage's
-        // attributes, so setting it every update would be a full re-attribution
-        // per keystroke.
-        if view.textColor != textColor { view.textColor = textColor }
         // The caret wears the theme's primary, which is what `.tint()` gave the
         // SwiftUI editor for free.
         let caret = NSColor(SettingsStore.shared.theme.primary)
@@ -241,6 +265,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             view.string = text
             let length = (view.string as NSString).length
             view.setSelectedRange(NSRange(location: min(caretLocation, length), length: 0))
+            view.rehighlight()
         }
 
         // The caret the owner asked for — entry puts it at the end of the body.
@@ -287,6 +312,9 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
+            // Re-style before the binding write, so the frame that shows the
+            // typed character already shows it dressed.
+            (view as? MarkdownTextView)?.rehighlight()
             if parent.text != view.string { parent.text = view.string }
         }
 
@@ -342,6 +370,37 @@ final class MarkdownTextView: NSTextView {
         onBacktab = nil
         onEscape = nil
         onFocusChange = nil
+    }
+
+    /// What the last highlight pass was made of, kept so the bridge only
+    /// re-runs a pass when an input really changed. Set by the bridge.
+    var highlightConfig: MarkdownHighlight.Config?
+
+    /// Re-styles the whole storage from the source — see `MarkdownHighlight`.
+    /// Attribute-only edits register no undo and post no `textDidChange`, so
+    /// this is safe to run from inside the change notification; per keystroke
+    /// it is one linear scan of a card's body.
+    ///
+    /// Skipped while text is **marked** (an IME composition, a dead key):
+    /// rewriting the storage's attributes mid-composition would stamp on the
+    /// input context's own, and the pass runs anyway when the composition
+    /// commits and `textDidChange` fires.
+    func rehighlight() {
+        guard let config = highlightConfig, let storage = textStorage,
+              !hasMarkedText() else { return }
+        MarkdownHighlight.apply(
+            to: storage,
+            config: config,
+            paragraphStyle: defaultParagraphStyle ?? .default
+        )
+        // Typing continues in the base attributes, never in whatever run the
+        // caret happens to sit after — the pass above corrects the styled runs
+        // on the very next change anyway.
+        typingAttributes = [
+            .font: config.base,
+            .foregroundColor: config.palette.text,
+            .paragraphStyle: defaultParagraphStyle ?? NSParagraphStyle.default,
+        ]
     }
 
     override func becomeFirstResponder() -> Bool {
