@@ -81,10 +81,12 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(MarkdownParser.lead("> This is the quote\n> *Author*"), "This is the quote")
     }
 
-    /// A checkbox is *not* a block marker the parser knows, so it stays — the same
-    /// thing the expanded render shows, and matching it is the point.
-    func testLeadOfChecklistItemKeepsItsBox() {
-        XCTAssertEqual(MarkdownParser.lead("- [ ] pack the car"), "[ ] pack the car")
+    /// The checkbox is a block marker now — the expanded render draws it as a
+    /// glyph, not as brackets, and matching that render is the point. This test
+    /// pinned the opposite while the parser didn't know the marker.
+    func testLeadOfChecklistItemLosesItsBox() {
+        XCTAssertEqual(MarkdownParser.lead("- [ ] pack the car"), "pack the car")
+        XCTAssertEqual(MarkdownParser.lead("- [x] pack the car"), "pack the car")
     }
 
     // MARK: lead — inline markers stay for the renderer
@@ -208,5 +210,66 @@ final class MarkdownParserTests: XCTestCase {
     /// The teaser is still the first item's text, marker and indent dropped.
     func testLeadReadsANestedFirstItem() {
         XCTAssertEqual(MarkdownParser.lead("  * buried\n* after"), "buried")
+    }
+
+    // MARK: Checkboxes
+
+    /// A checkbox item carries its state and loses its brackets; a plain item
+    /// carries no state at all.
+    func testCheckboxItemsParseWithTheirState() {
+        XCTAssertEqual(
+            list("- [ ] pack\n- [x] book\n- drive"),
+            [
+                .init(level: 0, ordered: false, text: "pack", checked: false),
+                .init(level: 0, ordered: false, text: "book", checked: true),
+                .init(level: 0, ordered: false, text: "drive"),
+            ]
+        )
+    }
+
+    /// Any non-space character between the brackets reads as checked — the rule
+    /// Obsidian applies to its custom states (`- [-]`, `- [/]`…), and these files
+    /// open there too.
+    func testAnyNonSpaceStateCountsAsChecked() {
+        XCTAssertEqual(list("- [-] parked\n- [/] half done")?.map(\.checked), [true, true])
+    }
+
+    /// Every bullet marker takes a checkbox, since `LineMarker` continues one on
+    /// Return whichever bullet it follows.
+    func testEveryBulletMarkerTakesACheckbox() {
+        for marker in ["-", "*", "+"] {
+            XCTAssertEqual(
+                list("\(marker) [x] done")?.first,
+                .init(level: 0, ordered: false, text: "done", checked: true),
+                "marker \(marker)"
+            )
+        }
+    }
+
+    /// `- [x](url)` is a one-character link at the head of a plain bullet, not a
+    /// ticked box — the `]` isn't followed by a space, which is the line between
+    /// the two.
+    func testALinkAtTheHeadOfABulletIsNotACheckbox() {
+        XCTAssertEqual(
+            list("- [x](https://example.com) the site")?.first,
+            .init(level: 0, ordered: false, text: "[x](https://example.com) the site")
+        )
+    }
+
+    /// A checkbox with nothing after it is still a checkbox — an empty item, the
+    /// same shape an empty bullet parses to.
+    func testABareCheckboxIsAnEmptyItem() {
+        XCTAssertEqual(
+            list("- [ ]")?.first,
+            .init(level: 0, ordered: false, text: "", checked: false)
+        )
+    }
+
+    /// Checkboxes nest like any other item, and mixing them into a list keeps it
+    /// one block.
+    func testCheckboxesNestAndShareTheList() {
+        let items = list("- [ ] parent\n  - [x] child\n- plain")
+        XCTAssertEqual(items?.map(\.level), [0, 1, 0])
+        XCTAssertEqual(items?.map(\.checked), [false, true, nil])
     }
 }

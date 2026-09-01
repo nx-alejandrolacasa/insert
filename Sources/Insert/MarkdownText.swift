@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A compact, dependency-free Markdown renderer for note/task bodies. Supports
 /// the "basic markdown" the plan calls for: headings, bold/italic/code/links
-/// (inline), bullet & numbered lists, block quotes, fenced code, and rules.
+/// (inline), bullet & numbered lists, `- [ ]` checkboxes, block quotes, fenced
+/// code, and rules.
 /// Not a full CommonMark implementation — just the common shapes, rendered to
 /// look at home in a Liquid Glass UI.
 struct MarkdownText: View {
@@ -71,7 +72,9 @@ struct MarkdownText: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
-                        if let number = numbers[idx] {
+                        if let checked = item.checked {
+                            checkboxMark(checked)
+                        } else if let number = numbers[idx] {
                             Text("\(number).")
                                 .font(font)
                                 .foregroundStyle(.secondary)
@@ -79,7 +82,7 @@ struct MarkdownText: View {
                         } else {
                             bulletDot
                         }
-                        Self.inline(item.text, in: nsFont).font(font)
+                        itemText(item)
                     }
                     .padding(.leading, CGFloat(item.level) * Self.listIndent)
                 }
@@ -138,6 +141,32 @@ struct MarkdownText: View {
     /// is declared here instead, putting the dot's centre on the body font's
     /// x-height — where the glyph's own centre sat, and read off the font so it
     /// tracks the text rather than pinning a number.
+    /// A `- [ ]` item's marker: the task row's own glyph pair at the body size,
+    /// so a ticked line in a note speaks the same language as a done task.
+    /// Rendered as a `Text` because the row aligns `.firstTextBaseline` and a
+    /// bare `Image` has no baseline — interpolated into text, the symbol takes
+    /// the font's.
+    private func checkboxMark(_ checked: Bool) -> some View {
+        Text("\(Image(systemName: checked ? "checkmark.circle.fill" : "circle"))")
+            .font(font)
+            .foregroundStyle(checked ? Self.checkColour : Color.secondary)
+            .accessibilityLabel(checked ? "Done" : "Not done")
+    }
+
+    /// The tick wears the theme's primary for the task checkbox's reason — read
+    /// directly, because `Color.accentColor` reads the app/system accent and
+    /// ignores the `.tint()` the theme threads through. Inside a view update, so
+    /// the `@Observable` read registers (the `linkColour` pattern).
+    static var checkColour: Color { SettingsStore.shared.theme.primary }
+
+    /// A ticked item's text is struck through and stepped back — the same two
+    /// marks a done task's title wears, so done reads one way everywhere.
+    private func itemText(_ item: MarkdownParser.ListItem) -> Text {
+        let text = Self.inline(item.text, in: nsFont).font(font)
+        guard item.checked == true else { return text }
+        return text.strikethrough().foregroundStyle(.secondary)
+    }
+
     private var bulletDot: some View {
         // Read outside the guide: its closure is `Sendable` and `nsFont` isn't.
         let xHeight = nsFont.xHeight
@@ -283,6 +312,8 @@ enum MarkdownParser {
         var level: Int
         var ordered: Bool
         var text: String
+        /// A `- [ ]` / `- [x]` item carries its state; `nil` is a plain item.
+        var checked: Bool? = nil
     }
 
     enum Block {
@@ -382,7 +413,8 @@ enum MarkdownParser {
                     items.append(ListItem(
                         level: nestingLevel(for: indentColumns(lines[i]), in: &indents),
                         ordered: marker.ordered,
-                        text: String(l.dropFirst(marker.length))
+                        text: String(l.dropFirst(marker.length)),
+                        checked: marker.checked
                     ))
                     i += 1
                 }
@@ -481,13 +513,29 @@ enum MarkdownParser {
     }
 
     /// The marker a list line opens with — its length, so the caller can drop it,
-    /// and whether it was a number.
-    private static func listMarker(_ line: String) -> (length: Int, ordered: Bool)? {
+    /// whether it was a number, and the state of the checkbox a bullet may carry.
+    private static func listMarker(_ line: String) -> (length: Int, ordered: Bool, checked: Bool?)? {
         if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
-            return (2, false)
+            if let box = checkboxMarker(line.dropFirst(2)) {
+                return (2 + box.length, false, box.checked)
+            }
+            return (2, false, nil)
         }
-        if let n = orderedPrefixLength(line) { return (n, true) }
+        if let n = orderedPrefixLength(line) { return (n, true, nil) }
         return nil
+    }
+
+    /// The `[ ] ` / `[x] ` a bullet may open with. Any single character between
+    /// the brackets counts — the same shape `LineMarker` continues on Return —
+    /// and any non-space one reads as checked, which is how Obsidian treats its
+    /// custom states (`- [-]`, `- [/]`…) too. The `]` must be followed by a
+    /// space or the end of the line: without that, `- [x](url)` is a link at
+    /// the head of a plain bullet, not a ticked box.
+    private static func checkboxMarker(_ rest: Substring) -> (length: Int, checked: Bool)? {
+        let chars = Array(rest)
+        guard chars.count >= 3, chars[0] == "[", chars[2] == "]" else { return nil }
+        guard chars.count == 3 || chars[3] == " " else { return nil }
+        return (chars.count == 3 ? 3 : 4, chars[1] != " ")
     }
 
     /// Returns the length of the `1. ` or `1) ` prefix if the line starts an
