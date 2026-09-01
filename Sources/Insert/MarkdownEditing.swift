@@ -270,6 +270,21 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             view.isContinuousSpellCheckingEnabled = spelling
         }
 
+        // Nothing below may touch the storage or the caret while an **IME
+        // composition** is open — a dead key, which on a Spanish layout is how
+        // every accented character is typed. Pressing `´` marks a provisional
+        // character: `view.string` grows by it, `textViewDidChangeSelection`
+        // fires, and `textDidChange` does **not** (measured on macOS 26: one
+        // dead key posts two selection changes and zero text changes). So the
+        // selection binding is written from the marked string while the text
+        // binding still holds the string without it, and this update — kicked
+        // off by that very write — used to answer by assigning the shorter text
+        // over the composition and then converting the longer string's index
+        // against it, which trapped in `String.UTF16View._offsetRange`. The
+        // composition settles itself; when it commits, `textDidChange` fires
+        // with the finished text and this runs again with both sides agreeing.
+        guard !view.hasMarkedText() else { return }
+
         // Only ever write the text when it really differs: typing round-trips
         // through the binding and comes back equal, and assigning it then would
         // throw away the caret and the undo stack on every keystroke.
@@ -283,8 +298,10 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
 
         // The caret the owner asked for — entry puts it at the end of the body.
         // A no-op in the ordinary case, since the coordinator has already written
-        // the live selection back into the binding.
-        if let wanted = Self.nsRange(of: selection, in: view.string),
+        // the live selection back into the binding. Read against `view.string`
+        // rather than `text`, and *after* the write above, so the string being
+        // measured is the one the caret is about to be set on.
+        if let wanted = MarkdownCaret.nsRange(of: selection, in: view.string),
            wanted != view.selectedRange() {
             view.setSelectedRange(wanted)
         }
@@ -299,20 +316,6 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             view.window?.makeFirstResponder(view)
             view.reportsFocus = true
         }
-    }
-
-    /// `TextSelection` counts in `String.Index`, a text view in UTF-16, so every
-    /// caret crosses one of these two.
-    private static func nsRange(of selection: TextSelection?, in string: String) -> NSRange? {
-        guard let selection, case .selection(let range) = selection.indices else { return nil }
-        return NSRange(range, in: string)
-    }
-
-    fileprivate static func selection(of range: NSRange, in string: String) -> TextSelection? {
-        guard let converted = Range(range, in: string) else { return nil }
-        return range.length == 0
-            ? TextSelection(insertionPoint: converted.lowerBound)
-            : TextSelection(range: converted)
     }
 
     @MainActor
@@ -336,13 +339,63 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             // Which line's syntax is at full strength is a function of the
             // selection, so the pass has a second trigger — see `rehighlight`.
             (view as? MarkdownTextView)?.rehighlightForRevealedLine()
-            parent.selection = MarkdownTextViewBridge.selection(
+            // Not while a composition is open. The marked text is provisional —
+            // it is in `view.string` but has never been published through the
+            // text binding, since AppKit posts no `textDidChange` for it — so a
+            // selection measured against it describes a string SwiftUI has never
+            // seen, and writing it is what used to start the update that crashed
+            // (see `updateNSView`). The commit posts a selection change of its
+            // own, so nothing is lost by staying quiet until then.
+            guard !view.hasMarkedText() else { return }
+            parent.selection = MarkdownCaret.selection(
                 of: view.selectedRange(), in: view.string)
         }
 
         func report(focus: Bool) {
             if parent.focused != focus { parent.focused = focus }
         }
+    }
+}
+
+// MARK: - Caret conversion
+
+/// The two conversions between SwiftUI's `TextSelection`, which counts in
+/// `String.Index`, and a text view's `NSRange`, which counts in UTF-16.
+///
+/// A namespace of its own rather than two helpers inside the representable,
+/// because the guard in `nsRange(of:in:)` is the fix for a crash and has to be
+/// testable without a view — the shape `MarkdownFormatting` already uses.
+///
+/// **A `String.Index` belongs to the string it was made from, and the binding's
+/// indices are the *owner's*.** Nothing guarantees they describe the string the
+/// text view holds now: a composition can move the view's string ahead of the
+/// text binding (see `updateNSView`), and a card re-seeding its draft from an
+/// external edit can move the owner's string out from under a caret it wrote
+/// earlier. `NSRange(_:in:)` traps rather than declining on an index that is out
+/// of bounds for the string it is handed — `String index is out of bounds`, in
+/// `String.UTF16View._offsetRange(for:from:)` — so the indices are validated
+/// first and a caret that cannot be placed is simply not placed.
+enum MarkdownCaret {
+    /// `nil` when there is no selection, or when its indices do not belong to
+    /// `string` — out of bounds, or landing inside a character rather than on a
+    /// boundary. `String.Index(_:within:)` answers both questions without
+    /// trapping, which is why the bounds are not checked by hand.
+    static func nsRange(of selection: TextSelection?, in string: String) -> NSRange? {
+        guard let selection, case .selection(let range) = selection.indices else { return nil }
+        guard let lower = String.Index(range.lowerBound, within: string),
+              let upper = String.Index(range.upperBound, within: string),
+              lower <= upper
+        else { return nil }
+        return NSRange(lower..<upper, in: string)
+    }
+
+    /// The other direction. Already total — `Range(_:in:)` declines rather than
+    /// trapping — and always called with the string the range was just read from.
+    static func selection(of range: NSRange, in string: String) -> TextSelection? {
+        guard let converted = Range(range, in: string) else { return nil }
+        return range.length == 0
+            ? TextSelection(insertionPoint: converted.lowerBound)
+            : TextSelection(range: converted)
     }
 }
 

@@ -370,6 +370,9 @@ private struct TaskCardView: View {
                 || newValue.done != draft.done
                 || newValue.due != draft.due
                 || newValue.projectIDs != draft.projectIDs {
+                // The caret was measured against the body being replaced, so it
+                // describes a string that no longer exists — see `MarkdownCaret`.
+                if newValue.body != draft.body { bodySelection = nil }
                 draft = newValue
             }
         }

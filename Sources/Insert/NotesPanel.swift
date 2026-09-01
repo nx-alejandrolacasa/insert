@@ -276,6 +276,11 @@ private struct NoteCardView: View {
                 || newValue.symbol != draft.symbol
                 || newValue.typeID != draft.typeID
                 || newValue.projectIDs != draft.projectIDs {
+                // The caret was measured against the body being replaced, so it
+                // describes a string that no longer exists — see `MarkdownCaret`.
+                // Dropping it lets the editor keep its own clamped caret rather
+                // than being sent to a position from the previous text.
+                if newValue.body != draft.body { bodySelection = nil }
                 draft = newValue
             }
         }

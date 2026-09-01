@@ -1569,6 +1569,35 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the text happens to start with — comparing them would churn a full
   re-attribution per graph update. `isRichText` stays `false`: it governs user
   styling and pastes, not programmatic attributes.
+- **A composition owns the text view, and nothing of ours may write to it while
+  one is open.** 0.17.1 crashed on **every accented character** — a hard
+  `Trace/BPT trap`, `String index is out of bounds` in
+  `String.UTF16View._offsetRange(for:from:)`, reported from typing "navegación".
+  On a Spanish layout `ó` is a **dead key**: `´` arrives as *marked* text,
+  provisional and underlined, and AppKit's behaviour there is the whole bug.
+  Measured on macOS 26, and pinned by `MarkdownEditorTests` rather than written
+  down: one dead key grows `view.string` by the provisional character, posts
+  **two** selection changes and **zero** `textDidChange`. So the caret binding
+  was written from `"navegac´"` while the text binding still held `"navegac"` —
+  and that write is a SwiftUI state change, so it caused the update that then
+  (a) assigned the shorter text back over the composition, destroying it, and
+  (b) converted the longer string's `String.Index` against it, which traps.
+  Three guards, and each is worth having on its own. `updateNSView` **returns
+  before touching the storage or the caret** while `hasMarkedText()` — the
+  composition settles itself, and its commit fires `textDidChange`, which brings
+  both sides back into agreement. `textViewDidChangeSelection` **publishes
+  nothing** while marked, since a selection measured against a provisional
+  string describes text SwiftUI has never been given. And the conversion itself
+  is now total: `MarkdownCaret.nsRange(of:in:)` validates the indices with
+  `String.Index(_:within:)` — which declines, where `NSRange(_:in:)` *aborts* —
+  so a caret that cannot be placed is simply not placed. That third one is not
+  redundant, because there is a **second route to the same trap** with no IME in
+  it: a card re-seeding its `draft` from an external Obsidian edit replaces the
+  body under a caret written against the old one, which is why both panels also
+  drop `bodySelection` when an upstream body differs. The general rule the
+  episode leaves: **a `String.Index` belongs to the string it was made from**,
+  and a binding's indices are the *owner's*, so any conversion against a text
+  view's current string has to assume they are foreign.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three
