@@ -71,10 +71,27 @@ final class MarkdownRichTextTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         let firstStyle = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         let secondStyle = text.attribute(.paragraphStyle, at: text.length - 1, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertEqual(firstStyle?.firstLineHeadIndent, 0)
-        XCTAssertEqual(secondStyle?.firstLineHeadIndent, 13, "one level is the marker column: 5pt dot + 8pt gap")
-        XCTAssertGreaterThan(firstStyle?.headIndent ?? 0, 0, "wrapped lines sit under the item's text, not its marker")
+        XCTAssertEqual(firstStyle?.firstLineHeadIndent, MarkdownText.listInset,
+                       "the whole list steps in, first level included, as the editor's does")
+        XCTAssertEqual(secondStyle?.firstLineHeadIndent, MarkdownText.listInset + 13,
+                       "one level is the marker column: 5pt dot + 8pt gap")
+        XCTAssertGreaterThan(firstStyle?.headIndent ?? 0, firstStyle?.firstLineHeadIndent ?? 0,
+                             "wrapped lines sit under the item's text, not its marker")
         XCTAssertEqual(firstStyle?.tabStops.first?.location, firstStyle?.headIndent)
+    }
+
+    /// The gap the editor opens before each list paragraph, so the flip between
+    /// the modes moves nothing.
+    func testItemsAreSeparatedByHalfALineAndTheListByABlankOne() {
+        let base = Card.nsFont(.body, typeface: .rounded)
+        let text = render("- One\n- Two\n\nAfter").text
+        let one = (text.string as NSString).range(of: "One")
+        let two = (text.string as NSString).range(of: "Two")
+        let first = text.attribute(.paragraphStyle, at: one.location, effectiveRange: nil) as? NSParagraphStyle
+        let last = text.attribute(.paragraphStyle, at: two.location, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(first?.paragraphSpacing, MarkdownText.listGap(base))
+        XCTAssertEqual(last?.paragraphSpacing, (base.ascender - base.descender + base.leading).rounded(),
+                       "the last item closes the block, so it takes the blank line")
     }
 
     func testACheckboxKnowsItsSourceLine() {

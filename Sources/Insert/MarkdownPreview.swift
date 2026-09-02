@@ -337,6 +337,8 @@ enum MarkdownRichText {
     /// The gap between a list marker and its item (`MarkdownText.markerGap`).
     private static let markerGap: CGFloat = 8
     /// One level of nesting: the marker column, dot plus gap (`MarkdownText.listIndent`).
+    /// The list as a whole steps in by `MarkdownText.listInset` on top of it, so
+    /// the render matches the editor's paragraph style line for line.
     private static let listIndent: CGFloat = 5 + markerGap
 
     // MARK: Rendering
@@ -409,11 +411,15 @@ enum MarkdownRichText {
             case .paragraph(let text):
                 let style = paragraph { $0.paragraphSpacing = after }
                 out.append(inline(text, font: base, colour: palette.text, paragraph: style))
+            // Half a line between items and an inset for the whole list, the two
+            // things `MarkdownText` and the editor's paragraph style already do —
+            // the flip between the modes has to move nothing.
             case .list(let items):
                 let numbers = MarkdownParser.numbering(items)
+                let gap = MarkdownText.listGap(base)
                 for (index, item) in items.enumerated() {
                     appendItem(item, number: numbers[index],
-                               after: index == items.count - 1 ? after : 0)
+                               after: index == items.count - 1 ? after : gap)
                     if index < items.count - 1 { newline() }
                 }
             case .quote(let lines):
@@ -476,7 +482,7 @@ enum MarkdownRichText {
         /// marker actually drawn, so a wrapped line's text lines up under the
         /// first line's, and a `10.` gets the width it needs.
         private mutating func appendItem(_ item: MarkdownParser.ListItem, number: Int?, after: CGFloat) {
-            let indent = CGFloat(item.level) * listIndent
+            let indent = MarkdownText.listInset + CGFloat(item.level) * listIndent
             let marker: NSAttributedString
             if let checked = item.checked {
                 marker = checkbox(checked, line: item.line)
