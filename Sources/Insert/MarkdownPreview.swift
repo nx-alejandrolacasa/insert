@@ -124,9 +124,10 @@ struct MarkdownPreview: NSViewRepresentable {
     @MainActor private static let sizes = MemoCache<SizeKey, CGSize>(limit: 512)
 }
 
-/// The read-only text view behind `MarkdownPreview`. Three things are its own:
+/// The read-only text view behind `MarkdownPreview`. Four things are its own:
 /// the click-versus-drag decision that turns a plain click into `onTap`, the
-/// block decorations drawn under the text (the quote bar, the code block's
+/// pointing hand over the one run that answers a click of its own, the block
+/// decorations drawn under the text (the quote bar, the code block's
 /// background, the rule), and a copy that hands out `MarkdownRichText.export`
 /// rather than the storage as it is — the marker runs carry glyphs and
 /// attachments that mean nothing pasted elsewhere.
@@ -220,6 +221,99 @@ final class MarkdownPreviewView: NSTextView {
             if attrs[.link] != nil { return }
         }
         onTap?()
+    }
+
+    // MARK: Cursor
+
+    /// The pointing hand over a checkbox — the one run in a body that answers a
+    /// click of its own rather than starting a selection, so the pointer says so
+    /// before the click is spent. Everywhere else keeps the I-beam, which is the
+    /// honest mark for text that selects.
+    ///
+    /// **A cursor rect was tried first and never appeared.** `resetCursorRects`
+    /// with the hand added after `super`'s I-beam is the pattern every "pointing
+    /// hand over a link in an `NSTextView`" uses, and inside a card it did
+    /// nothing — the window's cursor-rect machinery is not what puts the I-beam
+    /// on a text view hosted by SwiftUI. *Why* was not instrumented; that it
+    /// didn't show is the finding. So the cursor is set where the mouse is
+    /// actually reported instead: a tracking area of our own, answered in
+    /// `cursorUpdate` (the entry) and `mouseMoved` (crossing from text onto the
+    /// mark without leaving the view). Both set the cursor **last**, after the
+    /// window has already had its say, which is what makes them stick.
+    private var hoverArea: NSTrackingArea?
+
+    /// `.inVisibleRect` keeps the area in step with scrolling and resizing on
+    /// its own, so the rect passed here is ignored — the one thing a cursor rect
+    /// would have needed re-establishing by hand.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard isOverCheckbox(event) else { return super.cursorUpdate(with: event) }
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard isOverCheckbox(event) else { return super.mouseMoved(with: event) }
+        NSCursor.pointingHand.set()
+    }
+
+    private func isOverCheckbox(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        return cachedCheckboxRects().contains { $0.contains(point) }
+    }
+
+    /// The rects, memoised on the text and the width that wrapped it: this runs
+    /// per mouse-moved event, and measuring segments per event is the
+    /// formatter-per-call mistake on the hover path.
+    private var hoverCache: (key: Key?, width: CGFloat, rects: [CGRect])?
+
+    private func cachedCheckboxRects() -> [CGRect] {
+        if let hoverCache, hoverCache.key == key, hoverCache.width == bounds.width {
+            return hoverCache.rects
+        }
+        let rects = checkboxRects()
+        hoverCache = (key, bounds.width, rects)
+        return rects
+    }
+
+    /// The boxes the checkbox markers occupy, in view coordinates.
+    ///
+    /// TextKit 2's own **segments** rather than `textRect(for:in:)`'s line
+    /// boxes: a line box is the whole item, and the hand belongs on the mark.
+    /// The run is the mark *and its tab*, which is deliberate — that is exactly
+    /// what `settleClick` treats as the checkbox, so the pointer promises a
+    /// click where a click really lands.
+    func checkboxRects() -> [CGRect] {
+        guard onToggleCheckbox != nil, let storage = textStorage, storage.length > 0,
+              let layout = textLayoutManager, let content = layout.textContentManager
+        else { return [] }
+        let origin = textContainerOrigin
+        var rects: [CGRect] = []
+        storage.enumerateAttribute(
+            .markdownCheckbox, in: NSRange(location: 0, length: storage.length)
+        ) { value, range, _ in
+            guard value != nil,
+                  let start = content.location(layout.documentRange.location, offsetBy: range.location),
+                  let end = content.location(layout.documentRange.location, offsetBy: range.upperBound),
+                  let span = NSTextRange(location: start, end: end)
+            else { return }
+            layout.enumerateTextSegments(in: span, type: .standard, options: [.rangeNotRequired]) {
+                _, frame, _, _ in
+                rects.append(frame.offsetBy(dx: origin.x, dy: origin.y))
+                return true
+            }
+        }
+        return rects
     }
 
     // MARK: Decorations
@@ -561,6 +655,13 @@ enum MarkdownRichText {
                 .font: base,
                 .markdownPlain: checked ? "\u{2611} " : "\u{2610} ",
                 .markdownCheckbox: line,
+                // The second route to the pointing hand, beside the view's own
+                // hover tracking: `NSCursorAttributeName` is AppKit's own way of
+                // saying a run isn't the I-beam's — it is how a link gets the
+                // hand (`linkTextAttributes`) — and it costs a dictionary entry.
+                // Whether a text view still reads it under TextKit 2 was not
+                // established, which is why the view doesn't rely on it.
+                .cursor: NSCursor.pointingHand,
             ], range: NSRange(location: 0, length: mark.length))
             return mark
         }
@@ -638,6 +739,7 @@ enum MarkdownRichText {
             attrs[.attachment] = nil
             attrs[.markdownPlain] = nil
             attrs[.markdownCheckbox] = nil
+            attrs[.cursor] = nil
             attrs[.baselineOffset] = nil
             replacements.append((range, NSAttributedString(string: plain, attributes: attrs)))
         }
@@ -648,6 +750,7 @@ enum MarkdownRichText {
         out.removeAttribute(.foregroundColor, range: range)
         out.removeAttribute(.backgroundColor, range: range)
         out.removeAttribute(.markdownCheckbox, range: range)
+        out.removeAttribute(.cursor, range: range)
         out.enumerateAttribute(.font, in: range) { value, run, _ in
             guard let font = value as? NSFont else { return }
             out.addAttribute(.font, value: portable(font), range: run)

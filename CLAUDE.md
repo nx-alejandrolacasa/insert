@@ -1698,7 +1698,35 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   on a link, which the text view opens itself, and on a checkbox, which flips
   its line. `NSTextView.mouseDown` can track the whole drag before it returns
   on some paths and hand `mouseUp` on others, so the click is settled from
-  whichever comes with the button up, once (`pressPoint`). `sizeThatFits`
+  whichever comes with the button up, once (`pressPoint`).
+  **And a checkbox says so before the click**: it is the one run in a body that
+  answers a click of its own rather than starting a selection, so it wears the
+  **pointing hand** while everything else keeps the I-beam. **A cursor rect was
+  tried first and never appeared** — `resetCursorRects` with the hand added
+  after `super`'s I-beam, which is the pattern every "pointing hand over a link
+  in an `NSTextView`" uses, and inside a card it did nothing. *Why* was not
+  instrumented; that it didn't show is the finding, and the reading that fits is
+  that the window's cursor-rect machinery isn't what puts the I-beam on a text
+  view SwiftUI hosts. So the cursor is set where the mouse is actually reported:
+  a **tracking area** of the view's own (`.mouseMoved`, `.cursorUpdate`,
+  `.inVisibleRect`, so scrolling and resizing keep it in step for free),
+  answered in `cursorUpdate` for the entry and `mouseMoved` for crossing from
+  the words onto the mark without leaving the view. Both set the cursor last,
+  after the window has had its say. The mark's run *also* carries the `.cursor`
+  attribute (`NSCursorAttributeName`, "NSCursor, default IBeamCursor" — how a
+  link gets its hand through `linkTextAttributes`), as a second route that costs
+  a dictionary entry; whether a text view still reads it under TextKit 2 was not
+  established, so nothing depends on it and `export` strips it with the colours.
+  The hit test is TextKit 2's own **segments** for the `.markdownCheckbox` runs
+  — segments rather than `textRect`'s line boxes, which are the whole item —
+  memoised on the body and the width, because it runs per mouse-moved event.
+  The rect covers the mark *and its tab*, which is exactly what `settleClick`
+  treats as the checkbox, so the pointer promises a click where a click really
+  lands. `MarkdownRichTextTests` pins the rects and drives a synthetic
+  mouse-moved event over one; what no test reaches is whether AppKit *delivers*
+  that event in the real window, which is the half the cursor rect failed at and
+  the first thing to look at if the hand still doesn't show.
+  `sizeThatFits`
   answers the laid-out height at the proposed width from TextKit 2's usage
   bounds, which is what lets the clamp, the fade and the chevron measurement
   work unchanged; `lineFragmentPadding` is 0 and the caller's 5pt padding is
@@ -1723,7 +1751,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   agent shell: `.clipped()`/`.mask` over the representable, the height animation
   across the mode flip, and that a plain click on the text opens the editor in
   the real window — the first thing to try if selection works and editing
-  doesn't.
+  doesn't. The **pointing hand** is in the same position: the rects and the
+  hover rule are pinned, but no pointer has been moved over one, and the
+  mechanism it replaced failed precisely at delivery.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

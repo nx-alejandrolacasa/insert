@@ -205,6 +205,90 @@ final class MarkdownRichTextTests: XCTestCase {
         XCTAssertLessThanOrEqual(view.usedSize(forWidth: 300).width, 300)
     }
 
+    // MARK: Cursor
+
+    /// A checkbox is the one run in a body that answers a click of its own —
+    /// it flips its source line where everything else only starts a selection —
+    /// so it wears the pointing hand. Pinned because the hand is invisible to
+    /// every other kind of check: it is a cursor rect over a TextKit 2 segment,
+    /// and it going missing looks exactly like a body with no checkbox in it.
+    @MainActor
+    func testOnlyTheCheckboxMarkersEarnThePointingHand() {
+        let view = MarkdownPreviewView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textStorage?.setAttributedString(render("- [ ] Ship it\n- [x] Shipped\n\nA plain paragraph").text)
+        let size = view.usedSize(forWidth: 320)
+        view.setFrameSize(CGSize(width: 320, height: size.height))
+
+        // No handler, no promise: a body whose boxes don't flip keeps the I-beam.
+        XCTAssertTrue(view.checkboxRects().isEmpty)
+
+        view.onToggleCheckbox = { _ in }
+        let rects = view.checkboxRects().sorted { $0.minY < $1.minY }
+
+        XCTAssertEqual(rects.count, 2, "one per item, and none for the paragraph")
+        for rect in rects {
+            XCTAssertGreaterThan(rect.width, 0)
+            XCTAssertGreaterThan(rect.height, 0)
+            // The mark and its tab, at the head of the line — not the item.
+            XCTAssertLessThan(rect.minX, 20)
+            XCTAssertLessThan(rect.width, 80)
+        }
+        // The view is flipped, so the second item's mark sits below the first's.
+        XCTAssertGreaterThan(rects[1].minY, rects[0].minY)
+        // And both are above the paragraph that follows them.
+        XCTAssertLessThan(rects[1].maxY, size.height)
+    }
+
+    /// The hover itself, driven by a synthetic mouse-moved event: over the mark
+    /// the view sets the hand, over the words it doesn't. What this *can't*
+    /// reach is whether AppKit delivers the event in the real window — that is
+    /// the tracking area's job, and the cursor rect it replaced failed exactly
+    /// there. So the rule is pinned and the delivery is the thing to try first
+    /// if the hand still never shows.
+    @MainActor
+    func testTheViewSetsTheHandOverTheMarkAndNotOverTheWords() throws {
+        let view = MarkdownPreviewView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.isSelectable = true
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.onToggleCheckbox = { _ in }
+        view.textStorage?.setAttributedString(render("- [ ] Ship it").text)
+        let size = view.usedSize(forWidth: 320)
+        view.setFrameSize(CGSize(width: 320, height: size.height))
+        guard let mark = view.checkboxRects().first else { return XCTFail("no checkbox") }
+
+        func moved(to point: CGPoint) throws -> NSCursor? {
+            guard let event = NSEvent.mouseEvent(
+                with: .mouseMoved, location: view.convert(point, to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0
+            ) else { throw XCTSkip("no event to send") }
+            view.mouseMoved(with: event)
+            return NSCursor.current
+        }
+
+        XCTAssertEqual(try moved(to: CGPoint(x: mark.midX, y: mark.midY)), NSCursor.pointingHand)
+        // The item's own words, well past the marker column.
+        XCTAssertNotEqual(try moved(to: CGPoint(x: mark.maxX + 30, y: mark.midY)), NSCursor.pointingHand)
+    }
+
+    @MainActor
+    func testABodyWithNoCheckboxesAsksForNoHand() {
+        let view = MarkdownPreviewView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.onToggleCheckbox = { _ in }
+        view.textStorage?.setAttributedString(render("- A bullet\n\n[a link](https://example.com)").text)
+        _ = view.usedSize(forWidth: 320)
+
+        XCTAssertTrue(view.checkboxRects().isEmpty)
+    }
+
     @MainActor
     func testCopyWritesRichAndPlainFlavours() throws {
         let view = MarkdownPreviewView(usingTextLayoutManager: true)
