@@ -55,7 +55,8 @@ final class MarkdownEditorTests: XCTestCase {
     /// index against it, trapping in `String.UTF16View._offsetRange`.
     ///
     /// This is the measurement the fix rests on, so it is asserted rather than
-    /// written down: one dead key, no text change, a longer string.
+    /// written down: one dead key, two selection changes, no text change, a
+    /// longer string.
     func testADeadKeyMovesTheStringWithoutPostingATextChange() {
         let editor = MarkdownTextView()
         let spy = TextChangeSpy()
@@ -63,6 +64,7 @@ final class MarkdownEditorTests: XCTestCase {
         editor.string = "navegac"
         editor.setSelectedRange(NSRange(location: 7, length: 0))
         spy.textChanges = 0
+        spy.selectionChanges = 0
 
         editor.setMarkedText(
             "\u{B4}",
@@ -73,6 +75,7 @@ final class MarkdownEditorTests: XCTestCase {
         XCTAssertTrue(editor.hasMarkedText())
         XCTAssertEqual(editor.string, "navegac\u{B4}")
         XCTAssertEqual(spy.textChanges, 0, "a composition publishes no text change")
+        XCTAssertEqual(spy.selectionChanges, 2, "but it does move the caret")
         XCTAssertGreaterThan(editor.string.utf8.count, "navegac".utf8.count)
     }
 
@@ -170,8 +173,11 @@ final class MarkdownEditorTests: XCTestCase {
 
 }
 
-/// Counts `textDidChange`, which is what a composition is shown not to post.
+/// Counts `textDidChange`, which a composition is shown not to post, and the
+/// selection changes it posts instead.
 private final class TextChangeSpy: NSObject, NSTextViewDelegate {
     var textChanges = 0
+    var selectionChanges = 0
     func textDidChange(_ notification: Notification) { textChanges += 1 }
+    func textViewDidChangeSelection(_ notification: Notification) { selectionChanges += 1 }
 }

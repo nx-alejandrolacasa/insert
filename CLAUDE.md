@@ -109,6 +109,9 @@ Sources/Insert/
   BuildVariant.swift          dev vs release build, and what differs
   MarkdownText.swift          compact Markdown renderer for bodies + the shared
                               collapsible preview (CollapsibleMarkdown)
+  MarkdownPreview.swift       a body in view mode: a read-only text view over the
+                              Markdown as rich text, so it selects and copies
+                              with its formatting (MarkdownRichText)
   MarkdownHighlight.swift     styles the Markdown *source* in the editor — the
                               pure span scanner + the two attribute appliers
   FormattingBar.swift         the bar that floats over a selection in the editor:
@@ -169,6 +172,9 @@ since the alternative is waiting until tomorrow morning to find out. And
 really slants, because both fail *silently*: a system font asked for by name is
 substituted (New York becomes Times), and a missing italic face falls back to the
 upright one, so "it renders" and "it renders right" are different claims.
+`MarkdownRichTextTests` pins what the view-mode preview's rich text carries to the
+pasteboard and what it deliberately strips — see the selection bullet under Design
+intent — because a wrong export is only ever seen in some *other* app.
 
 `ThemePaletteTests` is the odd one out — it measures **colour**, and it is here for
 the same "fails silently" reason. `AppTheme`'s table is 400-odd generated sRGB
@@ -1649,6 +1655,75 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   others: set every line the selection touches, or take the markers off when all
   of them already carry that kind, blank lines untouched, numbering restarting
   per indent as the renderer counts; pinned by `MarkdownFormattingTests`.
+- **A body can be selected in view mode, and ⌘C carries the formatting**
+  (`MarkdownPreview`, September 2026). The *full* render of a card body is a
+  read-only `NSTextView` over the Markdown as rich text
+  (`MarkdownRichText.render`), replacing `MarkdownText`'s stack of SwiftUI
+  `Text`s there. `MarkdownText` stays for the one-line teaser and the hidden
+  measuring proxies, which are never selected — so a task row collapsed to one
+  line is still not selectable; expand it first. Why a text view rather than
+  `.textSelection(.enabled)`: SwiftUI's selection is per `Text`, so it could
+  never cross from one paragraph into the next, and what it copies isn't ours to
+  shape; a text view selects across the whole body and brings Look Up, Translate
+  and Services with it. Same parser, same faces — the heading table, the
+  descriptor union for bold, `Card.italic`, monospaced code, `theme.link` — so
+  Grotesk's axis trap and Rounded's synthesised oblique arrive solved, and block
+  spacing is `paragraphSpacing` of one `blankLine`, the rhythm rule read in
+  AppKit terms. The bullet is `●` at 0.48 of the body size (5.1pt of ink,
+  measured; `•` is 2.6pt) lifted onto the x-height, numbers take monospaced
+  digits, and a checkbox is an SF Symbol attachment the view hit-tests back to
+  its source line. The quote bar, the code block's background and the rule are
+  **drawn by the view under the text** (`Decoration`s over character ranges,
+  measured off TextKit 2's line fragments rather than the layout fragments so a
+  paragraph's spacing isn't painted as part of it; the bar sits at the
+  paragraph's edge, the lines indented past it).
+  **Copy is `MarkdownRichText.export`, not the storage.** `writeSelection` hands
+  out RTF and plain text: marker runs become their plain spelling through the
+  `.markdownPlain` attribute (`• `, `1. `, `☐ `/`☑ `, `---`), so no attachment
+  character or marker tab leaves; **every colour is dropped**, because a
+  `labelColor` resolved in Dark Mode is white and white text pasted into a white
+  document is invisible; and fonts go to Helvetica Neue (Menlo for code) at the
+  same size and traits, since none of the five card faces is reachable by the
+  name RTF would carry — hidden system designs and a bundled Grotesk. A
+  synthesised oblique is a slant in the matrix, not a trait, so `portable` reads
+  the matrix too or Rounded's italics would leave upright. The ⋯ menu's Copy
+  adds the same RTF flavour beside the Markdown it already put down as plain
+  text. Pinned by `MarkdownRichTextTests`; the one test that writes a real
+  pasteboard **skips** in the agent sandbox, where the pasteboard server refuses
+  the write, and the export itself is what's asserted.
+  **A click is not a drag.** The text view consumes the mouse, so the card's own
+  tap gesture never sees a click that lands on the text; the view reports one
+  that moved under 4pt and left no selection through `onTap`, which
+  `CollapsibleMarkdown` forwards and both cards point at `enterEdit()` — except
+  on a link, which the text view opens itself, and on a checkbox, which flips
+  its line. `NSTextView.mouseDown` can track the whole drag before it returns
+  on some paths and hand `mouseUp` on others, so the click is settled from
+  whichever comes with the button up, once (`pressPoint`). `sizeThatFits`
+  answers the laid-out height at the proposed width from TextKit 2's usage
+  bounds, which is what lets the clamp, the fade and the chevron measurement
+  work unchanged; `lineFragmentPadding` is 0 and the caller's 5pt padding is
+  the editor's inset. Two things about that measurement are load-bearing, and
+  the first shipped broken. **The render has to be told to fill its row** —
+  `MarkdownText`'s own body carried a `frame(maxWidth: .infinity)` and swapping
+  in a representable lost it, so the body wrapped at its natural width, about
+  half the card, and the chevron (which the `HStack` puts *after* the content)
+  came with it instead of sitting on the trailing edge: one missing modifier,
+  two symptoms. And the measuring happens on an **offscreen** text view, not the
+  one on screen, because SwiftUI asks at several widths per pass and each ask
+  sets the container's width; the answers are memoised on body and width, since
+  a miss costs the measurer a copy of the text. A **zero** width proposal is a
+  real wrap — it is how the minimum is asked for — and only an unspecified or
+  infinite one is the ideal-width question, answered with the longest line's
+  width. The preview being first responder changes nothing else:
+  `SpellChecking` and `MarkdownReturn` guard on `isEditable`, and `RootView`'s
+  ⌘K monitor on `is MarkdownTextView`.
+  **Checked and not checked, honestly.** The offscreen render was looked at
+  (bullets, hanging indents, quote bar, code box, rule, checkboxes) and the
+  test target passes. Not exercised, because the app can't be launched from the
+  agent shell: `.clipped()`/`.mask` over the representable, the height animation
+  across the mode flip, and that a plain click on the text opens the editor in
+  the real window — the first thing to try if selection works and editing
+  doesn't.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

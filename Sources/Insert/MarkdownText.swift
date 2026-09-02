@@ -795,6 +795,13 @@ struct CollapsibleMarkdown: View {
     private var clamped: some View {
         MarkdownPreview(markdown: markdown, textStyle: textStyle,
                         onTap: onTap, onToggleCheckbox: onToggleCheckbox)
+            // `MarkdownText`'s own body carried this and the render lost it on
+            // the way into a representable, which showed up twice at once: the
+            // text wrapped at its natural width — about half the card — and the
+            // chevron, which the `HStack` puts after the content, came with it
+            // instead of sitting on the trailing edge. A representable is sized
+            // by what `sizeThatFits` answers, so filling has to be asked for.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 5)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
