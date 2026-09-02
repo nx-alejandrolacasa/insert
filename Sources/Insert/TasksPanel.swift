@@ -856,7 +856,11 @@ private struct TaskCardView: View {
         MarkdownSizingProxy(
             text: draft.body.isEmpty ? " " : draft.body,
             base: Card.nsFont(.callout),
-            typeface: settings.typeface
+            typeface: settings.typeface,
+            scale: CardTextSize.scale(settings.cardFontSize),
+            lineSpacing: MarkdownText.lineSpacing(
+                Card.nsFont(.callout), lineHeight: settings.cardLineHeight
+            )
         )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)

@@ -127,6 +127,8 @@ Sources/Insert/
   CardMeta.swift              marked title, type label, dot chips + overflow
   Typeface.swift              the five card faces + their Settings picker
   BundledFonts.swift          registers the two OFL faces; the Mono numeral face
+  CardTextMetrics.swift       the size and leading a card is read at, and the
+                              −/+ stepper the two of them are set with
   Fonts/                      Space Grotesk + IBM Plex Mono, and their licences
 tools/IconGenerator.swift     draws the app icon (SVG layers + CoreGraphics)
 Resources/AppIcon.icon/       generated layered icon (icon.json + SVG layers)
@@ -172,6 +174,13 @@ since the alternative is waiting until tomorrow morning to find out. And
 really slants, because both fail *silently*: a system font asked for by name is
 substituted (New York becomes Times), and a missing italic face falls back to the
 upright one, so "it renders" and "it renders right" are different claims.
+`CardTextMetricsTests` is a fifth of the same kind, and the two halves it pins
+fail in the two ways this file keeps warning about: a font scale that isn't
+*exactly* 1 at the default re-resolves every card on a machine whose owner
+changed nothing, and the reading-leading arithmetic is one rule spelled four
+different ways across SwiftUI and AppKit — so it lays the preview and the source
+out for real, at every line height and in all five faces, and asserts they come
+to the same height.
 `MarkdownRichTextTests` pins what the view-mode preview's rich text carries to the
 pasteboard and what it deliberately strips — see the selection bullet under Design
 intent — because a wrong export is only ever seen in some *other* app.
@@ -1040,6 +1049,79 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   makes ⌘K a toggle like ⌘B. An empty selection inserts the skeleton with the
   caret in the label. A multiline selection does nothing (a label can't span
   lines), and the edit goes through `MarkdownEdits.apply` for native undo.
+- **A card is read at a size and a leading of the reader's choosing** — Settings
+  → Appearance, two steppers between Theme and Typeface: **Text size** 11–22pt
+  (the system's own `.body`, 13, is the default) and **Line height** 1.0–2.0 in
+  tenths (1.0, the font's own leading, is the default). Both live in
+  `CardTextMetrics.swift` with the reasoning for their bounds; the control is
+  `ValueStepper`, a `−  value  +` pill rather than a `Stepper`, whose AppKit
+  control is a spinner wearing the system's chrome, and rather than a slider,
+  which would offer a precision neither value has and hide the number being
+  chosen. The value is set in `Mono` for the bands' and timestamps' reason and
+  its column is pinned to the widest label, so nothing in the pill moves as the
+  number changes.
+  **The size is stored as the body's point size, not as a multiplier**, because
+  that is the number a reader can think about — and everything else on a card is
+  a *text style* keeping its own ratio to the body (`.title3` for a title,
+  `.callout` for a task's notes, `.title2` for an `#` heading), so one number
+  moves the whole card and nothing inside it changes proportion. What `Card`
+  applies is the ratio, `CardTextSize.scale`, and it is **exactly 1** at the
+  default, so an install that never opens the pane resolves the very same
+  `NSFont` it always did rather than a rounded copy of it — pinned, because the
+  failure would be silent.
+  **Scope is the card, and it is narrower than the typeface's.** The face reaches
+  three pieces of chrome as well — the column headings, the sidebar's "Projects"
+  and the project names under it, all authored text — and the size deliberately
+  doesn't: those sit in rows whose height is the window's business, and a reader
+  asking for larger notes is not asking for a larger sidebar. `Card.chrome(_:)`
+  is their opt-out, and it is the whole of the difference between the two
+  settings' reach. The window title is already unscaled for its own reason
+  (`restyleWindowTitle` hands back the size AppKit chose).
+  **The leading is a `lineSpacing`, never a `lineHeightMultiple`, and that is
+  the finding the rest hangs off.** Measured: AppKit's `lineSpacing` and
+  SwiftUI's `.lineSpacing(_:)` are the same quantity to the point, and both add
+  it **between** line fragments only — never above the first line or below the
+  last. `lineHeightMultiple` inflates every line including the first, and
+  SwiftUI has no counterpart for it, so the four places a card's text is laid
+  out could not have been held to one rhythm. That rules it out however much
+  more natural "line height" sounds as an attribute; the setting is still
+  *named* for the multiple, because that is what a reader is choosing.
+  Which makes the arithmetic one rule read four ways, and getting any of them
+  wrong shows up as the card changing shape on the flip between reading and
+  editing — the invariant the preview/source bullet above is about.
+  `MarkdownText.lineSpacing(_:lineHeight:)` is the one definition; AppKit's two
+  consumers (the preview's every paragraph style, the editor's base one, which
+  the highlighter's list styles inherit by copying) get it for free at every
+  line boundary, while **SwiftUI's stacks have to add it by hand between their
+  children** — separate views get no line spacing — which is why
+  `MarkdownText`'s block gap is a blank line *plus* one more helping where the
+  preview's `paragraphSpacing` is a blank line and no more, and why the sizing
+  proxy's `VStack` spacing went from 0 to exactly this. `CollapsibleMarkdown`'s
+  clamp counts **`n − 1`** gaps for `n` lines, not `n`, or every preview but the
+  default's would leave a sliver of the next line showing under the fade.
+  `CardTextMetricsTests` lays both halves out for real and compares them, at
+  every setting and in all five faces, because reading the arithmetic is exactly
+  how an off-by-one survives being written down.
+  **Both settings are clamped in a computed property, because `@Observable` makes
+  the ordinary idiom infinitely recursive.** Correcting a value by assigning the
+  property from inside its own `didSet` is standard Swift — a stored property's
+  `didSet` doesn't fire for a write made within it — and it is wrong in every
+  `@Observable` class in this app, `SettingsStore` included. The macro rewrites
+  each stored property into a private `_name` carrying the `didSet` plus a
+  computed façade of the public name, so `cardFontSize = …` inside the `didSet`
+  goes out through the façade's setter and straight back into `_name`, whose
+  `didSet` runs again. It shipped, and the first press of "+" recursed ~74,600
+  frames into the stack guard: `EXC_BAD_ACCESS`, with the report naming nothing
+  but the setter. So each setting is a real computed property over a private
+  stored value and corrects on the way **in**, where there is no second setter to
+  re-enter; persistence rides the stored value, so what reaches `UserDefaults` is
+  always the corrected number, and `init` assigns the stored value directly since
+  a computed property is a use of `self` an initialiser can't make yet. Every
+  other `didSet` in `SettingsStore` only writes to `UserDefaults` and is safe as
+  it is — the rule is specifically about *writing back to yourself*. Pinned, and
+  the pin is unusual in kind: a regression doesn't fail an assertion, it takes
+  the test process down with it, so the test asserting the clamp is really
+  asserting that it returns at all.
 - **Cards read in one of five faces** — Settings → Appearance offers Standard /
   Rounded / **Grotesk** / Serif / Monospace (`Typeface.swift`, resolved by
   `Card` and nowhere else). **Grotesk is the default for a new install**;

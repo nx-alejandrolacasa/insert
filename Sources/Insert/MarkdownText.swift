@@ -22,25 +22,31 @@ struct MarkdownText: View {
     private var nsFont: NSFont { Card.nsFont(textStyle) }
     private var font: Font { Font(nsFont) }
 
-    /// **One blank source line.**
-    ///
-    /// Two paragraphs are separated in Markdown by a blank line, which the editor
-    /// shows at its full height; the preview has to leave the same gap or the
-    /// card changes shape when it flips between the two, which is the one moment
-    /// both are compared. It was a flat 8pt, half a line, so every paragraph
-    /// break tightened on entering view mode. Measured off `nsFont` rather than
-    /// written down, so the two modes can't drift apart if the style changes.
-    private var blankLine: CGFloat {
-        (nsFont.ascender - nsFont.descender + nsFont.leading).rounded()
+    /// The extra space between two lines the line-height setting asks for —
+    /// zero at 1.0, the font's own line height again at 2.0. Read here, inside
+    /// a view update, so the `@Observable` access registers (the `Card`
+    /// pattern).
+    private var lineSpacing: CGFloat {
+        Self.lineSpacing(nsFont, lineHeight: SettingsStore.shared.cardLineHeight)
+    }
+
+    /// The gap between two blocks, which is the *source's* blank line as the
+    /// editor draws it: the line's own height, plus the spacing above it and the
+    /// spacing below. AppKit adds one of those two itself at every line
+    /// boundary, so `blankLine` — what the preview hands `paragraphSpacing` —
+    /// carries only one and this carries both.
+    private var blockGap: CGFloat {
+        Self.blankLine(nsFont, lineHeight: SettingsStore.shared.cardLineHeight) + lineSpacing
     }
 
     var body: some View {
         let blocks = MarkdownParser.parse(markdown)
-        VStack(alignment: .leading, spacing: blankLine) {
+        VStack(alignment: .leading, spacing: blockGap) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
         }
+        .lineSpacing(lineSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .tint(Self.linkColour)
     }
@@ -74,7 +80,7 @@ struct MarkdownText: View {
         // would put a paragraph gap in the middle of one list.
         case .list(let items):
             let numbers = MarkdownParser.numbering(items)
-            VStack(alignment: .leading, spacing: Self.listGap(nsFont)) {
+            VStack(alignment: .leading, spacing: Self.listGap(nsFont) + lineSpacing) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
                         if let checked = item.checked {
@@ -101,7 +107,7 @@ struct MarkdownText: View {
         case .quote(let lines):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary.opacity(0.4)).frame(width: 3)
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: lineSpacing) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         // A `>` on its own is a blank line *inside* the quote, and
                         // a space is how it keeps the font's full line height —
@@ -115,7 +121,13 @@ struct MarkdownText: View {
             }
         case .code(let text):
             Text(text)
-                .font(.system(.callout, design: .monospaced))
+                // Monospaced, never the card face — but still the reading size,
+                // so a fenced block grows with the prose around it. `.callout`
+                // spelled as a size because the scale has to reach it, and the
+                // preview's own code font is the same expression.
+                .font(.system(size: NSFont.preferredFont(forTextStyle: .callout).pointSize
+                                * CardTextSize.scale(SettingsStore.shared.cardFontSize),
+                              design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.06)))
@@ -140,8 +152,53 @@ struct MarkdownText: View {
     /// blank line so a list still reads tighter than paragraphs do. Measured off
     /// the font like `blankLine`, and the editor opens its list paragraphs by
     /// this same value, so the two modes keep one rhythm.
+    ///
+    /// Deliberately *not* scaled by the line-height setting: it is the gap the
+    /// editor puts between two list paragraphs, and AppKit adds the line spacing
+    /// on top of it there. A caller stacking items itself adds `lineSpacing`.
     nonisolated static func listGap(_ font: NSFont) -> CGFloat {
-        ((font.ascender - font.descender + font.leading) / 2).rounded()
+        (naturalLine(font) / 2).rounded()
+    }
+
+    /// The height of one line of `font` as the type designer set it — ascender
+    /// to descender plus the face's own leading, which is what AppKit lays a
+    /// line fragment out at when nothing asks for more.
+    nonisolated static func naturalLine(_ font: NSFont) -> CGFloat {
+        font.ascender - font.descender + font.leading
+    }
+
+    /// The extra space the line-height setting asks for **between** two lines.
+    ///
+    /// It is a `lineSpacing`, not a `lineHeightMultiple`, and that is the whole
+    /// reason this is one function rather than two: AppKit's `lineSpacing` and
+    /// SwiftUI's `.lineSpacing(_:)` are the same quantity to the point
+    /// (measured), and both add it only between fragments — never above the
+    /// first line or below the last. `lineHeightMultiple` inflates every line
+    /// including the first, which SwiftUI has no counterpart for, so a card's
+    /// preview and its source could not have been held to one rhythm.
+    ///
+    /// Rounded, because a fragment's height is, and half-points accumulating
+    /// down a long note is exactly the drift the sizing proxies would report.
+    nonisolated static func lineSpacing(_ font: NSFont, lineHeight: Double) -> CGFloat {
+        (naturalLine(font) * (lineHeight - 1)).rounded()
+    }
+
+    /// **One blank source line**, as a gap between blocks.
+    ///
+    /// Two paragraphs are separated in Markdown by a blank line, which the editor
+    /// shows at its full height; the preview has to leave the same gap or the
+    /// card changes shape when it flips between the two, which is the one moment
+    /// both are compared. It was a flat 8pt, half a line, so every paragraph
+    /// break tightened on entering view mode. Measured off the font rather than
+    /// written down, so the two modes can't drift apart if the style changes.
+    ///
+    /// The blank line carries the line spacing with it — it is a line like any
+    /// other. What it does *not* carry is the second helping AppKit adds at the
+    /// far side of it, which is why `MarkdownText`'s own block gap adds one more
+    /// and the preview's `paragraphSpacing` doesn't: there, AppKit is already
+    /// putting a `lineSpacing` between the two paragraphs itself.
+    nonisolated static func blankLine(_ font: NSFont, lineHeight: Double) -> CGFloat {
+        naturalLine(font).rounded() + lineSpacing(font, lineHeight: lineHeight)
     }
 
     /// One level of nesting. It is the marker column — the dot plus its gap — so
@@ -340,18 +397,22 @@ struct MarkdownText: View {
     /// slanted at the heading's own size and weight, and that is what
     /// `inline(_:in:)` needs to do it.
     private func headingFont(_ level: Int) -> NSFont {
-        Self.headingFont(level, typeface: SettingsStore.shared.typeface)
+        let settings = SettingsStore.shared
+        return Self.headingFont(level, typeface: settings.typeface,
+                                scale: CardTextSize.scale(settings.cardFontSize))
     }
 
     /// The explicit-`typeface` spelling, shared with `MarkdownHighlight` so the
     /// editor's heading lines are the very fonts the preview renders them in —
-    /// one table, two consumers, no drift.
-    nonisolated static func headingFont(_ level: Int, typeface: Typeface) -> NSFont {
+    /// one table, two consumers, no drift. The `scale` rides along for the same
+    /// reason: a heading is body copy, so it grows with the body.
+    nonisolated static func headingFont(_ level: Int, typeface: Typeface,
+                                        scale: CGFloat = 1) -> NSFont {
         switch level {
-        case 1: Card.nsFont(.title2, weight: .semibold, typeface: typeface)
-        case 2: Card.nsFont(.title3, weight: .semibold, typeface: typeface)
-        case 3: Card.nsFont(.headline, weight: .semibold, typeface: typeface)
-        default: Card.nsFont(.subheadline, weight: .semibold, typeface: typeface)
+        case 1: Card.nsFont(.title2, weight: .semibold, typeface: typeface, scale: scale)
+        case 2: Card.nsFont(.title3, weight: .semibold, typeface: typeface, scale: scale)
+        case 3: Card.nsFont(.headline, weight: .semibold, typeface: typeface, scale: scale)
+        default: Card.nsFont(.subheadline, weight: .semibold, typeface: typeface, scale: scale)
         }
     }
 }
@@ -709,9 +770,20 @@ struct CollapsibleMarkdown: View {
 
     /// One line of the card face, unrounded: the half-line tolerance below rides
     /// on it, and rounding per line is exactly the drift being tolerated.
-    private var lineHeight: CGFloat {
-        let font = nsFont
-        return font.ascender - font.descender + font.leading
+    private var lineHeight: CGFloat { MarkdownText.naturalLine(nsFont) }
+
+    /// The gap the reading leading puts between two lines.
+    private var lineSpacing: CGFloat {
+        MarkdownText.lineSpacing(nsFont, lineHeight: SettingsStore.shared.cardLineHeight)
+    }
+
+    /// What `lines` rendered lines occupy: their own heights, plus the leading
+    /// **between** them — `n - 1` gaps, never `n`, because nothing is added
+    /// above the first line or below the last. Getting that off by one would
+    /// leave a sliver of the next line showing under the fade at every setting
+    /// but the default.
+    private func clampHeight(_ lines: Int) -> CGFloat {
+        CGFloat(lines) * lineHeight + CGFloat(max(lines - 1, 0)) * lineSpacing
     }
 
     /// Long enough to fold. The teaser earns its chevron when the full render is
@@ -729,7 +801,7 @@ struct CollapsibleMarkdown: View {
         if lines == 1 {
             return fullHeight > (teaserHeight > 0 ? teaserHeight : lineHeight) + 1
         }
-        return fullHeight > CGFloat(lines) * lineHeight + lineHeight / 2
+        return fullHeight > clampHeight(lines) + lineHeight / 2
     }
 
     /// Shown when there's something hidden — or when we're expanded and it's
@@ -808,7 +880,7 @@ struct CollapsibleMarkdown: View {
                 fullHeight = $0
             }
             .frame(
-                maxHeight: isClamped ? CGFloat(previewLines ?? 1) * lineHeight : nil,
+                maxHeight: isClamped ? clampHeight(previewLines ?? 1) : nil,
                 alignment: .topLeading
             )
             .clipped()

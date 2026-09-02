@@ -363,6 +363,44 @@ private struct AppearanceSettingsTab: View {
                 Text("The theme colours the column headers, the window behind the cards, the primary buttons and the note-type marks. Light and dark values are built in — Mode decides which you see.")
             }
 
+            // Between Theme and Typeface, which is the order the three
+            // questions are asked in: what colour, what size, what face. Both
+            // rows are steppers rather than sliders because both values are
+            // discrete and small — a slider would offer a precision neither has
+            // and hide the number, which is the thing being chosen.
+            Section {
+                LabeledContent("Text size") {
+                    ValueStepper(
+                        value: "\(settings.cardFontSize)",
+                        widest: "\(CardTextSize.range.upperBound)",
+                        canDecrease: settings.cardFontSize > CardTextSize.range.lowerBound,
+                        canIncrease: settings.cardFontSize < CardTextSize.range.upperBound,
+                        decreaseLabel: "Smaller text",
+                        increaseLabel: "Larger text"
+                    ) {
+                        settings.cardFontSize -= 1
+                    } onIncrease: {
+                        settings.cardFontSize += 1
+                    }
+                }
+                LabeledContent("Line height") {
+                    ValueStepper(
+                        value: CardLineHeight.label(settings.cardLineHeight),
+                        widest: CardLineHeight.label(CardLineHeight.range.upperBound),
+                        canDecrease: settings.cardLineHeight > CardLineHeight.range.lowerBound,
+                        canIncrease: settings.cardLineHeight < CardLineHeight.range.upperBound,
+                        decreaseLabel: "Tighter lines",
+                        increaseLabel: "Looser lines"
+                    ) {
+                        settings.cardLineHeight -= CardLineHeight.step
+                    } onIncrease: {
+                        settings.cardLineHeight += CardLineHeight.step
+                    }
+                }
+            } footer: {
+                Text("The size notes and tasks are read and written at, and how far apart their lines sit — a line height of 1.0 is the spacing the typeface itself sets. Both reach a card's title and body, reading and editing alike; the window around them keeps the system's size.")
+            }
+
             // Last in the pane, deliberately: its footer is three paragraphs and
             // ends in the two licence links, so anything under it reads as an
             // afterthought — which is exactly what happened to General's toggles.

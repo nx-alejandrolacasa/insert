@@ -110,6 +110,15 @@ enum MarkdownHighlight {
         var base: NSFont
         var typeface: Typeface
         var palette: Palette
+        /// The reading size, as a multiple of the style's own. `base` already
+        /// carries it, but a heading is resolved from its *own* style rather
+        /// than from `base`, so the scale has to travel separately to reach it.
+        var scale: CGFloat = 1
+        /// The gap between two lines the reading leading asks for. In the
+        /// config because a change to it has to re-run the pass — the editor's
+        /// paragraph style is rebuilt from it, and the bridge decides whether
+        /// anything changed by comparing configs.
+        var lineSpacing: CGFloat = 0
     }
 
     // MARK: The revealed line
@@ -145,8 +154,11 @@ enum MarkdownHighlight {
     /// on Grotesk, whose *regular* descriptor carries no `wght` axis and so
     /// still answers the symbolic trait (the trap only the semibold axis case
     /// has). Italic is `Card.italic`, real face or synthesised oblique.
-    static func font(for style: Style, base: NSFont, typeface: Typeface) -> NSFont {
-        var font = style.heading.map { MarkdownText.headingFont($0, typeface: typeface) } ?? base
+    static func font(for style: Style, base: NSFont, typeface: Typeface,
+                     scale: CGFloat = 1) -> NSFont {
+        var font = style.heading.map {
+            MarkdownText.headingFont($0, typeface: typeface, scale: scale)
+        } ?? base
         if style.mono {
             font = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
         }
@@ -196,7 +208,8 @@ enum MarkdownHighlight {
         for span in scanned.spans {
             guard span.range.upperBound <= full.length else { continue }
             var attrs: [NSAttributedString.Key: Any] = [:]
-            let resolved = font(for: span.style, base: config.base, typeface: config.typeface)
+            let resolved = font(for: span.style, base: config.base, typeface: config.typeface,
+                                scale: config.scale)
             if resolved != config.base { attrs[.font] = resolved }
             switch span.style.colour {
             case .marker:
@@ -263,15 +276,18 @@ enum MarkdownHighlight {
     /// Memoised because the task card's proxy measures in *view* mode too, so
     /// this runs per visible task row per render — `MarkdownParser.parse`'s
     /// reason, one cache line over.
-    static func segments(_ text: String, base: NSFont, typeface: Typeface) -> [Segment] {
-        let key = ProxyKey(text: text, font: base.fontName, size: base.pointSize, typeface: typeface)
+    static func segments(_ text: String, base: NSFont, typeface: Typeface,
+                         scale: CGFloat = 1) -> [Segment] {
+        let key = ProxyKey(text: text, font: base.fontName, size: base.pointSize,
+                           typeface: typeface, scale: scale)
         return proxies.value(for: key) {
             let scanned = scan(text)
             var styled = AttributedString(text)
             styled.font = Font(base)
             for span in scanned.spans where span.style.affectsLayout {
                 guard let range = Range(span.range, in: styled) else { continue }
-                styled[range].font = Font(font(for: span.style, base: base, typeface: typeface))
+                styled[range].font = Font(
+                    font(for: span.style, base: base, typeface: typeface, scale: scale))
             }
 
             let ns = text as NSString
@@ -323,6 +339,7 @@ enum MarkdownHighlight {
         let font: String
         let size: CGFloat
         let typeface: Typeface
+        let scale: CGFloat
     }
 
     private static let proxies = MemoCache<ProxyKey, [Segment]>(limit: 512)
@@ -671,9 +688,19 @@ struct MarkdownSizingProxy: View {
     let base: NSFont
     let typeface: Typeface
 
+    /// The reading size, as a multiple of the style's own — it only reaches the
+    /// headings, since `base` already carries it for everything else.
+    var scale: CGFloat = 1
+
+    /// The editor puts this between **every** pair of lines, so the proxy has to
+    /// as well — twice over: inside a segment, where `.lineSpacing` covers the
+    /// lines of one `Text`, and between segments, where the stack's own spacing
+    /// is the only thing that can (separate views get no line spacing).
+    var lineSpacing: CGFloat = 0
+
     var body: some View {
-        let segments = MarkdownHighlight.segments(text, base: base, typeface: typeface)
-        VStack(alignment: .leading, spacing: 0) {
+        let segments = MarkdownHighlight.segments(text, base: base, typeface: typeface, scale: scale)
+        VStack(alignment: .leading, spacing: lineSpacing) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 Text(segment.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -681,5 +708,6 @@ struct MarkdownSizingProxy: View {
                     .padding(.top, segment.gap)
             }
         }
+        .lineSpacing(lineSpacing)
     }
 }

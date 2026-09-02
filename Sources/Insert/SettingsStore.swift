@@ -126,6 +126,52 @@ final class SettingsStore {
         }
     }
 
+    /// The point size a card's **body** is read at, and so — through the ratio
+    /// every other text style keeps to it — the size of the whole card. See
+    /// `CardTextSize`, which owns the bounds and the scale `Card` applies.
+    /// Clamped on the way in, since a value off the range reaches `Card` and
+    /// every measurement derived from it.
+    ///
+    /// **The clamp is a computed property, and it cannot go back in a `didSet`.**
+    /// Correcting a value by assigning the property from inside its own `didSet`
+    /// is the ordinary Swift idiom — a stored property's `didSet` doesn't fire
+    /// for a write made within it — but `@Observable` rewrites every stored
+    /// property into a private `_name` plus a computed façade, and the `didSet`
+    /// is attached to the *private* one. Assigning `self.cardFontSize` from
+    /// there goes out through the façade's setter and back into `_name`, whose
+    /// `didSet` runs again: it recursed ~74,600 frames deep and hit the stack
+    /// guard the first time anyone pressed "+". So the correction happens on the
+    /// way *in* to the stored value instead, where there is no second setter to
+    /// re-enter. Anything else in this file that needs to sanitise a value wants
+    /// this shape too; the plain `didSet`s below only write to `UserDefaults`,
+    /// which is why they are safe as they are.
+    var cardFontSize: Int {
+        get { storedCardFontSize }
+        set { storedCardFontSize = CardTextSize.clamped(newValue) }
+    }
+
+    /// How far apart a body's lines sit, as a multiple of the font's own line
+    /// height — 1.0 is the leading the type designer set, which is what the
+    /// cards have always been drawn at. See `CardLineHeight`; snapped on the way
+    /// in for the reason above.
+    var cardLineHeight: Double {
+        get { storedCardLineHeight }
+        set { storedCardLineHeight = CardLineHeight.snapped(newValue) }
+    }
+
+    // The two backing values. `private`, but still `@Observable`'s to track —
+    // the macro takes every stored property — so a card reading `cardFontSize`
+    // registers on the stored one it forwards to, and a write publishes from
+    // there. Persistence rides these rather than the façades, so the value
+    // written to `UserDefaults` is always the corrected one.
+    private var storedCardFontSize: Int {
+        didSet { defaults.set(storedCardFontSize, forKey: Keys.cardFontSize) }
+    }
+
+    private var storedCardLineHeight: Double {
+        didSet { defaults.set(storedCardLineHeight, forKey: Keys.cardLineHeight) }
+    }
+
     /// How much of a note shows before it's folded — a preview of so many
     /// rendered lines with a chevron to reveal the rest, or everything.
     /// Everything by default, so an install that never opens Settings keeps
@@ -167,6 +213,8 @@ final class SettingsStore {
         static let appReduceMotion = "appReduceMotion"
         static let appReduceTransparency = "appReduceTransparency"
         static let appIncreaseContrast = "appIncreaseContrast"
+        static let cardFontSize = "cardFontSize"
+        static let cardLineHeight = "cardLineHeight"
         static let notePreviewLines = "notePreviewLines"
         static let taskPreviewLines = "taskPreviewLines"
         static let noteCardDates = "noteCardDates"
@@ -256,6 +304,19 @@ final class SettingsStore {
         // `didSet` doesn't fire during init, so mirror the loaded value by
         // hand; the first render then resolves fresh, no cache to invalidate.
         AccessibilityOverride.increaseContrast = increaseContrast
+        // The size and the leading the cards have always been drawn at, which is
+        // what an install that never opens this pane keeps: the system's own
+        // `.body` size, and the font's own line height. Both are clamped and
+        // snapped here rather than trusted — a hand-edited default would
+        // otherwise reach `Card` — and both are written to the *stored* value,
+        // since assigning a computed property is a use of `self` the initialiser
+        // can't make until every stored property has one. `didSet` doesn't fire
+        // during init, so nothing is written back; the correction is idempotent
+        // and runs each launch until the user picks something.
+        storedCardFontSize = CardTextSize.clamped(
+            defaults.object(forKey: Keys.cardFontSize) as? Int ?? CardTextSize.system)
+        storedCardLineHeight = CardLineHeight.snapped(
+            defaults.object(forKey: Keys.cardLineHeight) as? Double ?? CardLineHeight.standard)
         // Seeded from the "Collapse long notes" toggle this replaced, which was
         // ten lines or nothing — an install that had it on keeps its fold.
         let legacyCollapse = defaults.object(forKey: Keys.collapseLongNotes) as? Bool ?? false

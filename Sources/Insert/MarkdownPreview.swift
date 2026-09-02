@@ -68,12 +68,15 @@ struct MarkdownPreview: NSViewRepresentable {
         view.onTap = onTap
         view.onToggleCheckbox = onToggleCheckbox
         // Read inside the view update, so the `@Observable` accesses register
-        // and a typeface or theme change re-renders (the `Card` pattern).
+        // and a typeface, theme, size or leading change re-renders (the `Card`
+        // pattern). All four are in the key, so the render cache misses too.
         let settings = SettingsStore.shared
         let config = MarkdownRichText.Config(
             textStyle: textStyle,
             typeface: settings.typeface,
-            theme: settings.theme
+            theme: settings.theme,
+            scale: CardTextSize.scale(settings.cardFontSize),
+            lineHeight: settings.cardLineHeight
         )
         let key = MarkdownPreviewView.Key(markdown: markdown, config: config)
         guard view.key != key else { return }
@@ -413,6 +416,14 @@ enum MarkdownRichText {
         var textStyle: NSFont.TextStyle
         var typeface: Typeface
         var theme: AppTheme
+        /// The reading size, as a multiple of the style's own — `CardTextSize`.
+        var scale: CGFloat = 1
+        /// The reading leading, as a multiple of the font's own line height.
+        /// Both ride in the config rather than being read here because this
+        /// half is nonisolated and the config is the render and size cache key:
+        /// changing either setting has to miss the cache, which it does by
+        /// being part of what the key hashes.
+        var lineHeight: Double = 1
     }
 
     struct Decoration: Equatable {
@@ -438,14 +449,15 @@ enum MarkdownRichText {
     // MARK: Rendering
 
     static func render(_ markdown: String, config: Config) -> Rendered {
-        let base = Card.nsFont(config.textStyle, typeface: config.typeface)
+        let base = Card.nsFont(config.textStyle, typeface: config.typeface, scale: config.scale)
         let palette = Palette(
             text: NSColor(config.theme.bodyText),
             secondary: .secondaryLabelColor,
             link: NSColor(config.theme.link),
             primary: NSColor(config.theme.primary)
         )
-        var builder = Builder(base: base, typeface: config.typeface, palette: palette)
+        var builder = Builder(base: base, typeface: config.typeface, palette: palette,
+                              scale: config.scale, lineHeight: config.lineHeight)
         let blocks = MarkdownParser.parse(markdown)
         for (index, block) in blocks.enumerated() {
             builder.append(block, last: index == blocks.count - 1)
@@ -465,25 +477,41 @@ enum MarkdownRichText {
         let base: NSFont
         let typeface: Typeface
         let palette: Palette
+        let scale: CGFloat
+        let lineHeight: Double
         var out = NSMutableAttributedString()
         var decorations: [Decoration] = []
 
-        init(base: NSFont, typeface: Typeface, palette: Palette) {
+        init(base: NSFont, typeface: Typeface, palette: Palette,
+             scale: CGFloat, lineHeight: Double) {
             self.base = base
             self.typeface = typeface
             self.palette = palette
+            self.scale = scale
+            self.lineHeight = lineHeight
         }
 
         /// One blank source line, `MarkdownText.blankLine`'s rule: the gap
         /// between blocks is what the editor shows for the empty line between
-        /// them, so the card keeps its shape across the flip.
+        /// them, so the card keeps its shape across the flip. It carries the
+        /// line spacing but not twice — AppKit puts one between the two
+        /// paragraphs itself, which is the half `MarkdownText`'s own stack has
+        /// to add by hand because separate views get none.
         private var blankLine: CGFloat {
-            (base.ascender - base.descender + base.leading).rounded()
+            MarkdownText.blankLine(base, lineHeight: lineHeight)
+        }
+
+        /// The setting's own gap between lines, applied to **every** paragraph
+        /// style here — the editor puts it at every line boundary, so anything
+        /// that skipped it would fall out of step across the flip.
+        private var lineSpacing: CGFloat {
+            MarkdownText.lineSpacing(base, lineHeight: lineHeight)
         }
 
         private func paragraph(_ configure: (NSMutableParagraphStyle) -> Void = { _ in }) -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byWordWrapping
+            style.lineSpacing = lineSpacing
             configure(style)
             return style
         }
@@ -496,7 +524,7 @@ enum MarkdownRichText {
             let after = last ? 0 : blankLine
             switch block {
             case .heading(let level, let text):
-                let font = MarkdownText.headingFont(level, typeface: typeface)
+                let font = MarkdownText.headingFont(level, typeface: typeface, scale: scale)
                 let style = paragraph {
                     $0.paragraphSpacing = after
                     $0.paragraphSpacingBefore = level <= 2 ? 2 : 0
@@ -534,7 +562,8 @@ enum MarkdownRichText {
             case .code(let code):
                 let start = out.length
                 let font = NSFont.monospacedSystemFont(
-                    ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular
+                    ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize * scale,
+                    weight: .regular
                 )
                 let lines = code.components(separatedBy: "\n")
                 for (index, line) in lines.enumerated() {

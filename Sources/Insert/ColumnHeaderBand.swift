@@ -49,7 +49,7 @@ struct ColumnHeaderBand<Filters: View>: View {
                     // is the thing to convert it into. `.title3` would be 15pt
                     // here, the note *title's* size, which would leave a column
                     // heading no larger than the cards under it.
-                    .font(Card.font(.title2, weight: .bold))
+                    .font(Card.chrome(.title2, weight: .bold))
                     // Tight tracking: a 17pt bold heading opens up a little in
                     // both the bundled and the system faces.
                     .tracking(-0.2)

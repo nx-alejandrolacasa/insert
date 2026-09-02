@@ -415,18 +415,36 @@ enum Card {
         .selectorIdentifier: 14, // stylistic set 7 "on" — "One storey a"
     ]
 
-    /// The face the cards are currently set in.
+    /// The face the cards are currently set in, **at the size they are read
+    /// at** — `Typeface` and `CardTextSize`, the two settings that between them
+    /// say what a card's writing looks like.
     ///
-    /// Reading the setting *here* rather than passing it down is what keeps the
-    /// call sites honest: there are a dozen of them across the two panels, they
-    /// all sit in a view body, and an `@Observable` read during a body evaluation
-    /// registers as a dependency — so changing the option in Settings re-renders
-    /// every card with no notification, no re-apply step and nothing to remember
-    /// to thread through. `@MainActor` for the same reason: this is only ever
-    /// called during a view update.
+    /// Reading them *here* rather than passing them down is what keeps the call
+    /// sites honest: there are a dozen of them across the two panels, they all
+    /// sit in a view body, and an `@Observable` read during a body evaluation
+    /// registers as a dependency — so changing either option in Settings
+    /// re-renders every card with no notification, no re-apply step and nothing
+    /// to remember to thread through. `@MainActor` for the same reason: this is
+    /// only ever called during a view update.
+    ///
+    /// The size is deliberately *not* what `chrome(_:weight:)` hands out — see
+    /// there for the line between a card and the window around it.
     @MainActor
     static func nsFont(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> NSFont {
-        nsFont(style, weight: weight, typeface: SettingsStore.shared.typeface)
+        let settings = SettingsStore.shared
+        return nsFont(style, weight: weight, typeface: settings.typeface,
+                      scale: CardTextSize.scale(settings.cardFontSize))
+    }
+
+    /// The card's *face* at the **system's own size** — the three pieces of
+    /// chrome that borrow the reading typeface but must not follow the reading
+    /// size: the column headings, the sidebar's "Projects" and the project names
+    /// under it. All three are authored text, which is why they take the face;
+    /// all three sit in rows whose height belongs to the window, which is why a
+    /// reader asking for larger notes doesn't get a larger sidebar.
+    @MainActor
+    static func chrome(_ style: NSFont.TextStyle, weight: NSFont.Weight? = nil) -> Font {
+        font(style, weight: weight, typeface: SettingsStore.shared.typeface)
     }
 
     /// Text styles are `NSFont.TextStyle` throughout, not SwiftUI's, because the
@@ -436,14 +454,18 @@ enum Card {
     /// a descriptor-built font is a different font, and would drop the alternate.
     ///
     /// The explicit `typeface:` is for `TypefacePicker`, whose specimens each have
-    /// to draw in their own face rather than in the selected one.
+    /// to draw in their own face rather than in the selected one. The explicit
+    /// `scale:` is for the render and highlight passes, which are handed one in a
+    /// `Config` built on the main actor because they run nonisolated — and, at
+    /// its default of 1, for everything that must stay at the system's size.
     static func nsFont(
         _ style: NSFont.TextStyle,
         weight: NSFont.Weight? = nil,
-        typeface: Typeface
+        typeface: Typeface,
+        scale: CGFloat = 1
     ) -> NSFont {
         let base = NSFont.preferredFont(forTextStyle: style)
-        return nsFont(size: base.pointSize, weight: weight, typeface: typeface, base: base)
+        return nsFont(size: base.pointSize * scale, weight: weight, typeface: typeface, base: base)
     }
 
     /// The same face at an **explicit point size**, for the one caller that has a
@@ -569,9 +591,10 @@ enum Card {
     static func font(
         _ style: NSFont.TextStyle,
         weight: NSFont.Weight? = nil,
-        typeface: Typeface
+        typeface: Typeface,
+        scale: CGFloat = 1
     ) -> Font {
-        Font(nsFont(style, weight: weight, typeface: typeface))
+        Font(nsFont(style, weight: weight, typeface: typeface, scale: scale))
     }
 }
 

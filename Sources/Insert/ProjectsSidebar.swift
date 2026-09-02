@@ -229,7 +229,7 @@ struct ProjectsSidebar: View {
             // the sidebar, and it is here for the alignment, not for the theme:
             // the sidebar is otherwise untouched.
             Text("Projects")
-                .font(Card.font(.title2, weight: .bold))
+                .font(Card.chrome(.title2, weight: .bold))
                 .padding(.leading, Metrics.sidebarTextInset)
                 .padding(.top, Metrics.bandTopPadding)
                 // The same gap the notes/tasks bands leave between their heading
@@ -535,7 +535,7 @@ struct ProjectsSidebar: View {
                 // on the system font — that one is a count Insert derived, not
                 // something anybody wrote.
                 Text(title)
-                    .font(Card.font(.body))
+                    .font(Card.chrome(.body))
                     .lineLimit(1)
                 Text(subtitle)
                     .font(.caption)

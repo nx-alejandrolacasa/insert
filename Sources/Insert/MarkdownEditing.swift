@@ -163,10 +163,11 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         // read as the shortcut being broken.
         view.isAutomaticTextReplacementEnabled = true
 
-        applyTabStops(to: view, font: font)
+        let config = highlightConfig
+        applyTabStops(to: view, font: font, lineSpacing: config.lineSpacing)
 
         view.string = text
-        view.highlightConfig = highlightConfig
+        view.highlightConfig = config
         view.rehighlight()
         return view
     }
@@ -194,6 +195,10 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
                     SettingsStore.shared.theme.metaText.opacity(Self.faintMarkerOpacity)
                 ),
                 link: NSColor(SettingsStore.shared.theme.link)
+            ),
+            scale: CardTextSize.scale(SettingsStore.shared.cardFontSize),
+            lineSpacing: MarkdownText.lineSpacing(
+                font, lineHeight: SettingsStore.shared.cardLineHeight
             )
         )
     }
@@ -218,12 +223,19 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
     /// indent the editor shows and the nesting the card renders agree. Measured
     /// in the editor's own font, so a serif or monospaced card steps by its own
     /// four spaces rather than by a number written down here.
-    private func applyTabStops(to view: MarkdownTextView, font: NSFont) {
+    ///
+    /// It is also where the reading leading lands, since this is the editor's
+    /// one base paragraph style — `MarkdownHighlight.apply` derives its list
+    /// styles by copying it, so they inherit the spacing rather than restating
+    /// it. Hence the name is now half a lie and the caller re-runs this whenever
+    /// *either* input moves.
+    private func applyTabStops(to view: MarkdownTextView, font: NSFont, lineSpacing: CGFloat) {
         let style = NSMutableParagraphStyle()
         style.tabStops = []
         style.defaultTabInterval = 4 * NSAttributedString(
             string: " ", attributes: [.font: font]
         ).size().width
+        style.lineSpacing = lineSpacing
         view.defaultParagraphStyle = style
         view.typingAttributes[.paragraphStyle] = style
     }
@@ -249,10 +261,13 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         // passes come from `textDidChange` instead.
         let config = highlightConfig
         if view.highlightConfig != config {
-            if view.highlightConfig?.base != font {
+            if view.highlightConfig?.base != font
+                || view.highlightConfig?.lineSpacing != config.lineSpacing {
                 view.font = font
-                // The step is measured in the font, so it moves with it.
-                applyTabStops(to: view, font: font)
+                // The step is measured in the font, so it moves with it — and
+                // the same style carries the line spacing, so a change to the
+                // leading has to come back through here too.
+                applyTabStops(to: view, font: font, lineSpacing: config.lineSpacing)
             }
             view.highlightConfig = config
             view.rehighlight()

@@ -664,7 +664,11 @@ private struct NoteCardView: View {
             MarkdownSizingProxy(
                 text: draft.body.isEmpty ? " " : draft.body,
                 base: Card.nsFont(.body),
-                typeface: settings.typeface
+                typeface: settings.typeface,
+                scale: CardTextSize.scale(settings.cardFontSize),
+                lineSpacing: MarkdownText.lineSpacing(
+                    Card.nsFont(.body), lineHeight: settings.cardLineHeight
+                )
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
