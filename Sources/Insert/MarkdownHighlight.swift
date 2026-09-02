@@ -17,13 +17,14 @@ import SwiftUI
 /// card whose height is animated that is louder than in a full-window editor.
 /// This cut is what tells us whether the noise was the markers or their width.
 ///
-/// The split mirrors `MarkdownFormatting`: `spans(of:)` is a pure function over
+/// The split mirrors `MarkdownFormatting`: `scan(_:)` is a pure function over
 /// the source (pinned by `MarkdownHighlightTests`), and the two appliers turn
 /// its answer into attributes — `apply(to:…)` onto the editor's `NSTextStorage`,
-/// `attributed(_:…)` into the `AttributedString` the cards' hidden sizing
-/// proxies lay out in. Both go through the same `font(for:…)`, which is what
-/// keeps the editor's height and the proxy's measurement from drifting once a
-/// heading line is taller than a body line.
+/// `segments(_:…)` into the `Text`s the cards' hidden sizing proxies
+/// (`MarkdownSizingProxy`) lay out in. Both go through the same `font(for:…)`,
+/// which is what keeps the editor's height and the proxy's measurement from
+/// drifting once a heading line is taller than a body line — and both read the
+/// same list lines, which carry a gap and an inset no glyph does.
 ///
 /// The scanner is deliberately not a CommonMark implementation — it matches
 /// `MarkdownParser`'s block rules and approximates the inline ones, line by
@@ -68,6 +69,25 @@ enum MarkdownHighlight {
     struct Span: Equatable {
         var range: NSRange
         var style: Style
+    }
+
+    /// A list item's line: the one shape that changes the *paragraph* rather
+    /// than the glyphs on it. Every item is inset from the left, and one that
+    /// sits directly under another opens half a line above itself, so a dense
+    /// list reads as items rather than as a slab — `MarkdownText` draws the
+    /// same two things in the preview. A blank line, or any line that isn't an
+    /// item, ends the run, so the first item of the next list takes no gap.
+    struct ListLine: Equatable {
+        /// The line, without its newline.
+        var range: NSRange
+        /// Directly under another item — the lines that take the gap.
+        var followsItem: Bool
+    }
+
+    /// Everything one pass over the source finds.
+    struct Scan: Equatable {
+        var spans: [Span]
+        var listLines: [ListLine]
     }
 
     /// The resolved colours the editor applies. `NSColor`s rather than theme
@@ -157,13 +177,23 @@ enum MarkdownHighlight {
     ) {
         let text = storage.string
         let full = NSRange(location: 0, length: storage.length)
+        let scanned = scan(text)
         storage.beginEditing()
         storage.setAttributes([
             .font: config.base,
             .foregroundColor: config.palette.text,
             .paragraphStyle: paragraphStyle,
         ], range: full)
-        for span in spans(of: text) {
+        let item = listParagraphStyle(from: paragraphStyle, base: config.base, gap: false)
+        let spacedItem = listParagraphStyle(from: paragraphStyle, base: config.base, gap: true)
+        for line in scanned.listLines where line.range.upperBound <= full.length {
+            storage.addAttribute(
+                .paragraphStyle,
+                value: line.followsItem ? spacedItem : item,
+                range: (text as NSString).paragraphRange(for: line.range)
+            )
+        }
+        for span in scanned.spans {
             guard span.range.upperBound <= full.length else { continue }
             var attrs: [NSAttributedString.Key: Any] = [:]
             let resolved = font(for: span.style, base: config.base, typeface: config.typeface)
@@ -187,28 +217,103 @@ enum MarkdownHighlight {
         storage.endEditing()
     }
 
+    /// The editor's paragraph style for a list item, derived from the base one
+    /// so the tab step comes along. The inset and the gap are `MarkdownText`'s,
+    /// so the preview and the source step and breathe by the same amounts.
+    private static func listParagraphStyle(
+        from base: NSParagraphStyle, base font: NSFont, gap: Bool
+    ) -> NSParagraphStyle {
+        let style = base.mutableCopy() as! NSMutableParagraphStyle
+        style.firstLineHeadIndent = MarkdownText.listInset
+        style.headIndent = MarkdownText.listInset
+        if gap { style.paragraphSpacingBefore = MarkdownText.listGap(font) }
+        return style
+    }
+
     // MARK: Applying — the sizing proxies
 
-    /// The source with only its **layout-affecting** styles baked in, for the
-    /// hidden `Text` proxies that drive an editor's height. The proxies used to
-    /// lay the raw source out in the flat card face, which was right for as
-    /// long as the editor drew everything at one size; a heading line is taller
-    /// now, so the proxy has to wear the same fonts or the editor is measured
-    /// short. Colours are left out — hidden text has no colour, and skipping
-    /// them keeps the cache key to text + face.
+    /// One `Text` of a sizing proxy: a run of source with only its
+    /// **layout-affecting** styles baked in, plus the paragraph geometry a
+    /// `Text` can't carry as an attribute. SwiftUI ignores `NSParagraphStyle`
+    /// in an `AttributedString` (measured: indent and spacing both no-ops), so
+    /// a list line's inset and gap become real `padding` on its own `Text`
+    /// instead — which is exact, where emulating the gap with a smaller blank
+    /// line was off by a point per item in a way no formula over the font's
+    /// metrics predicted. A stack of per-line `Text`s measures the same as one
+    /// `Text` of the same lines in every card face (measured), so splitting
+    /// costs nothing.
+    struct Segment: Equatable {
+        var text: AttributedString
+        var inset: CGFloat
+        var gap: CGFloat
+    }
+
+    /// The source cut into `Segment`s: every list line on its own, every run
+    /// of other lines together. The proxies used to lay the raw source out in
+    /// the flat card face, which was right for as long as the editor drew
+    /// everything at one size; a heading line is taller now, so the proxy has
+    /// to wear the same fonts or the editor is measured short. Colours are
+    /// left out — hidden text has no colour, and skipping them keeps the cache
+    /// key to text + face.
+    ///
+    /// A run made only of empty lines is spaces instead, one per line: a
+    /// `Text` of nothing has no height, where the editor shows a blank line at
+    /// full height for it.
     ///
     /// Memoised because the task card's proxy measures in *view* mode too, so
     /// this runs per visible task row per render — `MarkdownParser.parse`'s
     /// reason, one cache line over.
-    static func attributed(_ text: String, base: NSFont, typeface: Typeface) -> AttributedString {
+    static func segments(_ text: String, base: NSFont, typeface: Typeface) -> [Segment] {
         let key = ProxyKey(text: text, font: base.fontName, size: base.pointSize, typeface: typeface)
         return proxies.value(for: key) {
-            var out = AttributedString(text)
-            out.font = Font(base)
-            for span in spans(of: text) where span.style.affectsLayout {
-                guard let range = Range(span.range, in: out) else { continue }
-                out[range].font = Font(font(for: span.style, base: base, typeface: typeface))
+            let scanned = scan(text)
+            var styled = AttributedString(text)
+            styled.font = Font(base)
+            for span in scanned.spans where span.style.affectsLayout {
+                guard let range = Range(span.range, in: styled) else { continue }
+                styled[range].font = Font(font(for: span.style, base: base, typeface: typeface))
             }
+
+            let ns = text as NSString
+            let gap = MarkdownText.listGap(base)
+            let items = Dictionary(uniqueKeysWithValues: scanned.listLines.map { ($0.range.location, $0) })
+            func plain(_ range: NSRange) -> Segment {
+                let slice = ns.substring(with: range)
+                var text: AttributedString
+                if slice.allSatisfy({ $0 == "\n" }) {
+                    text = AttributedString(
+                        Array(repeating: " ", count: slice.count + 1).joined(separator: "\n")
+                    )
+                    text.font = Font(base)
+                } else {
+                    text = AttributedString(styled[Range(range, in: styled)!])
+                }
+                return Segment(text: text, inset: 0, gap: 0)
+            }
+
+            // Lines as the editor shows them: a final newline opens one more.
+            var out: [Segment] = []
+            var run: NSRange?
+            var lineStart = 0
+            while lineStart <= ns.length {
+                var lineEnd = lineStart
+                while lineEnd < ns.length, ns.character(at: lineEnd) != 0x0A { lineEnd += 1 }
+                if let item = items[lineStart], let range = Range(item.range, in: styled) {
+                    if let open = run { out.append(plain(open)); run = nil }
+                    out.append(Segment(
+                        text: AttributedString(styled[range]),
+                        inset: MarkdownText.listInset,
+                        gap: item.followsItem ? gap : 0
+                    ))
+                } else if let open = run {
+                    run = NSRange(location: open.location, length: lineEnd - open.location)
+                } else {
+                    run = NSRange(location: lineStart, length: lineEnd - lineStart)
+                }
+                if lineEnd >= ns.length { break }
+                lineStart = lineEnd + 1
+            }
+            if let open = run { out.append(plain(open)) }
             return out
         }
     }
@@ -220,7 +325,7 @@ enum MarkdownHighlight {
         let typeface: Typeface
     }
 
-    private static let proxies = MemoCache<ProxyKey, AttributedString>(limit: 512)
+    private static let proxies = MemoCache<ProxyKey, [Segment]>(limit: 512)
 
     // MARK: The scanner
 
@@ -228,38 +333,53 @@ enum MarkdownHighlight {
     /// heading emits its whole-line font span before the marker and emphasis
     /// spans inside it, so the later, narrower spans win where they overlap.
     static func spans(of text: String) -> [Span] {
+        scan(text).spans
+    }
+
+    /// One pass over the source: the styled runs, and the list lines whose
+    /// paragraphs take a shape of their own.
+    static func scan(_ text: String) -> Scan {
         let u = Array(text.utf16)
-        var spans: [Span] = []
+        var scanned = Scan(spans: [], listLines: [])
         var inFence = false
+        var previousWasItem = false
 
         var lineStart = 0
         while lineStart <= u.count {
             var lineEnd = lineStart
             while lineEnd < u.count, u[lineEnd] != nl { lineEnd += 1 }
-            scanLine(u, lineStart..<lineEnd, inFence: &inFence, into: &spans)
+            let isItem = scanLine(u, lineStart..<lineEnd, inFence: &inFence, into: &scanned.spans)
+            if isItem {
+                scanned.listLines.append(ListLine(
+                    range: NSRange(location: lineStart, length: lineEnd - lineStart),
+                    followsItem: previousWasItem
+                ))
+            }
+            previousWasItem = isItem
             if lineEnd >= u.count { break }
             lineStart = lineEnd + 1
         }
-        return spans
+        return scanned
     }
 
+    /// Scans one line into `spans`; `true` when the line is a list item.
     private static func scanLine(
         _ u: [UInt16], _ line: Range<Int>, inFence: inout Bool, into spans: inout [Span]
-    ) {
+    ) -> Bool {
         // Leading whitespace, the way `MarkdownParser` trims before classifying.
         var s = line.lowerBound
         while s < line.upperBound, u[s] == space || u[s] == tab { s += 1 }
-        guard s < line.upperBound else { return }
+        guard s < line.upperBound else { return false }
 
         // A fence line toggles the block; both it and every line inside are mono.
         if matches(u, at: s, "```"), s + 3 <= line.upperBound {
             add(&spans, s..<line.upperBound, Style(mono: true, colour: .marker))
             inFence.toggle()
-            return
+            return false
         }
         if inFence {
             add(&spans, line, Style(mono: true))
-            return
+            return false
         }
 
         // Heading: the whole line at the level's size, the hashes dimmed.
@@ -270,13 +390,13 @@ enum MarkdownHighlight {
             add(&spans, s..<line.upperBound, Style(heading: level))
             add(&spans, s..<hashes, Style(heading: level, colour: .marker))
             scanInline(u, (hashes + 1)..<line.upperBound, context: Style(heading: level), into: &spans)
-            return
+            return false
         }
 
         // Rule — exactly the three spellings the parser reads.
         if isRule(u, s..<line.upperBound) {
             add(&spans, s..<line.upperBound, Style(colour: .marker))
-            return
+            return false
         }
 
         // Block quote: the run of `>`s dims, the quoted text stays the writing.
@@ -285,7 +405,7 @@ enum MarkdownHighlight {
             while q < line.upperBound, u[q] == gt { q += 1 }
             add(&spans, s..<q, Style(colour: .marker))
             scanInline(u, q..<line.upperBound, context: Style(), into: &spans)
-            return
+            return false
         }
 
         // List item: the marker dims; a checked box strikes its text through,
@@ -297,10 +417,11 @@ enum MarkdownHighlight {
                     Style(strikethrough: true, colour: .marker))
             }
             scanInline(u, marker.contentStart..<line.upperBound, context: Style(), into: &spans)
-            return
+            return true
         }
 
         scanInline(u, s..<line.upperBound, context: Style(), into: &spans)
+        return false
     }
 
     /// The inline shapes, within one line: code spans, `*`/`_` emphasis,
@@ -539,4 +660,26 @@ enum MarkdownHighlight {
     private static let rparen: UInt16 = 0x29
     private static let zero: UInt16 = 0x30
     private static let nine: UInt16 = 0x39
+}
+
+/// The hidden view a card measures its editor's height from: the source laid
+/// out in the editor's fonts and, for list lines, the editor's own inset and
+/// gap — see `MarkdownHighlight.segments`. Insets and paddings of the editor's
+/// frame stay the call site's, as they were.
+struct MarkdownSizingProxy: View {
+    let text: String
+    let base: NSFont
+    let typeface: Typeface
+
+    var body: some View {
+        let segments = MarkdownHighlight.segments(text, base: base, typeface: typeface)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                Text(segment.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, segment.inset)
+                    .padding(.top, segment.gap)
+            }
+        }
+    }
 }

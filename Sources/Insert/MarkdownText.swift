@@ -65,16 +65,16 @@ struct MarkdownText: View {
         case .paragraph(let text):
             Self.inline(text, in: nsFont)
                 .font(font)
-        // Items sit on consecutive lines in the source with nothing between them,
-        // so they get nothing here either — the 4pt this used to add was the list
-        // loosening on the way *into* view mode while every paragraph tightened.
+        // Half a line between items and an inset for the whole list — the editor
+        // gives its list paragraphs the same two things, so the flip between the
+        // modes moves nothing (see `listGap`).
         //
         // Bullets and numbers share one block, and one `VStack`, because a nested
         // list may change marker (`1.` with `*` items under it) and two stacks
         // would put a paragraph gap in the middle of one list.
         case .list(let items):
             let numbers = MarkdownParser.numbering(items)
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Self.listGap(nsFont)) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
                         if let checked = item.checked {
@@ -92,6 +92,7 @@ struct MarkdownText: View {
                     .padding(.leading, CGFloat(item.level) * Self.listIndent)
                 }
             }
+            .padding(.leading, Self.listInset)
         // A quote keeps its line breaks. Every `>` line used to be joined into one
         // paragraph, which read as a single run-on sentence for the shape quotes
         // are actually written in — the quotation on one line and its attribution,
@@ -124,7 +125,24 @@ struct MarkdownText: View {
     }
 
     /// The gap between a list marker and its item.
-    private static let markerGap: CGFloat = 8
+    private static let markerGap: CGFloat = listInset
+
+    /// A list steps in from the body's left edge by the marker gap, first level
+    /// included, so a dense list reads as a block set off from the prose rather
+    /// than as more of it. The editor indents its list paragraphs by the same
+    /// amount (`MarkdownHighlight.apply`). `nonisolated`, with `listGap`, because
+    /// the highlighter's pure half reads them off the main actor.
+    nonisolated static let listInset: CGFloat = 8
+
+    /// Half a line between items. They sit on consecutive source lines with
+    /// nothing between them and for a while got nothing here either, and a
+    /// tightly packed list of long items read as a slab. Half rather than a
+    /// blank line so a list still reads tighter than paragraphs do. Measured off
+    /// the font like `blankLine`, and the editor opens its list paragraphs by
+    /// this same value, so the two modes keep one rhythm.
+    nonisolated static func listGap(_ font: NSFont) -> CGFloat {
+        ((font.ascender - font.descender + font.leading) / 2).rounded()
+    }
 
     /// One level of nesting. It is the marker column — the dot plus its gap — so
     /// a child's bullet lands under the first character of its parent's text,
@@ -666,6 +684,11 @@ struct CollapsibleMarkdown: View {
     /// Forwarded to the full render, so a visible checkbox takes its click in
     /// view mode. Not to the teaser (one line, marker already dropped) nor the
     /// hidden measuring proxy, which hit-tests nothing.
+    /// A plain click on the full render — the card's "open for editing". The
+    /// render is a text view, which takes the mouse for selecting, so the card's
+    /// own tap gesture never sees a click that lands on the text; the view
+    /// reports it here instead. The teaser is SwiftUI and needs nothing.
+    var onTap: (() -> Void)? = nil
     var onToggleCheckbox: ((Int) -> Void)? = nil
 
     /// The body laid out unbounded — what expanding would show.
@@ -763,13 +786,15 @@ struct CollapsibleMarkdown: View {
         }
     }
 
-    /// The full render, clamped to the preview height while collapsed. The 5pt
-    /// is the editor's text-container inset, which every body copy repeats so
-    /// the first character doesn't shift sideways as a card opens. `fixedSize`
-    /// because a clamp must *clip* the blocks, not propose them less height —
-    /// squeezed, they truncate themselves into ellipses.
+    /// The full render — `MarkdownPreview`, a read-only text view, so the words
+    /// can be selected across the whole body and copied with their formatting —
+    /// clamped to the preview height while collapsed. The 5pt is the editor's
+    /// text-container inset, which every body copy repeats so the first
+    /// character doesn't shift sideways as a card opens. `fixedSize` because a
+    /// clamp must *clip* the text, not propose it less height.
     private var clamped: some View {
-        MarkdownText(markdown: markdown, textStyle: textStyle, onToggleCheckbox: onToggleCheckbox)
+        MarkdownPreview(markdown: markdown, textStyle: textStyle,
+                        onTap: onTap, onToggleCheckbox: onToggleCheckbox)
             .padding(.horizontal, 5)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {

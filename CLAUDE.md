@@ -1212,10 +1212,21 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   at. And its **block spacing is one blank line**, measured off that same font
   (`blankLine`) instead of written down: two paragraphs are separated in the
   source by a blank line at full line height, so a flat 8pt made every paragraph
-  break tighten on entering view mode. List items get **0** for the same reason
-  read the other way — they sit on consecutive source lines with nothing between
-  them, so the 4pt they used to add had lists loosening while paragraphs
-  tightened.
+  break tighten on entering view mode. List items get **half a line** between them and an
+  8pt inset from the left, first level included (`MarkdownText.listGap` /
+  `listInset`), because a tightly packed list of long items read as a slab; they
+  had 0 before, on the grounds that items sit on consecutive source lines. The
+  editor opens the same half line and inset on its list *paragraphs*
+  (`paragraphSpacingBefore` / `headIndent`, set in `MarkdownHighlight.apply`) so
+  the two modes still match — an attribute, not a character, so the source stays
+  the file's byte for byte. The hidden sizing proxies had to follow and
+  **couldn't through an `AttributedString`**: SwiftUI ignores `NSParagraphStyle`
+  in one (measured — indent and spacing alike are no-ops), so
+  `MarkdownSizingProxy` stacks one `Text` per list line and one per run of other
+  lines, with the inset and gap as real `padding`. A stack of per-line `Text`s
+  measures identically to one `Text` of the same lines in all five faces
+  (measured), where emulating the gap with a half-size blank line was off by up
+  to a point per item in a way no formula over the font's metrics predicted.
   **Lists nest, and a level is relative rather than a unit of spaces.** A run of
   list lines is **one** `.list` block whatever its markers do inside it — `-`,
   `*`, `+`, `1.` and `1)` all parse the same and a bullet sub-list may sit under a
@@ -1544,10 +1555,10 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   over the source (UTF-16 offsets, anchored only on ASCII so a range can't
   split a surrogate pair; pinned by `MarkdownHighlightTests`), and two appliers
   share one `font(for:)` — `apply(to:)` onto the editor's `NSTextStorage`, and
-  `attributed(_:)` into the hidden sizing proxies, **which had to change
+  `segments(_:)` into the hidden sizing proxies (`MarkdownSizingProxy`), **which had to change
   together**: the proxies laid the raw source out in the flat card face, so
   once a heading line is taller than a body line an unstyled proxy measures
-  the editor short. `attributed` bakes in only the *layout-affecting* styles
+  the editor short. `segments` bakes in only the *layout-affecting* styles
   (fonts, not colours) and is memoised, because the task card's proxy measures
   in view mode too — per visible row per render, `MarkdownParser.parse`'s
   reason. The scanner is deliberately not CommonMark: it matches

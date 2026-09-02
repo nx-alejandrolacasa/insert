@@ -627,6 +627,7 @@ private struct NoteCardView: View {
                 chevronBox: actionsSize,
                 expandLabel: "Show the whole note",
                 collapseLabel: "Collapse note",
+                onTap: { enterEdit() },
                 onToggleCheckbox: { toggleCheckbox(at: $0) }
             )
             // `labelColor` in every theme (Dracula, the one exception, is gone).
@@ -660,12 +661,11 @@ private struct NoteCardView: View {
             // Styled the way the editor styles the source (`MarkdownHighlight`),
             // because a heading line is taller than a body line and a proxy in
             // the flat face would measure the editor short.
-            Text(MarkdownHighlight.attributed(
-                draft.body.isEmpty ? " " : draft.body,
+            MarkdownSizingProxy(
+                text: draft.body.isEmpty ? " " : draft.body,
                 base: Card.nsFont(.body),
                 typeface: settings.typeface
-            ))
-                .font(Card.font(.body))
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
                 .padding(.horizontal, 5)
@@ -719,9 +719,18 @@ private struct NoteCardView: View {
             // the text selection in whichever card is open.
             let copyText = MarkdownFiles.copyText(draft)
             Button {
+                // Two flavours: the Markdown as plain text, and the same writing
+                // rendered as rich text (`MarkdownRichText`, what the preview
+                // draws) for whatever pastes formatting.
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(copyText, forType: .string)
+                let rendered = MarkdownRichText.render(copyText, config: .init(
+                    textStyle: .body, typeface: settings.typeface, theme: settings.theme
+                ))
+                if let rtf = MarkdownRichText.export(rendered.text).rtf {
+                    pasteboard.setData(rtf, forType: .rtf)
+                }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }

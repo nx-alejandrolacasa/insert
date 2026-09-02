@@ -192,4 +192,57 @@ final class MarkdownHighlightTests: XCTestCase {
         XCTAssertFalse(MarkdownHighlight.Style(strikethrough: true, colour: .marker).affectsLayout)
         XCTAssertFalse(MarkdownHighlight.Style(underline: true, colour: .link).affectsLayout)
     }
+
+    // MARK: Lists' paragraph shape
+
+    private func listLines(_ text: String) -> [(String, Bool)] {
+        MarkdownHighlight.scan(text).listLines.map {
+            ((text as NSString).substring(with: $0.range), $0.followsItem)
+        }
+    }
+
+    func testOnlyAnItemUnderAnotherItemTakesTheGap() {
+        XCTAssertEqual(
+            listLines("- a\n- b\n  * c\n\n1. d\n2) e").map(\.1),
+            [false, true, true, false, true]
+        )
+    }
+
+    func testAnyOtherLineEndsTheRun() {
+        XCTAssertEqual(listLines("- a\nprose\n- b").map(\.1), [false, false])
+        XCTAssertEqual(listLines("- a\n> quoted\n- b").map(\.1), [false, false])
+        XCTAssertTrue(listLines("> - quoted item\nprose").isEmpty)
+        XCTAssertTrue(listLines("```\n- code\n```").isEmpty)
+    }
+
+    func testAListLineIsTheWholeLineIndentIncluded() {
+        XCTAssertEqual(listLines("- a\n  - b").map(\.0), ["- a", "  - b"])
+    }
+
+    // MARK: The sizing proxy's segments
+
+    private func segments(_ text: String) -> [String] {
+        MarkdownHighlight.segments(text, base: .systemFont(ofSize: 15), typeface: .standard)
+            .map { String($0.text.characters) }
+    }
+
+    func testEveryListLineIsItsOwnSegmentWearingTheEditorsInsetAndGap() {
+        let base = NSFont.systemFont(ofSize: 15)
+        let gap = MarkdownText.listGap(base)
+        let inset = MarkdownText.listInset
+        let out = MarkdownHighlight.segments("intro\n- a\n- b\n\n- c\nafter", base: base, typeface: .standard)
+        XCTAssertEqual(out.map { String($0.text.characters) }, ["intro", "- a", "- b", " ", "- c", "after"])
+        XCTAssertEqual(out.map(\.inset), [0, inset, inset, 0, inset, 0])
+        XCTAssertEqual(out.map(\.gap), [0, 0, gap, 0, 0, 0])
+        XCTAssertGreaterThan(gap, 0)
+    }
+
+    /// A `Text` of nothing has no height, where the editor shows every blank
+    /// line at full height — including the one a final newline opens.
+    func testEmptyLinesKeepTheirHeightAsSpaces() {
+        XCTAssertEqual(segments("- a\n"), ["- a", " "])
+        XCTAssertEqual(segments("- a\n\n\n- b"), ["- a", " \n ", "- b"])
+        XCTAssertEqual(segments("plain\n"), ["plain\n"])
+        XCTAssertEqual(segments("\n- a"), [" ", "- a"])
+    }
 }

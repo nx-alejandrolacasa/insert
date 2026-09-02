@@ -783,6 +783,7 @@ private struct TaskCardView: View {
                 chevronBox: actionsSize,
                 expandLabel: "Expand notes",
                 collapseLabel: "Collapse notes",
+                onTap: { enterEdit() },
                 onToggleCheckbox: { toggleCheckbox(at: $0) }
             )
             // The note card's rule, on the other card: `labelColor` unless the
@@ -851,13 +852,12 @@ private struct TaskCardView: View {
         // Styled the way the editor styles the source (`MarkdownHighlight`) —
         // a heading line is taller than a callout line, and a proxy in the
         // flat face would measure the editor short. Memoised inside
-        // `attributed`, because this measures in view mode too.
-        Text(MarkdownHighlight.attributed(
-            draft.body.isEmpty ? " " : draft.body,
+        // `segments`, because this measures in view mode too.
+        MarkdownSizingProxy(
+            text: draft.body.isEmpty ? " " : draft.body,
             base: Card.nsFont(.callout),
             typeface: settings.typeface
-        ))
-            .font(Card.font(.callout))
+        )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
             .padding(.horizontal, 5)

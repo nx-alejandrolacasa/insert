@@ -137,6 +137,37 @@ final class MarkdownEditorTests: XCTestCase {
     func testNoSelectionConvertsToNoRange() {
         XCTAssertNil(MarkdownCaret.nsRange(of: nil, in: "anything"))
     }
+
+    // MARK: - Lists' paragraph shape
+
+    /// The editor opens half a line above an item that sits under another and
+    /// insets every item, through paragraph attributes — the source stays the
+    /// file's, byte for byte. Pinned because the sizing proxy carries the same
+    /// two values as real padding, and the editor is only as tall as it says.
+    func testListItemsCarryTheInsetAndTheGapAsParagraphStyle() {
+        let editor = MarkdownTextView()
+        let base = NSFont.systemFont(ofSize: 15)
+        editor.highlightConfig = MarkdownHighlight.Config(
+            base: base,
+            typeface: .standard,
+            palette: .init(text: .labelColor, marker: .gray, faintMarker: .lightGray, link: .linkColor)
+        )
+        editor.string = "- a\n- b\nprose"
+        editor.rehighlight()
+
+        func style(at offset: Int) -> NSParagraphStyle? {
+            editor.textStorage?.attribute(.paragraphStyle, at: offset, effectiveRange: nil)
+                as? NSParagraphStyle
+        }
+        XCTAssertEqual(style(at: 0)?.headIndent, MarkdownText.listInset)
+        XCTAssertEqual(style(at: 0)?.firstLineHeadIndent, MarkdownText.listInset)
+        XCTAssertEqual(style(at: 0)?.paragraphSpacingBefore, 0)
+        XCTAssertEqual(style(at: 4)?.headIndent, MarkdownText.listInset)
+        XCTAssertEqual(style(at: 4)?.paragraphSpacingBefore, MarkdownText.listGap(base))
+        XCTAssertEqual(style(at: 8)?.headIndent, 0)
+        XCTAssertEqual(style(at: 8)?.paragraphSpacingBefore, 0)
+    }
+
 }
 
 /// Counts `textDidChange`, which is what a composition is shown not to post.
