@@ -332,6 +332,8 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             // typed character already shows it dressed.
             (view as? MarkdownTextView)?.rehighlight()
             if parent.text != view.string { parent.text = view.string }
+            // A reflow can move the selected line without moving the selection.
+            (view as? MarkdownTextView)?.publishSelectionAnchor()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -339,6 +341,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             // Which line's syntax is at full strength is a function of the
             // selection, so the pass has a second trigger — see `rehighlight`.
             (view as? MarkdownTextView)?.rehighlightForRevealedLine()
+            (view as? MarkdownTextView)?.publishSelectionAnchor()
             // Not while a composition is open. The marked text is provisional —
             // it is in `view.string` but has never been published through the
             // text binding, since AppKit posts no `textDidChange` for it — so a
@@ -439,6 +442,8 @@ final class MarkdownTextView: NSTextView {
         onBacktab = nil
         onEscape = nil
         onFocusChange = nil
+        stopObservingGeometry()
+        FormattingBarPanel.shared.hide(for: self)
     }
 
     /// What the last highlight pass was made of, kept so the bridge only
@@ -505,7 +510,10 @@ final class MarkdownTextView: NSTextView {
         if became {
             hasKeyboard = true
             rehighlight()
-            if reportsFocus { onFocusChange?(true) }
+            if reportsFocus {
+                onFocusChange?(true)
+                publishSelectionAnchor()
+            }
         }
         return became
     }
@@ -515,7 +523,10 @@ final class MarkdownTextView: NSTextView {
         if resigned {
             hasKeyboard = false
             rehighlight()
-            if reportsFocus { onFocusChange?(false) }
+            if reportsFocus {
+                onFocusChange?(false)
+                publishSelectionAnchor()
+            }
         }
         return resigned
     }
@@ -576,18 +587,120 @@ final class MarkdownTextView: NSTextView {
 
         let shifted = event.modifierFlags.contains(.shift)
         switch (key, shifted) {
-        case ("b", false): toggleWrapAroundSelection("**")
-        case ("i", false): toggleWrapAroundSelection("*")
-        // Markdown has no underline; `<u>…</u>` is the Obsidian convention,
-        // and `MarkdownText` renders it.
-        case ("u", false): toggleWrapAroundSelection("<u>", closing: "</u>")
-        case ("x", true): toggleWrapAroundSelection("~~")
+        case ("b", false): perform(.bold)
+        case ("i", false): perform(.italic)
+        case ("u", false): perform(.underline)
+        case ("x", true): perform(.strikethrough)
         // ⌘K means search everywhere else; `RootView`'s monitor stands down
         // while a Markdown body is first responder so it can mean "link" here.
-        case ("k", false): insertLinkAroundSelection()
+        case ("k", false): perform(.link)
         default: return super.performKeyEquivalent(with: event)
         }
         return true
+    }
+
+    /// One formatting action, whichever way it arrived — a key equivalent above
+    /// or a button on the `FormattingBar`. The bar's click doesn't move the
+    /// keyboard, but the edit is made through this view and the caret should
+    /// keep blinking where it landed, so the keyboard is taken back if it did.
+    func perform(_ action: FormattingAction) {
+        switch action {
+        case .bold: toggleWrapAroundSelection("**")
+        case .italic: toggleWrapAroundSelection("*")
+        // Markdown has no underline; `<u>…</u>` is the Obsidian convention,
+        // and `MarkdownText` renders it.
+        case .underline: toggleWrapAroundSelection("<u>", closing: "</u>")
+        case .strikethrough: toggleWrapAroundSelection("~~")
+        case .code: toggleWrapAroundSelection("`")
+        case .link: insertLinkAroundSelection()
+        case .bulletList: toggleListAroundSelection(ordered: false)
+        case .numberedList: toggleListAroundSelection(ordered: true)
+        }
+        if let window, window.firstResponder !== self { window.makeFirstResponder(self) }
+        // A bar button's action lands on the mouse-up that pressed it, when the
+        // button may still count as down, so the bar is placed again a turn later.
+        Task { @MainActor [weak self] in self?.publishSelectionAnchor() }
+    }
+
+    private func toggleListAroundSelection(ordered: Bool) {
+        let selected = selectedRange()
+        guard let lo = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+              let hi = MarkdownEdits.characterOffset(
+                  in: string, utf16Offset: selected.location + selected.length
+              ),
+              let change = MarkdownFormatting.toggleList(string, selection: lo..<hi, ordered: ordered)
+        else { return }
+        _ = MarkdownEdits.apply(change, to: self)
+    }
+
+    // MARK: The selection the bar floats over
+
+    /// Where the selection's first line sits, in this view's coordinates, or
+    /// `nil` when there is nothing for the `FormattingBar` to float over: no
+    /// selection, a composition in progress, the keyboard elsewhere, the window
+    /// not key — or the mouse still down, since a bar that follows a drag jumps
+    /// line to line under the pointer. `mouseDown` publishes once the drag is
+    /// over.
+    var selectionAnchor: CGRect? {
+        let selected = selectedRange()
+        guard hasKeyboard, selected.length > 0, !hasMarkedText(),
+              NSEvent.pressedMouseButtons == 0, let window, window.isKeyWindow
+        else { return nil }
+        let onScreen = firstRect(forCharacterRange: selected, actualRange: nil)
+        guard onScreen.height > 0 else { return nil }
+        return convert(window.convertFromScreen(onScreen), from: nil)
+    }
+
+    /// Shows, moves or hides the bar for the selection as it now stands.
+    func publishSelectionAnchor() {
+        FormattingBarPanel.shared.update(for: self)
+    }
+
+    /// `super` tracks the drag and returns after the mouse is up, which is the
+    /// moment the bar should appear. `mouseUp` is covered too, in case a click
+    /// that starts no drag comes back through it instead.
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        publishSelectionAnchor()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        publishSelectionAnchor()
+    }
+
+    /// The bar lives in its own window, so nothing moves it for free when the
+    /// selected line moves without the selection changing: the column scrolling
+    /// (the enclosing clip view's bounds), the card resizing as text wraps (this
+    /// view's frame), and the window gaining or losing key status.
+    private var geometryObservers: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopObservingGeometry()
+        guard let window else { return FormattingBarPanel.shared.hide(for: self) }
+        postsFrameChangedNotifications = true
+        var watched: [(Notification.Name, AnyObject)] = [
+            (NSView.frameDidChangeNotification, self),
+            (NSWindow.didBecomeKeyNotification, window),
+            (NSWindow.didResignKeyNotification, window),
+        ]
+        if let clip = enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            watched.append((NSView.boundsDidChangeNotification, clip))
+        }
+        geometryObservers = watched.map { name, object in
+            NotificationCenter.default.addObserver(
+                forName: name, object: object, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.publishSelectionAnchor() }
+            }
+        }
+    }
+
+    private func stopObservingGeometry() {
+        geometryObservers.forEach(NotificationCenter.default.removeObserver)
+        geometryObservers = []
     }
 
     private func toggleWrapAroundSelection(_ delimiter: String, closing: String? = nil) {
@@ -995,6 +1108,76 @@ enum MarkdownFormatting {
     }
 
     // MARK: Lists and quotes
+
+    /// The formatting bar's two list buttons: make every line the selection
+    /// touches a bullet (`- `) or a numbered item, or — when every one of them
+    /// already is that kind of item — take the markers off again, so the button
+    /// toggles like ⌘B does. Lines of another kind are switched rather than
+    /// doubled, blank lines are left as they are, and numbering restarts on each
+    /// indent the way the renderer counts it. The whole run of lines stays
+    /// selected afterwards, which is what lets a second press undo the first.
+    /// `nil` when the selection touches no line with text on it.
+    static func toggleList(_ text: String, selection: Range<Int>, ordered: Bool) -> Change? {
+        let chars = Array(text)
+        let lo = max(0, min(selection.lowerBound, chars.count))
+        var hi = max(lo, min(selection.upperBound, chars.count))
+        // A selection that ends just past a newline hasn't reached the next line.
+        if hi > lo, chars[hi - 1] == "\n" { hi -= 1 }
+        var start = lo
+        while start > 0, chars[start - 1] != "\n" { start -= 1 }
+        var end = hi
+        while end < chars.count, chars[end] != "\n" { end += 1 }
+
+        let lines = chars[start..<end]
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(Array.init)
+        let items = lines.filter { !$0.allSatisfy(\.isWhitespace) }
+        guard !items.isEmpty else { return nil }
+        let wanted: ListKind = ordered ? .ordered : .bullet
+        let removing = items.allSatisfy { listKind($0) == wanted }
+
+        var out: [[Character]] = []
+        var numbers: [Int: Int] = [:]
+        for line in lines {
+            guard !line.allSatisfy(\.isWhitespace) else { out.append(line); continue }
+            let (indent, content) = splitListLine(line)
+            guard !removing else { out.append(indent + content); continue }
+            let lead: [Character]
+            if ordered {
+                numbers = numbers.filter { $0.key <= indent.count }
+                let number = (numbers[indent.count] ?? 0) + 1
+                numbers[indent.count] = number
+                lead = Array("\(number). ")
+            } else {
+                lead = ["-", " "]
+            }
+            out.append(indent + lead + content)
+        }
+
+        let replacement = Array(out.joined(separator: ["\n"]))
+        var result = chars
+        result.replaceSubrange(start..<end, with: replacement)
+        return Change(text: String(result), selection: start..<(start + replacement.count))
+    }
+
+    private enum ListKind { case bullet, ordered }
+
+    private static func listKind(_ line: [Character]) -> ListKind? {
+        guard let marker = lineMarker(line), let first = marker.lead.first else { return nil }
+        if "-*+".contains(first) { return .bullet }
+        if first.isNumber { return .ordered }
+        return nil
+    }
+
+    /// A line as its indent and its text, with any list marker between them
+    /// dropped. A quote's `>` is text here: quotes aren't lists.
+    private static func splitListLine(_ line: [Character]) -> (indent: [Character], content: [Character]) {
+        if listKind(line) != nil, let marker = lineMarker(line) {
+            return (marker.indent, Array(line[marker.contentStart...]))
+        }
+        let indent = Array(line.prefix(while: { $0 == " " || $0 == "\t" }))
+        return (indent, Array(line[indent.count...]))
+    }
 
     /// What a line opens with, when it opens a list item or a block quote — the
     /// two shapes Return carries onto the next line.

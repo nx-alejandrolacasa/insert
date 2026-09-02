@@ -111,6 +111,8 @@ Sources/Insert/
                               collapsible preview (CollapsibleMarkdown)
   MarkdownHighlight.swift     styles the Markdown *source* in the editor — the
                               pure span scanner + the two attribute appliers
+  FormattingBar.swift         the bar that floats over a selection in the editor:
+                              the formatting actions as buttons
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
   AppTheme.swift              the six sourced themes: band / track / primary and
                               count-chip tones, the page and card grounds, the
@@ -1609,6 +1611,44 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   episode leaves: **a `String.Index` belongs to the string it was made from**,
   and a binding's indices are the *owner's*, so any conversion against a text
   view's current string has to assume they are foreign.
+- **A bar floats over a selection in a Markdown body** (`FormattingBar`,
+  September 2026) — bold · italic · underline · strikethrough | bulleted ·
+  numbered list | link · inline code, in three groups, the Confluence shape. It
+  exists for the selection made with the *mouse*, which is the moment a key
+  shortcut is furthest from the hand; the keys still work and the tooltips name
+  them. It wears the `@project` dropdown's construction — glass or the theme's
+  opaque page, hairline, no shadow — and sits **above** the selection's first
+  line so the words being styled stay in view, its left edge on the selection's
+  and clamped inside the editor's width. Its buttons are 32pt, larger than the
+  toolbar's, because they are reached for mid-sentence.
+  **It is a child window, not an overlay, and it has to be** (`FormattingBarPanel`,
+  one borderless non-activating `NSPanel` for the app). The first cut was an
+  `.overlay` of the editor and came up **under the card's title**: the title is
+  a `TextField`, which is an `NSTextField`, and a platform view draws above
+  everything SwiftUI paints in the same hosting view, so no `zIndex` reaches it.
+  The window also takes the bar out of the column's scroll clipping. What the
+  window costs is that nothing moves it for free, so the text view re-publishes
+  on the enclosing clip view's bounds change (scrolling), its own frame change
+  (the card growing as text wraps) and the window's key status, and hides the
+  bar when the selected line has scrolled out of `visibleRect`. The click doesn't
+  disturb the editor because the panel can't become key, its hosting view
+  refuses first responder and reports `needsPanelToBecomeKey` false, and
+  `perform` takes the keyboard back if anything did move it; the panel shows the
+  **arrow** cursor over its whole surface, since the editor's I-beam was
+  reaching it. The text view publishes the anchor
+  (`MarkdownTextView.selectionAnchor`, first-line rect via
+  `firstRect(forCharacterRange:)`), and it answers `nil` while the mouse is
+  **down** — a bar that follows a drag jumps from line to line under the pointer
+  — with `mouseDown`/`mouseUp` publishing once the drag is over; `nil` too while
+  a composition is open, while the keyboard is elsewhere and while the window
+  isn't key. The buttons make their edit **through the text view**
+  (`perform(_:)`, shared with the key equivalents) — never by assigning the
+  `text` binding — so a bar press has the same undo and caret placement as the
+  key. The two list
+  buttons are `MarkdownFormatting.toggleList`, a pure function beside the
+  others: set every line the selection touches, or take the markers off when all
+  of them already carry that kind, blank lines untouched, numbering restarting
+  per indent as the renderer counts; pinned by `MarkdownFormattingTests`.
 - **Chips are one height** — `Metrics.chipHeight` (24pt), applied as a *floor* by
   `chipHeight()` rather than by equalising paddings, because a chip's 8pt of
   horizontal padding is right where a pill's 11pt is right. There were three

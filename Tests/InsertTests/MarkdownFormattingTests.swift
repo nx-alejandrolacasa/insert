@@ -267,6 +267,92 @@ final class MarkdownFormattingTests: XCTestCase {
 
     // MARK: Continuing a list on Return
 
+    // MARK: Inline code
+
+    func testWrapsInlineCode() {
+        let text = "run swift build now"
+        let change = MarkdownFormatting.toggleWrap(
+            text, selection: range(of: "swift build", in: text), delimiter: "`")!
+        XCTAssertEqual(change.text, "run `swift build` now")
+        XCTAssertEqual(selected(change), "swift build")
+    }
+
+    // MARK: Lists from the bar
+
+    /// Toggles a list over the selection written into the text as `⟦`…`⟧`, and
+    /// gives the result back the same way.
+    private func toggleList(_ marked: String, ordered: Bool) -> String? {
+        let lo = marked.distance(from: marked.startIndex, to: marked.firstIndex(of: "⟦")!)
+        var text = marked.replacingOccurrences(of: "⟦", with: "")
+        let hi = text.distance(from: text.startIndex, to: text.firstIndex(of: "⟧")!)
+        text = text.replacingOccurrences(of: "⟧", with: "")
+        guard let change = MarkdownFormatting.toggleList(text, selection: lo..<hi, ordered: ordered)
+        else { return nil }
+        var out = Array(change.text)
+        out.insert("⟧", at: change.selection.upperBound)
+        out.insert("⟦", at: change.selection.lowerBound)
+        return String(out)
+    }
+
+    func testBulletsEveryLineTheSelectionTouches() {
+        XCTAssertEqual(toggleList("one\ntw⟦o\nthr⟧ee\nfour", ordered: false),
+                       "one\n⟦- two\n- three⟧\nfour")
+    }
+
+    func testNumbersEveryLineAndSelectsTheRun() {
+        XCTAssertEqual(toggleList("⟦one\ntwo\nthree⟧", ordered: true),
+                       "⟦1. one\n2. two\n3. three⟧")
+    }
+
+    func testToggleTwiceRoundTripsAList() {
+        let once = toggleList("⟦one\ntwo⟧", ordered: false)!
+        XCTAssertEqual(once, "⟦- one\n- two⟧")
+        XCTAssertEqual(toggleList(once, ordered: false), "⟦one\ntwo⟧")
+    }
+
+    func testSwitchesBulletsToNumbers() {
+        XCTAssertEqual(toggleList("⟦- one\n* two\n+ three⟧", ordered: true),
+                       "⟦1. one\n2. two\n3. three⟧")
+        XCTAssertEqual(toggleList("⟦1. one\n2) two⟧", ordered: false),
+                       "⟦- one\n- two⟧")
+    }
+
+    func testAMixedRunIsCompletedNotRemoved() {
+        XCTAssertEqual(toggleList("⟦- one\ntwo⟧", ordered: false), "⟦- one\n- two⟧")
+    }
+
+    func testBlankLinesAreLeftAlone() {
+        XCTAssertEqual(toggleList("⟦one\n\ntwo⟧", ordered: false), "⟦- one\n\n- two⟧")
+        XCTAssertEqual(toggleList("⟦- one\n\n- two⟧", ordered: false), "⟦one\n\ntwo⟧")
+    }
+
+    func testNumberingRestartsPerIndent() {
+        XCTAssertEqual(toggleList("⟦a\n  b\n  c\nd⟧", ordered: true),
+                       "⟦1. a\n  1. b\n  2. c\n2. d⟧")
+    }
+
+    func testSelectionEndingAfterANewlineStopsThere() {
+        XCTAssertEqual(toggleList("⟦one\n⟧two", ordered: false), "⟦- one⟧\ntwo")
+    }
+
+    func testCheckboxItemLosesItsWholeMarker() {
+        XCTAssertEqual(toggleList("⟦- [ ] one⟧", ordered: false), "⟦one⟧")
+        XCTAssertEqual(toggleList("⟦- [x] one⟧", ordered: true), "⟦1. one⟧")
+    }
+
+    func testQuoteIsTextNotAMarker() {
+        XCTAssertEqual(toggleList("⟦> quoted⟧", ordered: false), "⟦- > quoted⟧")
+    }
+
+    func testBlankSelectionMakesNoList() {
+        XCTAssertNil(toggleList("⟦⟧", ordered: false))
+        XCTAssertNil(toggleList("⟦   \n⟧", ordered: true))
+    }
+
+    func testCaretAloneListsItsLine() {
+        XCTAssertEqual(toggleList("one\ntw⟦⟧o\nthree", ordered: false), "one\n⟦- two⟧\nthree")
+    }
+
     /// Presses Return with the caret written into the text as `|`, and gives the
     /// result back the same way, so each case reads as the keystroke it is.
     /// `nil` means "not a list item" — the editor lets Return through.
