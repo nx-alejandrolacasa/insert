@@ -732,9 +732,9 @@ private struct NoteCardView: View {
                 let rendered = MarkdownRichText.render(copyText, config: .init(
                     textStyle: .body, typeface: settings.typeface, theme: settings.theme
                 ))
-                if let rtf = MarkdownRichText.export(rendered.text).rtf {
-                    pasteboard.setData(rtf, forType: .rtf)
-                }
+                let export = MarkdownRichText.export(rendered.text)
+                if let rtf = export.rtf { pasteboard.setData(rtf, forType: .rtf) }
+                if let html = export.html { pasteboard.setData(html, forType: .html) }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }

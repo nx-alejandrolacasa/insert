@@ -4,8 +4,9 @@ import XCTest
 
 /// Pins what the preview's rich text promises: that the formatting a body is
 /// written in reaches the pasteboard (bold and italic faces, heading sizes,
-/// links, list indents) and that what *shouldn't* travel doesn't — the bullet
-/// glyph and checkbox attachment become their plain spelling, no colour leaves
+/// links, real lists) and that what *shouldn't* travel doesn't — the bullet
+/// glyph leaves with its list and the checkbox attachment becomes its plain
+/// spelling, no colour leaves
 /// (a `labelColor` resolved in Dark Mode is white, invisible on a white page),
 /// and no font leaves under a name only this app can resolve.
 final class MarkdownRichTextTests: XCTestCase {
@@ -125,6 +126,37 @@ final class MarkdownRichTextTests: XCTestCase {
         XCTAssertEqual(export.string, "• One\n1. Two\n☐ Three\n☑ Four\n---")
         XCTAssertFalse(export.string.contains("\u{FFFC}"), "no attachment character leaves the view")
         XCTAssertFalse(export.string.contains("\t"), "the marker tab goes with the marker")
+    }
+
+    func testListsLeaveAsRealLists() throws {
+        let text = render("- One\n- Two\n  1. Sub\n- Three\n\nPara\n\n1. A\n2. B\n\n- [ ] Task").text
+        let export = MarkdownRichText.export(text)
+        XCTAssertEqual(export.string, "• One\n• Two\n1. Sub\n• Three\nPara\n1. A\n2. B\n☐ Task",
+                       "the plain flavour keeps every marker spelled out")
+        guard let rtf = export.rtf, let back = NSAttributedString(rtf: rtf, documentAttributes: nil) else {
+            return XCTFail("no RTF")
+        }
+        XCTAssertEqual(back.string, "One\nTwo\nSub\nThree\nPara\nA\nB\n☐ Task",
+                       "bullets and numbers are the list's to draw; a checkbox is still a character")
+        var lists: [[String]] = []
+        back.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: back.length)) { value, _, _ in
+            lists.append(((value as? NSParagraphStyle)?.textLists ?? []).map(\.markerFormat.rawValue))
+        }
+        XCTAssertEqual(lists, [["{disc}"], ["{disc}", "{decimal}"], ["{disc}"], [], ["{decimal}"], ["{decimal}"], []])
+
+        let html = try XCTUnwrap(export.html.flatMap { String(data: $0, encoding: .utf8) })
+        XCTAssertEqual(html.components(separatedBy: "<ul").count - 1, 1)
+        XCTAssertEqual(html.components(separatedBy: "<ol").count - 1, 2, "the sub-list and the second list are two lists")
+        XCTAssertEqual(html.components(separatedBy: "<li").count - 1, 6)
+        XCTAssertFalse(html.contains("•"), "no bullet character in the HTML either")
+        XCTAssertTrue(html.contains("☐ Task"))
+    }
+
+    func testANumberedRunInterruptedByABulletRestartsItsList() throws {
+        let text = render("1. A\n2. B\n- C\n1. D").text
+        let html = try XCTUnwrap(MarkdownRichText.export(text).html.flatMap { String(data: $0, encoding: .utf8) })
+        XCTAssertEqual(html.components(separatedBy: "<ol").count - 1, 2, "D starts a new numbered list, as the parser counts it")
+        XCTAssertEqual(html.components(separatedBy: "<ul").count - 1, 1)
     }
 
     func testNoColourLeavesTheView() {
@@ -298,7 +330,7 @@ final class MarkdownRichTextTests: XCTestCase {
         view.setSelectedRange(NSRange(location: 0, length: view.textStorage?.length ?? 0))
         let pasteboard = NSPasteboard(name: .init("insert.tests.\(UUID().uuidString)"))
         pasteboard.clearContents()
-        guard view.writeSelection(to: pasteboard, types: [.rtf, .string]) else {
+        guard view.writeSelection(to: pasteboard, types: [.rtf, .html, .string]) else {
             // The pasteboard server is out of reach in a sandboxed test run.
             throw XCTSkip("the pasteboard refused the write")
         }
@@ -307,10 +339,14 @@ final class MarkdownRichTextTests: XCTestCase {
               let back = NSAttributedString(rtf: rtf, documentAttributes: nil) else {
             return XCTFail("no RTF flavour")
         }
-        XCTAssertEqual(back.string, "• Bold item")
+        XCTAssertEqual(back.string, "Bold item")
+        let style = back.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(style?.textLists.count, 1, "the RTF carries the list, not a typed bullet")
         let bold = (back.string as NSString).range(of: "Bold")
         let font = back.attribute(.font, at: bold.location, effectiveRange: nil) as? NSFont
         XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        let html = pasteboard.data(forType: .html).flatMap { String(data: $0, encoding: .utf8) }
+        XCTAssertTrue(html?.contains("<li") ?? false, "the HTML flavour is a list too")
         pasteboard.releaseGlobally()
     }
 }

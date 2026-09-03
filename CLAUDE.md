@@ -1760,19 +1760,33 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   paragraph's spacing isn't painted as part of it; the bar sits at the
   paragraph's edge, the lines indented past it).
   **Copy is `MarkdownRichText.export`, not the storage.** `writeSelection` hands
-  out RTF and plain text: marker runs become their plain spelling through the
-  `.markdownPlain` attribute (`• `, `1. `, `☐ `/`☑ `, `---`), so no attachment
-  character or marker tab leaves; **every colour is dropped**, because a
-  `labelColor` resolved in Dark Mode is white and white text pasted into a white
-  document is invisible; and fonts go to Helvetica Neue (Menlo for code) at the
-  same size and traits, since none of the five card faces is reachable by the
-  name RTF would carry — hidden system designs and a bundled Grotesk. A
-  synthesised oblique is a slant in the matrix, not a trait, so `portable` reads
-  the matrix too or Rounded's italics would leave upright. The ⋯ menu's Copy
-  adds the same RTF flavour beside the Markdown it already put down as plain
-  text. Pinned by `MarkdownRichTextTests`; the one test that writes a real
-  pasteboard **skips** in the agent sandbox, where the pasteboard server refuses
-  the write, and the export itself is what's asserted.
+  out RTF, HTML and plain text. **Lists leave as real lists**: a bullet or number
+  run carries `.markdownList` (kind and level), and the export deletes that run
+  and gives its paragraph an `NSTextList` per level instead — both AppKit writers
+  draw a list paragraph's marker from the list, not from the text (measured: the
+  RTF gets a list table and `\listtext`, the HTML gets `<ul>`/`<ol>`/`<li>`,
+  with or without the glyph in the string). This was reported from pasting into
+  Teams, where the typed `•` and its spaces arrived as exactly that beside a
+  real list. One list object per level for as long as the items run on
+  consecutive paragraphs, so the writers' numbering matches the parser's: any
+  other paragraph in between starts a fresh list, and a bullet interrupting a
+  numbered level restarts it. The other marker runs still become their plain
+  spelling through `.markdownPlain` (`☐ `/`☑ `, `---` — neither format has a
+  checklist), and the **plain flavour keeps every marker spelled out**, `• `
+  included, since plain text has no lists to make. The HTML flavour is there
+  because a web-based app reads `public.html`; whether Teams also converts RTF
+  when it's the only rich flavour was not established, so both are written.
+  **Every colour is dropped**, because a `labelColor` resolved in Dark Mode is
+  white and white text pasted into a white document is invisible; and fonts go
+  to Helvetica Neue (Menlo for code) at the same size and traits, since none of
+  the five card faces is reachable by the name RTF would carry — hidden system
+  designs and a bundled Grotesk. A synthesised oblique is a slant in the matrix,
+  not a trait, so `portable` reads the matrix too or Rounded's italics would
+  leave upright. The ⋯ menu's Copy adds the same RTF and HTML flavours beside
+  the Markdown it already put down as plain text. Pinned by
+  `MarkdownRichTextTests`; the one test that writes a real pasteboard **skips**
+  in the agent sandbox, where the pasteboard server refuses the write, and the
+  export itself is what's asserted.
   **A click is not a drag.** The text view consumes the mouse, so the card's own
   tap gesture never sees a click that lands on the text; the view reports one
   that moved under 4pt and left no selection through `onTap`, which

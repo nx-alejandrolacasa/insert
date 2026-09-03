@@ -377,9 +377,10 @@ final class MarkdownPreviewView: NSTextView {
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         let selected = textStorage?.attributedSubstring(from: selectedRange()) ?? NSAttributedString()
         let export = MarkdownRichText.export(selected)
-        pboard.declareTypes([.rtf, .string], owner: nil)
+        pboard.declareTypes([.rtf, .html, .string], owner: nil)
         var wrote = false
         if let rtf = export.rtf { wrote = pboard.setData(rtf, forType: .rtf) || wrote }
+        if let html = export.html { wrote = pboard.setData(html, forType: .html) || wrote }
         wrote = pboard.setString(export.string, forType: .string) || wrote
         return wrote
     }
@@ -388,7 +389,7 @@ final class MarkdownPreviewView: NSTextView {
         guard selectedRange().length > 0 else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        _ = writeSelection(to: pasteboard, types: [.rtf, .string])
+        _ = writeSelection(to: pasteboard, types: [.rtf, .html, .string])
     }
 }
 
@@ -396,6 +397,9 @@ extension NSAttributedString.Key {
     /// What a run stands for when it leaves the view: the bullet glyph and its
     /// tab become `• `, a number `1. `, a checkbox `☐ ` or `☑ `, a rule `---`.
     static let markdownPlain = NSAttributedString.Key("insert.markdownPlain")
+    /// The list item a bullet or number run heads (`MarkdownRichText.ListMark`),
+    /// so the export can make the paragraph a real list entry.
+    static let markdownList = NSAttributedString.Key("insert.markdownList")
     /// The source line of the `- [ ]` item whose mark this run is.
     static let markdownCheckbox = NSAttributedString.Key("insert.markdownCheckbox")
 }
@@ -406,12 +410,18 @@ extension NSAttributedString.Key {
 /// `Card.italic` (so Rounded's synthesised oblique and Grotesk's variable-axis
 /// trap arrive solved), code monospaced, links in the theme's link colour.
 ///
-/// Also the **export** the copy hands out: the same string with the marker runs
-/// replaced by their plain spelling, every colour dropped (a `labelColor`
-/// resolved in Dark Mode is white, and white text pasted into a white document
-/// is invisible), and the card face swapped for a family other apps can name —
-/// none of the five faces is installed on the Mac under a name RTF can carry.
+/// Also the **export** the copy hands out: the same string with bullets and
+/// numbers turned into real list paragraphs, the other marker runs replaced by
+/// their plain spelling, every colour dropped (a `labelColor` resolved in Dark
+/// Mode is white, and white text pasted into a white document is invisible),
+/// and the card face swapped for a family other apps can name — none of the
+/// five faces is installed on the Mac under a name RTF can carry.
 enum MarkdownRichText {
+    struct ListMark: Hashable {
+        var ordered: Bool
+        var level: Int
+    }
+
     struct Config: Hashable {
         var textStyle: NSFont.TextStyle
         var typeface: Typeface
@@ -619,9 +629,10 @@ enum MarkdownRichText {
                     ]), size: base.pointSize) ?? base,
                     .foregroundColor: palette.secondary,
                     .markdownPlain: "\(number). ",
+                    .markdownList: ListMark(ordered: true, level: item.level),
                 ])
             } else {
-                marker = bullet()
+                marker = bullet(level: item.level)
             }
             // The marker without its tab: a tab measured on its own is a stop
             // nobody set.
@@ -655,7 +666,7 @@ enum MarkdownRichText {
         /// size, so the glyph is `●` scaled to the 5pt circle `MarkdownText`
         /// draws (0.48 of the body size measures 5.1pt), lifted onto the
         /// x-height. It leaves the view as `• `.
-        private func bullet() -> NSAttributedString {
+        private func bullet(level: Int) -> NSAttributedString {
             let size = (base.pointSize * 0.48).rounded(toPlaces: 1)
             let inkCentre = size * 0.373
             return NSAttributedString(string: "\u{25CF}\t", attributes: [
@@ -663,6 +674,7 @@ enum MarkdownRichText {
                 .foregroundColor: palette.secondary,
                 .baselineOffset: (base.xHeight / 2 - inkCentre).rounded(toPlaces: 1),
                 .markdownPlain: "\u{2022} ",
+                .markdownList: ListMark(ordered: false, level: level),
             ])
         }
 
@@ -753,20 +765,86 @@ enum MarkdownRichText {
     struct Export {
         var string: String
         var rtf: Data?
+        var html: Data?
     }
 
-    /// What leaves the view. Marker runs become their plain spelling, colours
-    /// go, the card face becomes a portable family with its size and traits
-    /// kept, and the plain flavour is the same characters with no attributes.
+    /// What leaves the view. Bullets and numbers become list paragraphs, the
+    /// other marker runs their plain spelling, colours go, the card face becomes
+    /// a portable family with its size and traits kept. The plain flavour keeps
+    /// every marker spelled out, since plain text has no lists to make. HTML
+    /// rides beside the RTF because that is the flavour a web-based app reads.
     static func export(_ attributed: NSAttributedString) -> Export {
+        let rich = spelledOut(listed(attributed))
+        let range = NSRange(location: 0, length: rich.length)
+        rich.removeAttribute(.foregroundColor, range: range)
+        rich.removeAttribute(.backgroundColor, range: range)
+        rich.removeAttribute(.markdownCheckbox, range: range)
+        rich.removeAttribute(.cursor, range: range)
+        rich.enumerateAttribute(.font, in: range) { value, run, _ in
+            guard let font = value as? NSFont else { return }
+            rich.addAttribute(.font, value: portable(font), range: run)
+        }
+        return Export(
+            string: spelledOut(attributed).string,
+            rtf: rich.rtf(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]),
+            html: try? rich.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.html])
+        )
+    }
+
+    /// One level of an exported list, in points — Word's own half inch.
+    private static let exportListStep: CGFloat = 36
+
+    /// Bullet and number runs become `NSTextList` paragraphs: the marker run
+    /// itself is deleted, since both the RTF and the HTML writer draw a list
+    /// paragraph's marker from the list rather than from the text. One list
+    /// object per level, kept while the items run on consecutive paragraphs, so
+    /// the numbering the writers count matches the parser's — a fresh list
+    /// starts after any other paragraph, and a bullet interrupting a numbered
+    /// level restarts that level. Checkboxes stay spelled out: neither format
+    /// has a checklist.
+    private static func listed(_ attributed: NSAttributedString) -> NSMutableAttributedString {
         let out = NSMutableAttributedString(attributedString: attributed)
-        let full = NSRange(location: 0, length: out.length)
+        let string = out.string as NSString
+        var open: [NSTextList] = []
+        var previousEnd = -1
+        var edits: [(marker: NSRange, paragraph: NSRange, style: NSParagraphStyle)] = []
+        out.enumerateAttribute(.markdownList, in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            guard let mark = value as? ListMark else { return }
+            let paragraph = string.paragraphRange(for: range)
+            if paragraph.location != previousEnd { open.removeAll() }
+            previousEnd = paragraph.upperBound
+            let format: NSTextList.MarkerFormat = mark.ordered ? .decimal : .disc
+            if open.count > mark.level + 1 { open.removeLast(open.count - mark.level - 1) }
+            while open.count < mark.level { open.append(NSTextList(markerFormat: .disc, options: 0)) }
+            if open.count == mark.level + 1, open[mark.level].markerFormat != format { open.removeLast() }
+            if open.count == mark.level { open.append(NSTextList(markerFormat: format, options: 0)) }
+            let existing = out.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+            let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            style.textLists = open
+            style.headIndent = exportListStep * CGFloat(open.count)
+            style.firstLineHeadIndent = exportListStep * CGFloat(open.count - 1)
+            style.tabStops = []
+            style.defaultTabInterval = exportListStep
+            edits.append((range, paragraph, style))
+        }
+        for edit in edits.reversed() {
+            out.addAttribute(.paragraphStyle, value: edit.style, range: edit.paragraph)
+            out.deleteCharacters(in: edit.marker)
+        }
+        return out
+    }
+
+    /// The marker runs that are still characters — checkboxes and the rule, and
+    /// every bullet and number in the plain flavour — as their plain spelling.
+    private static func spelledOut(_ attributed: NSAttributedString) -> NSMutableAttributedString {
+        let out = NSMutableAttributedString(attributedString: attributed)
         var replacements: [(NSRange, NSAttributedString)] = []
-        out.enumerateAttribute(.markdownPlain, in: full) { value, range, _ in
+        out.enumerateAttribute(.markdownPlain, in: NSRange(location: 0, length: out.length)) { value, range, _ in
             guard let plain = value as? String else { return }
             var attrs = out.attributes(at: range.location, effectiveRange: nil)
             attrs[.attachment] = nil
             attrs[.markdownPlain] = nil
+            attrs[.markdownList] = nil
             attrs[.markdownCheckbox] = nil
             attrs[.cursor] = nil
             attrs[.baselineOffset] = nil
@@ -775,19 +853,7 @@ enum MarkdownRichText {
         for (range, replacement) in replacements.reversed() {
             out.replaceCharacters(in: range, with: replacement)
         }
-        let range = NSRange(location: 0, length: out.length)
-        out.removeAttribute(.foregroundColor, range: range)
-        out.removeAttribute(.backgroundColor, range: range)
-        out.removeAttribute(.markdownCheckbox, range: range)
-        out.removeAttribute(.cursor, range: range)
-        out.enumerateAttribute(.font, in: range) { value, run, _ in
-            guard let font = value as? NSFont else { return }
-            out.addAttribute(.font, value: portable(font), range: run)
-        }
-        let rtf = out.rtf(from: range, documentAttributes: [
-            .documentType: NSAttributedString.DocumentType.rtf,
-        ])
-        return Export(string: out.string, rtf: rtf)
+        return out
     }
 
     /// The same size and traits in a family another app can resolve. The five
