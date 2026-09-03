@@ -26,14 +26,11 @@ import SwiftUI
 /// due badge, panel content — is unchanged.
 struct ColumnHeaderBand<Filters: View>: View {
     let title: String
-    /// How many rows the column is currently showing, in a mono pill beside the
-    /// heading. The *filtered* count, deliberately: it is a label for the list
-    /// under it, so it has to agree with what you can see.
-    let count: Int
-    let primaryTitle: String
-    let primarySymbol: String
-    let primaryHelp: String
-    let primaryAction: () -> Void
+    /// The column's "new" glyph, right after the heading: what it creates, the
+    /// tooltip (which names the shortcut) and the action.
+    let addLabel: String
+    let addHelp: String
+    let addAction: () -> Void
     @ViewBuilder let filters: Filters
 
     @Environment(SettingsStore.self) private var settings
@@ -56,17 +53,23 @@ struct ColumnHeaderBand<Filters: View>: View {
                     .foregroundStyle(band.text)
                     .lineLimit(1)
 
-                CountPill(count: count, band: band)
-
-                Spacer(minLength: 8)
-
-                Button(action: primaryAction) {
-                    Label(primaryTitle, systemImage: primarySymbol)
-                        .fontWeight(.semibold)
+                // A bare "+" in the sidebar header's own style, beside the
+                // heading rather than pushed to the trailing edge. (The row
+                // count sat between the two until September 2026; it is in the
+                // filter track's selected segment now — see `SegmentedFilter`.) It was a filled
+                // accent pill there until September 2026 — the loudest thing in
+                // a header that now melts into the page — and then briefly a
+                // toolbar glyph beside search, where it read as belonging to
+                // neither column. `plus` alone, since the heading it sits under
+                // already says what it creates.
+                Button(action: addAction) {
+                    Image(systemName: "plus")
                 }
-                .buttonStyle(.accentCapsule)
-                .controlSize(.large)
-                .help(primaryHelp)
+                .buttonStyle(.headerAddGlyph)
+                .help(addHelp)
+                .accessibilityLabel(addLabel)
+
+                Spacer(minLength: 0)
             }
 
             filters
@@ -87,43 +90,7 @@ struct ColumnHeaderBand<Filters: View>: View {
         // which in a window with no shadows anywhere is the one thing that looks
         // like a border. The band's own colour against the page is the boundary.
         // The band is chrome for the column under it; VoiceOver should reach
-        // the heading, the count and the button, not a container named "band".
+        // the heading and the "+", not a container named "band".
         .accessibilityElement(children: .contain)
-    }
-}
-
-/// The row count, in a mono pill in the band's own count tones.
-///
-/// Mono because the number changes under you: a proportional face makes a count
-/// jump sideways going from 9 to 10, where a tabular one holds still. See `Mono`
-/// for why the same face draws the timestamps and the type labels, and for the
-/// one setting that opts out of it.
-private struct CountPill: View {
-    let count: Int
-    let band: BandColors
-
-    var body: some View {
-        // Through the app's own locale, not the system's: a count past 999 gets
-        // a group separator, and a Spanish Mac would draw "1.000" in an
-        // otherwise English window (the `Formatting.locale` rule, which is
-        // usually about dates but is the same rule).
-        Text(count, format: .number.locale(Formatting.locale))
-            // `font`, not `card`: the band is chrome, and its height is the
-            // window's business — a reader asking for larger notes is not asking
-            // for a taller header (`Card.chrome(_:)`'s line). The cards' own
-            // timestamps and type labels take `Mono.card` for the same reason
-            // read the other way.
-            .font(Mono.font(size: 11, weight: .semibold))
-            // Digits of one width, so the pill doesn't breathe as the count
-            // changes. Free with a mono face for the glyphs themselves; this
-            // covers the case where the fallback isn't one.
-            .monospacedDigit()
-            .foregroundStyle(band.countText)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(band.countFill))
-            // Spoken as a sentence: "12" alone, read out after the heading,
-            // says nothing about what there are twelve of.
-            .accessibilityLabel("\(count) shown")
     }
 }

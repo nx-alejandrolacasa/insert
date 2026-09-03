@@ -667,6 +667,8 @@ enum Metrics {
     /// Height of the plain glyph buttons in the sidebar's title-bar row (＋ and
     /// the collapse control), used to centre them on the traffic lights.
     static let headerButtonSize: CGFloat = 22
+    /// The disc a header glyph shows on hover.
+    static let headerDisc: CGFloat = 26
     /// Width of the Settings window's toolbar header (chevrons + pane name). Fixed
     /// so the chevrons don't slide about as the pane name changes length.
     static let settingsHeaderWidth: CGFloat = 240
@@ -798,10 +800,9 @@ struct TintPicker: View {
 /// of scaling: with no material left to respond, the fill is the only thing that
 /// can answer.
 struct FlatButtonStyle<S: InsettableShape>: ButtonStyle {
-    /// How the label is sized. `padded` follows `.controlSize`, so the column
-    /// headers' `.large` capsules and the empty states' default-size ones keep the
-    /// difference they had under `.glass`; `square` pins both axes, which is what a
-    /// lone glyph needs — padded, the toolbar's circle came out an oval.
+    /// How the label is sized. `padded` follows `.controlSize`, so a capsule
+    /// keeps the size its `.controlSize` asks for; `square` pins both axes, which
+    /// is what a lone glyph needs — padded, the toolbar's circle came out an oval.
     enum Sizing {
         case padded
         case square(CGFloat)
@@ -869,8 +870,10 @@ extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
     static var actionCapsule: Self { .init(shape: Capsule(), sizing: .padded) }
 }
 
-/// The capsule each column's primary action wears ("New Note", "New Task") —
-/// the theme's `primary` fill under its `primaryLabel`.
+/// The filled capsule a primary action wears — the theme's `primary` fill under
+/// its `primaryLabel`. It dressed each column band's "New Note" / "New Task"
+/// until September 2026, when those became bare "+" glyphs beside the count
+/// (`headerGlyph`); the tasks column's empty-state prompt still wears it.
 ///
 /// This *reverses* the earlier retreat from `.glassProminent`, knowingly. The
 /// prominence went because system blue was drawn from neither `Tint` nor the
@@ -926,13 +929,107 @@ struct AccentButtonStyle: ButtonStyle {
 }
 
 extension ButtonStyle where Self == AccentButtonStyle {
-    /// A column's primary action.
+    /// A primary action in the content layer.
     static var accentCapsule: Self { .init() }
 }
 
 extension ButtonStyle where Self == FlatButtonStyle<Circle> {
-    /// A lone toolbar glyph, at the diameter AppKit rounds one to.
+    /// A lone toolbar glyph, at the diameter AppKit rounds one to: the show
+    /// button, which brings its own background for its fade's sake.
     static var toolbarGlyph: Self { .init(shape: Circle(), sizing: .square(28)) }
+}
+
+/// A bare header glyph — the sidebar's "+" and hide button, and the "+" beside
+/// each column band's count: one weight, `.secondary`, no surface of its own.
+/// A glyph in a filled circle on the page ground read as a chip beside the
+/// sidebar's bare pair at the same height, so the four share this.
+/// `.title3` *is* 15pt on macOS, so it tracks the system text size while looking
+/// the same as the fixed size it replaced.
+///
+/// At rest it is only the glyph; on **hover** the whole circle `toolbarGlyph`
+/// wears at rest comes up under it (`Stone.control` and its hairline), and a press
+/// deepens the wash the way `FlatButtonStyle` does. The circle is the frame's
+/// width and overflows its 22pt height by 2pt each way as a background, so the
+/// header rows keep their measured height and the disc still reads whole.
+///
+/// Two roles. **Neutral** is the hide button: `.secondary` glyph, and the disc
+/// is `Stone.control` under a `.primary` wash. **Accent** is every "add" — the
+/// theme's action colour, which the band's "New Note" / "New Task" pills used to
+/// wear as a fill: at rest the glyph draws in `theme.ring` (the primary solved to
+/// 3:1 on a card, since a pale accent like Nuevo Tokyo's is 1.66:1 as a lone
+/// glyph on white), and on hover the disc fills with `theme.primary` and the
+/// glyph inverts to `theme.primaryLabel`, the black-or-white the theme has
+/// already solved against that fill. A press deepens it with the black wash
+/// `AccentButtonStyle` uses, for the same reason: the label may be white.
+struct HeaderGlyphButtonStyle: ButtonStyle {
+    enum Role {
+        case neutral
+        case accent
+    }
+
+    let role: Role
+
+    func makeBody(configuration: Configuration) -> some View {
+        Surface(configuration: configuration, role: role)
+    }
+
+    private struct Surface: View {
+        let configuration: Configuration
+        let role: Role
+        @State private var hovering = false
+
+        private static let diameter = Metrics.headerDisc
+
+        var body: some View {
+            // Read in the body so the `@Observable` access registers and the
+            // glyph follows a theme change.
+            let theme = SettingsStore.shared.theme
+            let lit = hovering || configuration.isPressed
+            configuration.label
+                .font(.title3.weight(.medium))
+                .foregroundStyle(glyph(theme, lit: lit))
+                .frame(width: Self.diameter, height: Metrics.headerButtonSize)
+                .background {
+                    disc(theme)
+                        .frame(width: Self.diameter, height: Self.diameter)
+                        .opacity(lit ? 1 : 0)
+                }
+                .contentShape(Circle().size(width: Self.diameter, height: Self.diameter)
+                    .offset(y: (Metrics.headerButtonSize - Self.diameter) / 2))
+                .animation(.easeInOut(duration: 0.12), value: hovering)
+                .onHover { hovering = $0 }
+        }
+
+        private func glyph(_ theme: AppTheme, lit: Bool) -> Color {
+            switch role {
+            case .neutral: Color(nsColor: .secondaryLabelColor)
+            case .accent: lit ? theme.primaryLabel : theme.ring
+            }
+        }
+
+        @ViewBuilder
+        private func disc(_ theme: AppTheme) -> some View {
+            switch role {
+            case .neutral:
+                Circle()
+                    .fill(Stone.control)
+                    .overlay(Circle().strokeBorder(Stone.line, lineWidth: 0.5))
+                    .overlay(Circle().fill(.primary.opacity(configuration.isPressed ? 0.14 : 0.07)))
+            case .accent:
+                Circle()
+                    .fill(theme.primary)
+                    .overlay(Circle().strokeBorder(Stone.line, lineWidth: 0.5))
+                    .overlay(Circle().fill(.black.opacity(configuration.isPressed ? 0.12 : 0)))
+            }
+        }
+    }
+}
+
+extension ButtonStyle where Self == HeaderGlyphButtonStyle {
+    /// A neutral header glyph (the sidebar's hide button).
+    static var headerGlyph: Self { .init(role: .neutral) }
+    /// An "add" glyph in the theme's action colour (the three `+` buttons).
+    static var headerAddGlyph: Self { .init(role: .accent) }
 }
 
 // MARK: - Popover surface

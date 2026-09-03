@@ -312,14 +312,8 @@ struct ProjectsSidebar: View {
             NotificationCenter.default.post(name: .toggleSidebar, object: nil)
         } label: {
             Image(systemName: "sidebar.left")
-                // `.title3` *is* 15pt on macOS, so this looks identical while
-                // tracking the system text size instead of ignoring it.
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: Metrics.headerButtonSize)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.headerGlyph)
         .help("Hide projects (⌘§)")
         // `.help` becomes an accessibility *hint*, not a label — without this the
         // button is announced with no name at all.
@@ -327,20 +321,15 @@ struct ProjectsSidebar: View {
     }
 
     /// Add. Matches `hideButton` beside it — two glyphs of one weight, the way
-    /// Safari pairs its own sidebar controls.
+    /// Safari pairs its own sidebar controls — and the toolbar's two "new"
+    /// glyphs at the other end of the same row (`HeaderGlyphButtonStyle`).
     private var addButton: some View {
         Button {
             showingAdd = true
         } label: {
             Image(systemName: "plus")
-                // `.title3` *is* 15pt on macOS, so this looks identical while
-                // tracking the system text size instead of ignoring it.
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: Metrics.headerButtonSize)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.headerAddGlyph)
         .help("New project")
         .accessibilityLabel("New project")
         .popover(isPresented: $showingAdd, arrowEdge: .bottom) {

@@ -397,8 +397,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
     **deleted**. Pinned by `ThemeMigrationTests` and by `ThemePaletteTests`, which
     measures every value in the table.
   - **The column header band** (`ColumnHeaderBand`) replaces the heading row and
-    the loose filter row in both columns: heading, a count in a mono pill, the
-    primary button, then the filter track. Full column width, flush under the
+    the loose filter row in both columns: heading, a bare `+`, then the filter
+    track, whose **selected segment carries the row count** in a small mono disc.
+    (The `+` was a filled primary button at the trailing edge until September
+    2026 — see the "new" control bullet — and the count sat beside the heading
+    until the same month, where it read as the column's *total*, which the
+    sidebar already says; next to the filter's name it reads as what it is, the
+    length of the list under it.) Full column width, flush under the
     toolbar, **no radius of its own** — the window's corner clips it, which is
     what makes two adjacent bands read as one strip. **No hairline under it** in
     any theme: a light band took one until it was seen on screen, where it read as
@@ -753,6 +758,25 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   meaning the common pass schedules nothing and the rare change lands one frame
   late. That this write was the mutation in the trace was not instrumented —
   don't repeat it as fact; the write-during-layout was a violation regardless.
+- **Each column's "new" control is a bare `+` beside the count in its band**,
+  in the sidebar header's own glyph style (`HeaderGlyphButtonStyle`, shared with
+  the sidebar's `+` and hide button). It was a filled accent pill pushed to the
+  band's trailing edge until September 2026, and the change was made on sight in
+  two steps worth keeping: once the band took the page ground (the September
+  experiment in `ColumnHeaderBand`) the two pills were the loudest thing in a
+  header that otherwise melts into the column, so they moved to the **toolbar**
+  beside search — first as `toolbarGlyph` circles, which read as chips next to
+  the sidebar's bare pair at the same height, then as bare glyphs, which read as
+  belonging to neither column. Back in the band, beside the number, a `+` says
+  "one more of these" under a heading that already names what "these" are, so
+  it is `plus` alone rather than a badged symbol. Each posts the same notification
+  its menu command and shortcut post (`.newNote` / `.newTask`), so the panels
+  create, scroll to and focus the card identically whichever route was taken —
+  the action was never tied to the control. What the change costs, knowingly: the
+  theme's `primary` loses its largest surface at rest, surviving on the rings,
+  the checkbox, the caret, the active date pill and the tasks column's empty-state
+  prompt (`AccentButtonStyle`'s one remaining user). The toolbar's trailing side
+  is the search field alone.
 - **The toolbar's leading side is the show button and AppKit's own title, and
   nothing else.** A project icon sat between them from an earlier design and was
   **removed**, along with every attempt to space it: the whole episode is kept
@@ -2567,7 +2591,10 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   against the band it sits on —
   while keeping both standing objections honoured: it's flat (glass casts a
   drop shadow; see "No shadows"), and one prominent control per surface is
-  still the ration. `.glassProminent` survives only on each popover's confirm
+  still the ration. **Since September 2026 the two band pills are gone** — each
+  is a bare `+` beside the count (see the "new" control bullet) — and the
+  style's one remaining user is the tasks column's empty-state prompt.
+  `.glassProminent` survives only on each popover's confirm
   button, which `.tint()` now paints in the theme's primary rather than system
   blue.
 - **No shadows, anywhere.** Not a gap: the window is deliberately flat, the look it
@@ -2579,11 +2606,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the only thing in the window casting light.
   Which is also why the window's **buttons are no longer glass**: Liquid Glass draws
   its own drop shadow and there's no API to turn it off. The cards' "Done" and
-  the toolbar's show-sidebar glyph wear `FlatButtonStyle` — `Stone.chip` fill
+  the toolbar's show-sidebar glyph wear
+  `FlatButtonStyle` — `Stone.chip` fill
   and `Stone.line` hairline, with hover as a `.primary` wash and a press as a
-  deeper one; "New Note" / "New Task" wear the same construction with the
-  accent under it (`AccentButtonStyle`, hover a black wash since the label is
-  white). That wash *is* the hover state plain
+  deeper one; the tasks column's empty-state "New Task" wears the same
+  construction with the accent under it (`AccentButtonStyle`, hover a black wash
+  since the label is white). That wash *is* the hover state plain
   `.glass` never gave them, which had the primary action of each column reading as
   decoration. One flat style, two shapes, and the `Sizing` is why: `.actionCapsule`
   pads its label off `.controlSize`, `.toolbarGlyph` pins a square 28pt, because a

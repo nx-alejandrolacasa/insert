@@ -31,9 +31,28 @@ import SwiftUI
 /// (CLAUDE.md decision 5). Every unselected label clears 6.1:1 on its track and
 /// every selected one 10.9:1 on the raised pill.
 ///
+/// The **selected segment carries the row count** (`count`), as a small disc in
+/// the band's count tones after its label. The count lived in the band's heading
+/// row until September 2026 and was read as the column's total — which is what
+/// the sidebar's `X notes · Y tasks` already says — when it is the *filtered*
+/// count, the length of the list under it. Beside the name of the filter that
+/// produced it, the number says what it counts.
+///
 /// Selection is reported through a callback rather than a binding, matching
 /// how the panels drive their `AppState` filters.
+/// The track's geometry, shared with the tasks column's date dropdown so a pill
+/// *beside* the track comes out the track's exact height: a segment's insets plus
+/// the track's own, around the same caption label. Outside the generic struct
+/// because a generic type can't hold static stored properties.
+enum SegmentedFilterInsets {
+    static let track: CGFloat = 3
+    static let segmentHorizontal: CGFloat = 12
+    static let segmentVertical: CGFloat = 4
+}
+
 struct SegmentedFilter<ID: Hashable>: View {
+    private typealias Insets = SegmentedFilterInsets
+
     struct Segment: Identifiable {
         let id: ID
         let label: String
@@ -42,6 +61,9 @@ struct SegmentedFilter<ID: Hashable>: View {
 
     let segments: [Segment]
     let selection: ID
+    /// How many rows the current selection shows; drawn in the selected
+    /// segment. `nil` for a track with nothing to count.
+    var count: Int? = nil
     let onSelect: (ID) -> Void
 
     @Namespace private var indicatorSpace
@@ -63,7 +85,7 @@ struct SegmentedFilter<ID: Hashable>: View {
                 segmentButton(segment)
             }
         }
-        .padding(3)
+        .padding(Insets.track)
         // The recess: quiet on purpose, so it can't compete with the glass
         // indicator inside it. The band's hue at ~92% L in Light, the band
         // itself lifted 10% toward white in Dark.
@@ -104,15 +126,21 @@ struct SegmentedFilter<ID: Hashable>: View {
                         .frame(width: 6, height: 6)
                 }
                 Text(segment.label)
+                    .font(.caption.weight(selected ? .semibold : .regular))
+                    // Not `.primary`: a label on a themed track has to be solved
+                    // against that track, and the selected one sits on a
+                    // near-white pill where the band's own fill is what reads.
+                    .foregroundStyle(selected ? band.segmentLabelSelected : band.segmentLabel)
+                if selected, let count {
+                    CountBadge(count: count, band: band)
+                }
             }
-            .font(.caption.weight(selected ? .semibold : .regular))
-            // Not `.primary`: a label on a themed track has to be solved
-            // against that track, and the selected one sits on a near-white
-            // pill where the band's own fill is what reads.
-            .foregroundStyle(selected ? band.segmentLabelSelected : band.segmentLabel)
             .lineLimit(1)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
+            // The badge is a disc with its own margin built in, so the pill
+            // ends closer to it than to a bare label.
+            .padding(.leading, Insets.segmentHorizontal)
+            .padding(.trailing, selected && count != nil ? 6 : Insets.segmentHorizontal)
+            .padding(.vertical, Insets.segmentVertical)
             // The pills' floor, less the track's own 3pt padding, so the whole
             // control lines up with the chips and menus beside it.
             .frame(minHeight: Metrics.chipHeight - 6)
@@ -155,5 +183,46 @@ struct SegmentedFilter<ID: Hashable>: View {
                 .glassEffect(.regular, in: Capsule())
                 .clipShape(Capsule().inset(by: -1))
         }
+    }
+}
+
+/// The row count, in a mono disc in the band's own count tones, inside the
+/// selected segment.
+///
+/// Mono because the number changes under you: a proportional face makes a count
+/// jump sideways going from 9 to 10, where a tabular one holds still. See `Mono`
+/// for why the same face draws the timestamps and the type labels, and for the
+/// one setting that opts out of it.
+private struct CountBadge: View {
+    let count: Int
+    let band: BandColors
+
+    private static let size: CGFloat = 18
+
+    var body: some View {
+        // Through the app's own locale, not the system's: a count past 999 gets
+        // a group separator, and a Spanish Mac would draw "1.000" in an
+        // otherwise English window (the `Formatting.locale` rule, which is
+        // usually about dates but is the same rule).
+        Text(count, format: .number.locale(Formatting.locale))
+            // `font`, not `card`: the band is chrome, and its height is the
+            // window's business — a reader asking for larger notes is not asking
+            // for a taller header (`Card.chrome(_:)`'s line). The cards' own
+            // timestamps and type labels take `Mono.card` for the same reason
+            // read the other way.
+            .font(Mono.font(size: 10, weight: .semibold))
+            // Digits of one width, so the pill doesn't breathe as the count
+            // changes. Free with a mono face for the glyphs themselves; this
+            // covers the case where the fallback isn't one.
+            .monospacedDigit()
+            .foregroundStyle(band.countText)
+            // A disc that fits inside the segment pill — a capsule only once
+            // the digits need the width.
+            .padding(.horizontal, 5)
+            .frame(minWidth: Self.size, minHeight: Self.size)
+            .background(Capsule().fill(band.countFill))
+            // Spoken as a sentence: "12" alone, read out after the heading,
+            // says nothing about what there are twelve of.
+            .accessibilityLabel("\(count) shown")
     }
 }

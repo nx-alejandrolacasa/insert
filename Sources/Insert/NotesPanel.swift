@@ -45,21 +45,17 @@ struct NotesPanel: View {
 
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                // The heading, the count, "New Note" and the type filter, all
-                // inside the themed band — see `ColumnHeaderBand`.
+                // The heading, "+" and the type filter, all inside the themed
+                // band — see `ColumnHeaderBand`; the count rides the filter's
+                // selected segment. The "+" posts the
+                // notification the reader below listens for, so it focuses the
+                // new note exactly as ⌘N does.
                 ColumnHeaderBand(
                     title: "Notes",
-                    count: notes.count,
-                    primaryTitle: "New Note",
-                    primarySymbol: "plus",
-                    primaryHelp: "Create a new note (⌘N)",
-                    // The button needs the scroll proxy to focus the new note,
-                    // so it re-uses the notification the reader already listens
-                    // for.
-                    primaryAction: {
-                        NotificationCenter.default.post(name: .newNote, object: nil)
-                    },
-                    filters: { typeFilter }
+                    addLabel: "New note",
+                    addHelp: "New note (⌘N)",
+                    addAction: { NotificationCenter.default.post(name: .newNote, object: nil) },
+                    filters: { typeFilter(count: notes.count) }
                 )
 
                 if notes.isEmpty {
@@ -127,7 +123,7 @@ struct NotesPanel: View {
     /// mark on a card draws in, so the row and the cards it selects agree. Not a
     /// theme value: the four types are the same four in every theme, and not `ink`
     /// either, which is the *text* value (see `Tint.accent` for the split).
-    private var typeFilter: some View {
+    private func typeFilter(count: Int) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             SegmentedFilter<String?>(
                 segments: [SegmentedFilter.Segment(id: nil, label: "All")]
@@ -138,6 +134,7 @@ struct NotesPanel: View {
                             dot: $0.tint.accent)
                     },
                 selection: appState.noteTypeFilter,
+                count: count,
                 onSelect: { appState.noteTypeFilter = $0 }
             )
             .padding(.vertical, 1)

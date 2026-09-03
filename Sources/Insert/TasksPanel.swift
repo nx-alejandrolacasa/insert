@@ -51,19 +51,13 @@ struct TasksPanel: View {
                 // The same band the notes column wears, with the state track
                 // and the date dropdown as its second row — the two columns
                 // present their headers identically, and now share a surface.
+                // The "+" routes through the same notification ⌘T posts.
                 ColumnHeaderBand(
                     title: "Tasks",
-                    count: tasks.count,
-                    primaryTitle: "New Task",
-                    primarySymbol: "plus",
-                    primaryHelp: "Create a new task",
-                    // Route through the same notification ⌘T / the menu posts,
-                    // so the local button and the global command open-and-focus
-                    // identically.
-                    primaryAction: {
-                        NotificationCenter.default.post(name: .newTask, object: nil)
-                    },
-                    filters: { filterRow }
+                    addLabel: "New task",
+                    addHelp: "New task (⌘T)",
+                    addAction: { NotificationCenter.default.post(name: .newTask, object: nil) },
+                    filters: { filterRow(count: tasks.count) }
                 )
 
                 if tasks.isEmpty {
@@ -141,10 +135,10 @@ struct TasksPanel: View {
     /// date axis stays a **separate button outside the track** (CLAUDE.md
     /// decision 7): it is a different kind of control, a window with an off
     /// state, and folding it into the track would put a toggle among radios.
-    private var filterRow: some View {
+    private func filterRow(count: Int) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                stateTrack
+                stateTrack(count: count)
                 Spacer(minLength: 16)
                 dateMenu
             }
@@ -152,7 +146,7 @@ struct TasksPanel: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    stateTrack
+                    stateTrack(count: count)
                     dateMenu
                 }
                 .padding(.vertical, 1)
@@ -163,7 +157,7 @@ struct TasksPanel: View {
     /// Every segment carries its state's own dot — grey All, orange Pending,
     /// green Done (`TaskFilter.tint`), the scheme the old pills wore — exactly
     /// as the notes track gives every type segment its type's dot.
-    private var stateTrack: some View {
+    private func stateTrack(count: Int) -> some View {
         SegmentedFilter<TaskFilter>(
             segments: TaskFilter.allCases.map { filter in
                 SegmentedFilter.Segment(
@@ -173,6 +167,9 @@ struct TasksPanel: View {
                 )
             },
             selection: appState.taskFilter,
+            // The list's length under *both* axes, so the number in the state
+            // segment agrees with what the date dropdown beside it left.
+            count: count,
             onSelect: { appState.taskFilter = $0 }
         )
     }
@@ -215,8 +212,11 @@ struct TasksPanel: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(active ? settings.theme.primaryLabel : band.text)
             .lineLimit(1)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
+            // The track's height exactly: a segment's insets plus the track's
+            // own, around the same caption label — so the two halves of the
+            // row are one size (`SegmentedFilterInsets`).
+            .padding(.horizontal, SegmentedFilterInsets.segmentHorizontal + SegmentedFilterInsets.track)
+            .padding(.vertical, SegmentedFilterInsets.segmentVertical + SegmentedFilterInsets.track)
             .chipHeight()
             .background(
                 Capsule().fill(active
