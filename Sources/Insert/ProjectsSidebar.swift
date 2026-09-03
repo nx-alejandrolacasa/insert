@@ -38,7 +38,8 @@ struct ProjectsSidebar: View {
     /// into a gap (`gap(at:)`). Measured rather than assumed: a row's height is two
     /// lines of text at whatever size the system is set to, and a rule written in
     /// points would be wrong on the first person to enlarge it. `.global`
-    /// specifically — see the note at the foot of this file.
+    /// specifically — see the note at the foot of this file. Pruned as rows leave
+    /// the list, since a row stops reporting but keeps its last frame.
     @State private var rowFrames: [UUID: CGRect] = [:]
     /// Top of the header's title-bar band in window coordinates (see `header`).
     @State private var bandTop: CGFloat = 0
@@ -82,6 +83,14 @@ struct ProjectsSidebar: View {
                 case .down: moveSelection(by: 1)
                 default: break
                 }
+            }
+            // A row taken out of the list — deleted, or filtered away by the
+            // search — reports nothing on its way out and would leave its last
+            // frame behind. `gap(at:)` reads frames as current, so a stale one is
+            // worse than none: it would place the pointer against a rectangle the
+            // row no longer occupies.
+            .onChange(of: Set(visibleProjects.map(\.id))) { _, ids in
+                rowFrames = rowFrames.filter { ids.contains($0.key) }
             }
         }
         // Reclaim the title-bar strip: the sidebar's content runs to the very
@@ -490,14 +499,7 @@ struct ProjectsSidebar: View {
     /// gap below it), so no insertion line is drawn and no write is made for a drag
     /// that changes nothing.
     private func gap(at y: CGFloat, moving id: UUID) -> DropGap? {
-        // Nothing measured at all means the pointer can't be placed among the
-        // rows, and the fallback below would read as "past the last one" — i.e. a
-        // drag anywhere would send the project to the end of the list. Sit it out.
-        guard visibleProjects.contains(where: { rowFrames[$0.id] != nil }) else { return nil }
-        // A row that has never reported a frame is one the list hasn't laid out;
-        // skipping it is right either way, since the pointer can't be over it.
-        let landing = visibleProjects.first { rowFrames[$0.id].map { y < $0.midY } ?? false }
-        let gap: DropGap = landing.map { .before($0.id) } ?? .end
+        guard let gap = landingGap(at: y) else { return nil }
         guard let from = visibleProjects.firstIndex(where: { $0.id == id }) else { return gap }
         switch gap {
         case let .before(target):
@@ -506,6 +508,26 @@ struct ProjectsSidebar: View {
         case .end:
             return from == visibleProjects.count - 1 ? nil : gap
         }
+    }
+
+    /// The gap the pointer is in before that "it's already there" test: the first
+    /// row whose midpoint it hasn't reached, else the end of the list.
+    ///
+    /// A row without a **current** frame is one the list hasn't laid out (or has
+    /// just brought back), so where the pointer sits relative to it is *unknown* —
+    /// and this stops there rather than reading past it. Taking an unmeasured row
+    /// as "the pointer is not above it" is what let a drag fall through to `.end`
+    /// and write the project to the bottom of `Projects.md` on nothing more than a
+    /// row that hadn't reported yet. `.end` is therefore only ever answered with
+    /// every row measured, which is what having the end of the list on screen to
+    /// aim at means.
+    private func landingGap(at y: CGFloat) -> DropGap? {
+        guard !visibleProjects.isEmpty else { return nil }
+        for project in visibleProjects {
+            guard let frame = rowFrames[project.id] else { return nil }
+            if y < frame.midY { return .before(project.id) }
+        }
+        return .end
     }
 
     /// Where a dropped project would land. Drawn inside the row's own frame rather

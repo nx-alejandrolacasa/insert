@@ -144,11 +144,11 @@ struct ProjectMentionField: View {
         // happened) and swallowed it, and only the second reached the editor.
         // The first responder is the truth, which is the same conclusion
         // `MarkdownReturn` reached for the same reason. A *field* editor here is
-        // this field or another one — not a body — so it doesn't disqualify.
-        if let responder = NSApp.keyWindow?.firstResponder as? NSTextView,
-           !responder.isFieldEditor {
-            return false
-        }
+        // this field or another one — not a body — so it doesn't disqualify, and
+        // neither does the view-mode preview, which is a text view of its own
+        // and used to stand this monitor down for a card nobody is typing in.
+        // `MarkdownResponder` is where the three of them are told apart.
+        if MarkdownResponder.focusedMarkdownBody() != nil { return false }
         // ⌘Return finishes the edit, the same as Esc — and before the dropdown
         // gets a say, because Return *alone* there means "take the highlighted
         // match" and ⌘Return has to mean one thing wherever it is pressed.

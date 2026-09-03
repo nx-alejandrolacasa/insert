@@ -37,9 +37,24 @@ final class Library {
     typealias TrashOperation = @Sendable (URL) throws -> URL
 
     private(set) var projects: [Project] = []
-    private(set) var notes: [Note] = []
-    private(set) var tasks: [TaskItem] = []
+    private(set) var notes: [Note] = [] { didSet { cachedProjectCounts = nil } }
+    private(set) var tasks: [TaskItem] = [] { didSet { cachedProjectCounts = nil } }
     private(set) var deletionFailure: DeletionFailure?
+
+    /// `counts(forProject:)`'s one-pass table, built on demand.
+    ///
+    /// Invalidated from the two `didSet`s above rather than from each of the
+    /// dozen-odd places that append, assign, re-file or remove a record, so a
+    /// new mutation site cannot forget to do it — and a stale count is a wrong
+    /// number on screen. An in-place `notes[i] = …` is a mutating access to the
+    /// property, so it fires too; `testProjectCountsFollowEveryMutation` is what
+    /// holds that claim up.
+    ///
+    /// `@ObservationIgnored`, so filling it in during a read notifies nobody and
+    /// cannot feed back into the render that asked. What registers the
+    /// dependency instead is `counts(forProject:)` reading `notes` and `tasks`.
+    @ObservationIgnored
+    private var cachedProjectCounts: [UUID: (notes: Int, tasks: Int)]?
 
     /// Root storage folder. Setting it re-homes the index and reloads.
     private(set) var rootURL: URL
@@ -73,6 +88,13 @@ final class Library {
         }
     }
 
+    /// How a true duplicate found while loading reaches the Trash. The deletion
+    /// entry points take theirs as a parameter; this one is reached from
+    /// `reloadAll` with no caller to pass it, so it is a property — which is also
+    /// what keeps `StorageLayoutTests`' fixtures out of the real Trash.
+    @ObservationIgnored
+    var duplicateTrashOperation: TrashOperation = Library.systemTrash
+
     private static let systemTrash: TrashOperation = { source in
         var destination: NSURL?
         try FileManager.default.trashItem(at: source, resultingItemURL: &destination)
@@ -101,7 +123,7 @@ final class Library {
     private init() {
         self.rootURL = Self.resolveDefaultRoot()
         ensureStructure()
-        reloadAll()
+        reloadAllBlocking()
         seedIfFirstRun()
         startWatching()
     }
@@ -182,7 +204,7 @@ final class Library {
         rootURL = url
         UserDefaults.standard.set(url.path, forKey: "rootFolderPath")
         ensureStructure()
-        reloadAll()
+        reloadAllBlocking()
         startWatching()
     }
 
@@ -288,16 +310,56 @@ final class Library {
     // MARK: - Loading
 
     /// Reads the entire library — every note, every task — into the index.
-    func reloadAll() {
-        // Queued writes first, or this reads the files they are about to replace
-        // and reverts the in-memory index to what the disk still says.
+    ///
+    /// The queued writes are drained **off** the main actor. The drain used to be
+    /// the first statement here as a `diskQueue.sync {}`, which put a stalled
+    /// iCloud rename between the watcher firing and the next frame — the exact
+    /// stall the queue was added to remove. Suspending keeps the ordering that
+    /// matters, since nothing is decoded until every queued write has landed, and
+    /// gives up only the window it was holding while it waited.
+    func reloadAll() async {
+        await drainDiskWrites()
+        load()
+    }
+
+    /// `reloadAll` for the two callers that have to be finished loading by the
+    /// time they return: `init`, which has no `await` to make and no window yet
+    /// to hold up, and `setRoot`, whose callers read the index on the next line.
+    /// Both are once-off — a launch, or a folder picked in Settings — so a block
+    /// there is a deliberate cost rather than one paid per external edit.
+    private func reloadAllBlocking() {
         flushDiskWrites()
+        load()
+    }
+
+    /// Everything after the drain. Main actor and with no suspension point in
+    /// it, so two reloads can queue up behind each other but never interleave
+    /// and leave the index half of one and half of the other.
+    private func load() {
         projects = loadProjects()
-        notes = deduped(Self.decoded(markdownFiles(in: notesDir), MarkdownFiles.decodeNote))
-        tasks = deduped(Self.decoded(
-            markdownFiles(in: tasksDir) + markdownFiles(in: tasksDoneDir),
-            MarkdownFiles.decodeTask
-        ))
+        notes = deduped(
+            Self.decoded(markdownFiles(in: notesDir), MarkdownFiles.decodeNote),
+            encode: { (note: Note) in MarkdownFiles.encode(note) },
+            reidentify: { note in
+                var fresh = note
+                fresh.id = UUID()
+                persistNote(&fresh)
+                return fresh
+            }
+        )
+        tasks = deduped(
+            Self.decoded(
+                markdownFiles(in: tasksDir) + markdownFiles(in: tasksDoneDir),
+                MarkdownFiles.decodeTask
+            ),
+            encode: { (task: TaskItem) in MarkdownFiles.encode(task) },
+            reidentify: { task in
+                var fresh = task
+                fresh.id = UUID()
+                persistTask(&fresh)
+                return fresh
+            }
+        )
         reconcileTaskFolders()
     }
 
@@ -375,8 +437,13 @@ final class Library {
     /// off — or reopened — by hand in Obsidian. Nothing depends on it for *finding*
     /// tasks, since both folders are read in full; it's what stops the layout
     /// quietly becoming a lie.
+    ///
+    /// It is also where a task ticked off outside Insert gets its completion date
+    /// (see `stampUnstampedCompletion(at:)`), for the same reason: what the file
+    /// says has to be made true rather than guessed at later.
     private func reconcileTaskFolders() {
         for idx in tasks.indices {
+            stampUnstampedCompletion(at: idx)
             guard let from = tasks[idx].fileURL else { continue }
             let wanted = tasks[idx].done ? tasksDoneDir : tasksDir
             guard key(from.deletingLastPathComponent()) != key(wanted) else { continue }
@@ -391,30 +458,70 @@ final class Library {
         }
     }
 
-    /// Keeps one file per id — the most recently updated — and trashes the rest.
+    /// Gives a task ticked off outside Insert the completion date it has none of,
+    /// and writes it back so the stamp survives the next launch.
     ///
-    /// Two files can only share an id if a rename went wrong (see `updateNote`),
-    /// and duplicate ids poison the UI: SwiftUI's `ForEach` sees repeated
-    /// identities and lays out phantom, empty rows. Trashing rather than deleting
-    /// leaves the loser recoverable.
-    private func deduped<T: MarkdownRecord>(_ items: [T]) -> [T] {
-        var newest: [UUID: T] = [:]
-        var stale: [URL] = []
+    /// A task finished in Obsidian — or before `completed` existed — arrives done
+    /// with no stamp, and the retention purge refuses to age one on `updated`: an
+    /// edit date is not a completion date, so a note last touched a year ago and
+    /// ticked off this morning would be trashed on sight. Stamping here is what
+    /// gives it an age at all, and the age it gets is the moment Insert first saw
+    /// it done. `updated` is deliberately left alone — nothing was edited.
+    private func stampUnstampedCompletion(at idx: Int) {
+        guard tasks[idx].done, tasks[idx].completed == nil else { return }
+        var stamped = tasks[idx]
+        stampCompletion(&stamped)
+        persistTask(&stamped)
+        tasks[idx] = stamped
+    }
+
+    /// Keeps one record per id, and never loses writing to do it.
+    ///
+    /// Two files can share an id if a rename went wrong (see `updateNote`) or the
+    /// vault was duplicated in Finder, and duplicate ids poison the UI: SwiftUI's
+    /// `ForEach` sees repeated identities and lays out phantom, empty rows.
+    ///
+    /// Only a **true** duplicate is trashed — one that `encode`s to the same
+    /// string, which is the same id, the same `updated` and the same content, so
+    /// there is nothing in it the survivor doesn't already have. Anything else is
+    /// two pieces of writing under one id: the newer keeps the id, the older is
+    /// given a fresh one and saved under it, so both files stay. Breaking an
+    /// `updated` tie by directory order and trashing the loser is what this used
+    /// to do, and a Finder duplicate whose frontmatter was untouched can be the
+    /// copy carrying the new writing.
+    ///
+    /// Trashing rather than deleting still leaves a true duplicate recoverable.
+    private func deduped<T: MarkdownRecord>(
+        _ items: [T],
+        encode: (T) -> String,
+        reidentify: (T) -> T
+    ) -> [T] {
+        // Keeps the on-disk order of everything already seen; sorting is the
+        // caller's job. A re-identified record lands at the end, which is as
+        // stable as the load order it came from.
+        var kept: [T] = []
+        var slot: [UUID: Int] = [:]
         for item in items {
-            guard let rival = newest[item.id] else {
-                newest[item.id] = item
+            guard let index = slot[item.id] else {
+                slot[item.id] = kept.count
+                kept.append(item)
                 continue
             }
-            let loser = item.updated > rival.updated ? rival : item
-            newest[item.id] = item.updated > rival.updated ? item : rival
-            if let url = loser.fileURL { stale.append(url) }
+            let rival = kept[index]
+            if encode(item) == encode(rival) {
+                log.error("duplicate file, trashing \(item.fileURL?.lastPathComponent ?? "?", privacy: .public)")
+                if let url = item.fileURL { enqueueTrash(url) }
+                continue
+            }
+            let newer = item.updated > rival.updated ? item : rival
+            let older = item.updated > rival.updated ? rival : item
+            let renamed = reidentify(older)
+            kept[index] = newer
+            slot[renamed.id] = kept.count
+            kept.append(renamed)
+            log.error("duplicate id, re-identified \(renamed.fileURL?.lastPathComponent ?? "?", privacy: .public)")
         }
-        for url in stale {
-            log.error("duplicate id, trashing \(url.lastPathComponent, privacy: .public)")
-            enqueueTrash(url)
-        }
-        // Keep the on-disk order of the survivors; sorting is the caller's job.
-        return items.filter { newest[$0.id]?.fileURL == $0.fileURL }
+        return kept
     }
 
     /// A file's identity, for comparing one path with another.
@@ -458,8 +565,20 @@ final class Library {
         label: "com.alejandrolacasa.insert.disk", qos: .utility)
 
     /// Blocks until every queued write has landed. Cheap when the queue is idle.
+    ///
+    /// Deliberately still blocking: `AppDelegate.applicationWillTerminate` has no
+    /// suspension to make, and a quit that outran a pending save would lose it.
+    /// Anything with a main actor to give back wants `drainDiskWrites()`.
     func flushDiskWrites() {
         Self.diskQueue.sync {}
+    }
+
+    /// The same drain as a suspension. The queue is serial, so an empty block
+    /// resumes only once everything already on it has landed.
+    private func drainDiskWrites() async {
+        await withCheckedContinuation { continuation in
+            Self.diskQueue.async { continuation.resume() }
+        }
     }
 
     private func suppressReload() {
@@ -511,7 +630,7 @@ final class Library {
     /// it follows the same no-fallback rule and leaves a failed source untouched.
     private func enqueueTrash(_ url: URL) {
         suppressReload()
-        let operation = Self.systemTrash
+        let operation = duplicateTrashOperation
         Self.diskQueue.async {
             if case .failure(let error) = Self.performTrash(url, using: operation) {
                 log.error("trash failed \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -783,10 +902,15 @@ final class Library {
 
     // MARK: - Housekeeping
 
-    /// Clears out tasks finished longer ago than `retention` allows. Tasks the
-    /// user never stamped (ticked off in Obsidian, or before `completed`
-    /// existed) fall back to their `updated` date, which is the closest thing
-    /// on record.
+    /// Clears out tasks finished longer ago than `retention` allows.
+    ///
+    /// A done task with no `completed` stamp is **never** purged. This used to
+    /// fall back to `updated`, which is an edit date and not a completion date:
+    /// a note last touched a year ago and ticked off in Obsidian this morning
+    /// was trashed on the first housekeeping run. Those tasks are stamped as
+    /// they load instead (`stampUnstampedCompletion(at:)`), so they age from
+    /// when Insert first saw them done, and this guard is what makes a task that
+    /// somehow reaches the purge unstamped survive it.
     ///
     /// Files go to the Trash rather than being unlinked: this runs unattended,
     /// so the user has to be able to get their notes back if the setting turns
@@ -799,7 +923,7 @@ final class Library {
     ) async -> Int {
         guard let cutoff = retention.cutoff(from: now) else { return 0 }
 
-        let expired = tasks.filter { $0.done && ($0.completed ?? $0.updated) < cutoff }
+        let expired = completedTasks(finishedBefore: cutoff)
         guard !expired.isEmpty else { return 0 }
 
         var trashed = 0
@@ -839,16 +963,79 @@ final class Library {
     /// Settings pane say what a choice costs before it's made.
     func completedTaskCount(expiredUnder retention: DoneTaskRetention, now: Date = Date()) -> Int {
         guard let cutoff = retention.cutoff(from: now) else { return 0 }
-        return tasks.filter { $0.done && ($0.completed ?? $0.updated) < cutoff }.count
+        return completedTasks(finishedBefore: cutoff).count
+    }
+
+    /// The one definition of "finished long enough ago to go", so what Settings
+    /// promises and what the purge does can't disagree.
+    private func completedTasks(finishedBefore cutoff: Date) -> [TaskItem] {
+        tasks.filter { task in
+            guard task.done, let completed = task.completed else { return false }
+            return completed < cutoff
+        }
     }
 
     // MARK: - Queries
 
     /// (notes, tasks) counts for a project. Exact: everything is loaded.
+    ///
+    /// One pass over both arrays for *every* project, cached, because the
+    /// sidebar asks per row: two full scans per row, on every library mutation,
+    /// meant a 400-note library walked 4,000 records per debounced save with
+    /// five projects listed — and the debounce fires while someone types.
+    ///
+    /// Both arrays are read on the way through whether the table is fresh or
+    /// not, so a row registers exactly the `@Observable` dependency the two
+    /// scans it replaces did and still re-renders when either changes. Reading
+    /// them is a retain, not a copy. The table itself is `@ObservationIgnored`
+    /// and would register nothing, which is why the reads are not inside the
+    /// rebuild.
     func counts(forProject id: UUID) -> (notes: Int, tasks: Int) {
-        let n = notes.lazy.filter { $0.projectIDs.contains(id) }.count
-        let t = tasks.lazy.filter { $0.projectIDs.contains(id) }.count
-        return (n, t)
+        let notes = self.notes, tasks = self.tasks
+        let table = cachedProjectCounts ?? Self.projectCounts(notes: notes, tasks: tasks)
+        cachedProjectCounts = table
+        return table[id] ?? (0, 0)
+    }
+
+    private nonisolated static func projectCounts(
+        notes: [Note], tasks: [TaskItem]
+    ) -> [UUID: (notes: Int, tasks: Int)] {
+        var table: [UUID: (notes: Int, tasks: Int)] = [:]
+        // A record is counted once per project however many times it lists it.
+        // Nothing in the app assigns a project twice, but a hand-edited
+        // frontmatter can, and the `contains` this replaces counted such a
+        // record once.
+        for note in notes {
+            var counted: Set<UUID> = []
+            for id in note.projectIDs where counted.insert(id).inserted {
+                table[id, default: (0, 0)].notes += 1
+            }
+        }
+        for task in tasks {
+            var counted: Set<UUID> = []
+            for id in task.projectIDs where counted.insert(id).inserted {
+                table[id, default: (0, 0)].tasks += 1
+            }
+        }
+        return table
+    }
+
+    /// Case- and diacritic-insensitive substring match — the one rule all three
+    /// columns and the toolbar field search by.
+    ///
+    /// `range(of:options:)` compares in place, where the `lowercased()` this
+    /// replaces built a fresh copy of every record's title *and* body on every
+    /// keystroke, for every column. Diacritic insensitivity comes along with it
+    /// and is a gain rather than a cost: "navegacion" finds "navegación".
+    ///
+    /// No locale is passed and none is read. Both options are locale-independent,
+    /// which is what keeps this clear of the `Locale.current` rule — see
+    /// `Formatting`.
+    private static let searchOptions: String.CompareOptions =
+        [.caseInsensitive, .diacriticInsensitive]
+
+    private func matches(_ query: String, in text: String) -> Bool {
+        text.range(of: query, options: Self.searchOptions) != nil
     }
 
     /// Notes for a project (`nil` = all), sorted and filtered. `pinned` holds the
@@ -863,11 +1050,9 @@ final class Library {
         var result = notes
         if let projectID { result = result.filter { $0.projectIDs.contains(projectID) } }
         if let typeFilter { result = result.filter { $0.typeID == typeFilter } }
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
-            result = result.filter {
-                $0.title.lowercased().contains(query) || $0.body.lowercased().contains(query)
-            }
+            result = result.filter { matches(query, in: $0.title) || matches(query, in: $0.body) }
         }
         return result.sorted { sortNotes($0, $1, by: sort, pinned: pinned) }
     }
@@ -900,11 +1085,9 @@ final class Library {
         result = result.filter { task in
             filter.matches(task) && (dateFilter?.matches(task, now: now) ?? true)
         }
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
-            result = result.filter {
-                $0.title.lowercased().contains(query) || $0.body.lowercased().contains(query)
-            }
+            result = result.filter { matches(query, in: $0.title) || matches(query, in: $0.body) }
         }
         // Pending first, then by due date (soonest, undated last), then newest.
         // The filtering above reads the *live* `done`; only the order below is
@@ -960,12 +1143,12 @@ final class Library {
     }
 
     func search(_ query: String) -> SearchResults {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return SearchResults(projects: [], notes: [], tasks: []) }
         return SearchResults(
-            projects: projects.filter { $0.name.lowercased().contains(q) },
-            notes: notes.filter { $0.title.lowercased().contains(q) || $0.body.lowercased().contains(q) },
-            tasks: tasks.filter { $0.title.lowercased().contains(q) || $0.body.lowercased().contains(q) }
+            projects: projects.filter { matches(q, in: $0.name) },
+            notes: notes.filter { matches(q, in: $0.title) || matches(q, in: $0.body) },
+            tasks: tasks.filter { matches(q, in: $0.title) || matches(q, in: $0.body) }
         )
     }
 
@@ -975,7 +1158,7 @@ final class Library {
         watcher = DirectoryWatcher(urls: [notesDir, tasksDir, tasksDoneDir, rootURL]) { [weak self] in
             guard let self else { return }
             if Date() < self.suppressReloadUntil { return }
-            self.reloadAll()
+            Task { await self.reloadAll() }
         }
     }
 }

@@ -17,10 +17,11 @@ import SwiftUI
 /// laid-out height at the proposed width, so `CollapsibleMarkdown`'s clamp,
 /// fade and chevron measurement work unchanged; a **click that isn't a drag**
 /// is reported through `onTap` (the text view consumes the mouse, so the card's
-/// own tap gesture never sees it), except on a link, which the text view opens
-/// itself, and on a checkbox, which flips its line; and the text sits at the
-/// same 5pt inset the editor's `lineFragmentPadding` gives, applied by the
-/// caller as padding, so the preview/source flip still lands on one frame.
+/// own tap gesture never sees it), except on a link, whose destination the view
+/// checks and opens itself, and on a checkbox, which flips its line; and the
+/// text sits at the same 5pt inset the editor's `lineFragmentPadding` gives,
+/// applied by the caller as padding, so the preview/source flip still lands on
+/// one frame.
 struct MarkdownPreview: NSViewRepresentable {
     let markdown: String
     var textStyle: NSFont.TextStyle = .body
@@ -51,6 +52,9 @@ struct MarkdownPreview: NSViewRepresentable {
         view.isAutomaticLinkDetectionEnabled = false
         view.isAutomaticDataDetectionEnabled = false
         view.isContinuousSpellCheckingEnabled = false
+        // Its own delegate, so a clicked link goes through `follow(_:)` — the
+        // second half of the destination check the render already made.
+        view.delegate = view
         // The run's own colour is the theme's link colour; the view adds only
         // the hand, not its default blue and underline.
         view.linkTextAttributes = [.cursor: NSCursor.pointingHand]
@@ -70,13 +74,19 @@ struct MarkdownPreview: NSViewRepresentable {
         // Read inside the view update, so the `@Observable` accesses register
         // and a typeface, theme, size or leading change re-renders (the `Card`
         // pattern). All four are in the key, so the render cache misses too.
-        let settings = SettingsStore.shared
+        //
+        // The three reading values come from `CardTextMetrics`, the one resolver
+        // the editor and both sizing proxies also consume; the render itself
+        // runs **nonisolated** off this `Config`, which is why the multiple
+        // travels rather than the resolved leading and why the reads happen
+        // here rather than there.
+        let reading = CardTextMetrics.current(for: textStyle)
         let config = MarkdownRichText.Config(
             textStyle: textStyle,
-            typeface: settings.typeface,
-            theme: settings.theme,
-            scale: CardTextSize.scale(settings.cardFontSize),
-            lineHeight: settings.cardLineHeight
+            typeface: reading.typeface,
+            theme: SettingsStore.shared.theme,
+            scale: reading.scale,
+            lineHeight: reading.lineHeight
         )
         let key = MarkdownPreviewView.Key(markdown: markdown, config: config)
         guard view.key != key else { return }
@@ -101,17 +111,30 @@ struct MarkdownPreview: NSViewRepresentable {
     func sizeThatFits(
         _ proposal: ProposedViewSize, nsView: MarkdownPreviewView, context: Context
     ) -> CGSize? {
+        Self.size(for: proposal, of: nsView)
+    }
+
+    /// `sizeThatFits` without the representable's `Context` — which the answer
+    /// never depended on, and which a test can't build.
+    @MainActor
+    static func size(for proposal: ProposedViewSize, of nsView: MarkdownPreviewView) -> CGSize? {
         guard let key = nsView.key else { return nil }
-        // A finite width is a real wrap — **including zero**, which is how the
-        // minimum width is asked for; answering the natural width there would
-        // tell the row this body can never be narrower than its longest line.
-        // Only an unspecified or infinite width is the ideal-width question.
+        // A finite width is a real wrap — and **zero** is how the minimum width
+        // is asked for, so the *width* answered there stays zero rather than
+        // the natural one, which would tell the row this body can never be
+        // narrower than its longest line.
         let proposed = proposal.width.flatMap { $0.isFinite ? max($0, 0) : nil }
-        let width = proposed.map { max($0, 1) } ?? CGFloat.greatestFiniteMagnitude
+        // The *height* is a different question, and a wrap can't answer it at
+        // zero: laying the body out at one point (the old `max($0, 1)`) stacks
+        // it one character per line, a height nothing on screen will ever have.
+        // So zero and unspecified both lay out unbounded — the ideal width's
+        // height — and only an unspecified or infinite width also *answers*
+        // with that width.
+        let width = proposed.flatMap { $0 > 0 ? $0 : nil } ?? CGFloat.greatestFiniteMagnitude
         // Memoised on the body and the width: SwiftUI asks several times per
         // pass and per card, and a miss costs the measurer a fresh copy of the
         // text. `MarkdownParser.parse`'s reason, on the layout path.
-        let used = Self.sizes.value(for: SizeKey(key: key, width: width)) {
+        let used = sizes.value(for: SizeKey(key: key, width: width)) {
             let measurer = MarkdownPreviewView.measurer
             measurer.adopt(nsView)
             return measurer.usedSize(forWidth: width)
@@ -127,14 +150,15 @@ struct MarkdownPreview: NSViewRepresentable {
     @MainActor private static let sizes = MemoCache<SizeKey, CGSize>(limit: 512)
 }
 
-/// The read-only text view behind `MarkdownPreview`. Four things are its own:
+/// The read-only text view behind `MarkdownPreview`. Five things are its own:
 /// the click-versus-drag decision that turns a plain click into `onTap`, the
 /// pointing hand over the one run that answers a click of its own, the block
 /// decorations drawn under the text (the quote bar, the code block's
-/// background, the rule), and a copy that hands out `MarkdownRichText.export`
+/// background, the rule), a copy that hands out `MarkdownRichText.export`
 /// rather than the storage as it is — the marker runs carry glyphs and
-/// attachments that mean nothing pasted elsewhere.
-final class MarkdownPreviewView: NSTextView {
+/// attachments that mean nothing pasted elsewhere — and which destinations a
+/// clicked link is allowed to open.
+final class MarkdownPreviewView: NSTextView, NSTextViewDelegate {
     struct Key: Hashable {
         var markdown: String
         var config: MarkdownRichText.Config
@@ -147,15 +171,11 @@ final class MarkdownPreviewView: NSTextView {
         didSet { needsDisplay = true }
     }
 
-    /// The height of the text laid out at `width`, from TextKit 2's own usage
-    /// bounds after a forced layout. Setting the container's width is what
-    /// re-wraps; an unchanged width is a no-op and the layout is cached.
-    func height(forWidth width: CGFloat) -> CGFloat {
-        usedSize(forWidth: width).height
-    }
-
     /// The box the text occupies at `width` — its height, and the width the
     /// longest line wanted, which is the honest answer to an ideal-width ask.
+    /// From TextKit 2's own usage bounds after a forced layout: setting the
+    /// container's width is what re-wraps, and an unchanged width is a no-op
+    /// whose layout is already cached.
     func usedSize(forWidth width: CGFloat) -> CGSize {
         guard let container = textContainer, let layout = textLayoutManager else { return .zero }
         let size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
@@ -210,20 +230,101 @@ final class MarkdownPreviewView: NSTextView {
         let point = convert(event.locationInWindow, from: nil)
         guard hypot(point.x - start.x, point.y - start.y) < 4,
               selectedRange().length == 0 else { return }
-        let index = characterIndexForInsertion(at: point)
-        guard let storage = textStorage else { return }
-        let length = storage.length
-        // Insertion indices land either side of a one-character marker, so the
-        // character before the point counts too.
-        for candidate in [index, index - 1] where candidate >= 0 && candidate < length {
-            let attrs = storage.attributes(at: candidate, effectiveRange: nil)
-            if let line = attrs[.markdownCheckbox] as? Int {
-                onToggleCheckbox?(line)
-                return
-            }
-            if attrs[.link] != nil { return }
+        switch clickTarget(at: point) {
+        case .checkbox(let line): onToggleCheckbox?(line)
+        case .link: break
+        case .tap: onTap?()
         }
-        onTap?()
+    }
+
+    /// What a settled click lands on: the checkbox it flips, a link (which the
+    /// view follows itself), or the words — which the card reads as "open me".
+    enum ClickTarget: Equatable {
+        case tap
+        case checkbox(line: Int)
+        case link
+    }
+
+    /// Internal rather than folded into `settleClick`, so the rule can be
+    /// driven without a window: `NSTextView`'s own `mouseDown` tracks the drag
+    /// out of the window's event queue, and a test has no window to feed it.
+    func clickTarget(at point: CGPoint) -> ClickTarget {
+        guard let storage = textStorage else { return .tap }
+        let length = storage.length
+        let index = characterIndexForInsertion(at: point)
+        // Insertion indices land either side of a one-character marker, so the
+        // character before the point counts too — but not past the end of the
+        // text, where `characterIndexForInsertion` answers `length` for a click
+        // anywhere in the card's empty space below the body. A body ending in
+        // an empty checklist item ends in that marker's tab, so accepting
+        // `index - 1` there flipped the box, and saved it, on a click that
+        // should have opened the card. The last character counts only when the
+        // click really landed on it.
+        var candidates = [index]
+        if index < length || glyphRect(at: index - 1)?.contains(point) == true {
+            candidates.append(index - 1)
+        }
+        for candidate in candidates where candidate >= 0 && candidate < length {
+            let attrs = storage.attributes(at: candidate, effectiveRange: nil)
+            if let line = attrs[.markdownCheckbox] as? Int { return .checkbox(line: line) }
+            if attrs[.link] != nil { return .link }
+        }
+        return .tap
+    }
+
+    /// The box the character at `index` occupies, in view coordinates — the
+    /// same TextKit 2 segments `checkboxRects()` measures the hand from.
+    private func glyphRect(at index: Int) -> CGRect? {
+        guard index >= 0, let storage = textStorage, index < storage.length,
+              let layout = textLayoutManager, let content = layout.textContentManager,
+              let start = content.location(layout.documentRange.location, offsetBy: index),
+              let end = content.location(start, offsetBy: 1),
+              let span = NSTextRange(location: start, end: end)
+        else { return nil }
+        var union: CGRect?
+        layout.enumerateTextSegments(in: span, type: .standard, options: [.rangeNotRequired]) {
+            _, frame, _, _ in
+            union = union.map { $0.union(frame) } ?? frame
+            return true
+        }
+        return union?.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+
+    // MARK: Links
+
+    /// A clicked link is the view's to follow, not AppKit's: its default hands
+    /// the destination to the workspace whatever it is, so `file://` in a
+    /// synced note is one click from launching an application. Both routes end
+    /// here — the view's own `clicked(onLink:at:)`, which is what mouse
+    /// tracking calls, and the delegate message it sends on.
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        follow(link)
+    }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        follow(link)
+        return true
+    }
+
+    private func follow(_ link: Any) {
+        guard let url = Self.openableDestination(link) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The destination this view will open, or `nil`. The render already
+    /// refuses a scheme `MarkdownFormatting.isLinkDestination` doesn't name, so
+    /// a body of ours carries no other kind — this is the same check made again
+    /// where the click lands, because a `.link` attribute is only ever one
+    /// attribute in a storage that other code can write to.
+    nonisolated static func openableDestination(_ link: Any) -> URL? {
+        let text: String
+        switch link {
+        case let url as URL: text = url.absoluteString
+        case let string as String: text = string
+        default: return nil
+        }
+        guard MarkdownFormatting.isLinkDestination(text) else { return nil }
+        return link as? URL ?? URL(string: text)
     }
 
     // MARK: Cursor
@@ -449,12 +550,6 @@ enum MarkdownRichText {
 
     static let quoteBarWidth: CGFloat = 3
     static let codePadding: CGFloat = 10
-    /// The gap between a list marker and its item (`MarkdownText.markerGap`).
-    private static let markerGap: CGFloat = 8
-    /// One level of nesting: the marker column, dot plus gap (`MarkdownText.listIndent`).
-    /// The list as a whole steps in by `MarkdownText.listInset` on top of it, so
-    /// the render matches the editor's paragraph style line for line.
-    private static let listIndent: CGFloat = 5 + markerGap
 
     // MARK: Rendering
 
@@ -511,17 +606,14 @@ enum MarkdownRichText {
             MarkdownText.blankLine(base, lineHeight: lineHeight)
         }
 
-        /// The setting's own gap between lines, applied to **every** paragraph
-        /// style here — the editor puts it at every line boundary, so anything
-        /// that skipped it would fall out of step across the flip.
-        private var lineSpacing: CGFloat {
-            MarkdownText.lineSpacing(base, lineHeight: lineHeight)
-        }
-
+        /// Every paragraph in the render starts here: the base style both AppKit
+        /// layouts of a card's Markdown share, which carries the reading leading
+        /// and nothing else, plus this side's own extra — the wrap mode — on a
+        /// copy of it. The editor layers a tab step on the same base.
         private func paragraph(_ configure: (NSMutableParagraphStyle) -> Void = { _ in }) -> NSParagraphStyle {
-            let style = NSMutableParagraphStyle()
+            let style = MarkdownText.paragraphStyle(base: base, lineHeight: lineHeight)
+                .mutableCopy() as! NSMutableParagraphStyle
             style.lineBreakMode = .byWordWrapping
-            style.lineSpacing = lineSpacing
             configure(style)
             return style
         }
@@ -537,7 +629,7 @@ enum MarkdownRichText {
                 let font = MarkdownText.headingFont(level, typeface: typeface, scale: scale)
                 let style = paragraph {
                     $0.paragraphSpacing = after
-                    $0.paragraphSpacingBefore = level <= 2 ? 2 : 0
+                    $0.paragraphSpacingBefore = MarkdownText.headingGap(level)
                 }
                 out.append(inline(text, font: font, colour: palette.text, paragraph: style))
             case .paragraph(let text):
@@ -558,8 +650,8 @@ enum MarkdownRichText {
                 let start = out.length
                 for (index, line) in lines.enumerated() {
                     let style = paragraph {
-                        $0.firstLineHeadIndent = quoteBarWidth + markerGap
-                        $0.headIndent = quoteBarWidth + markerGap
+                        $0.firstLineHeadIndent = quoteBarWidth + MarkdownText.markerGap
+                        $0.headIndent = quoteBarWidth + MarkdownText.markerGap
                         $0.paragraphSpacing = index == lines.count - 1 ? after : 0
                     }
                     // A `>` on its own is a paragraph break inside the quote; a
@@ -571,10 +663,7 @@ enum MarkdownRichText {
                 decorations.append(Decoration(kind: .quote, range: NSRange(location: start, length: out.length - start)))
             case .code(let code):
                 let start = out.length
-                let font = NSFont.monospacedSystemFont(
-                    ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize * scale,
-                    weight: .regular
-                )
+                let font = MarkdownText.codeFont(scale: scale)
                 let lines = code.components(separatedBy: "\n")
                 for (index, line) in lines.enumerated() {
                     let style = paragraph {
@@ -615,7 +704,7 @@ enum MarkdownRichText {
         /// marker actually drawn, so a wrapped line's text lines up under the
         /// first line's, and a `10.` gets the width it needs.
         private mutating func appendItem(_ item: MarkdownParser.ListItem, number: Int?, after: CGFloat) {
-            let indent = MarkdownText.listInset + CGFloat(item.level) * listIndent
+            let indent = MarkdownText.listInset + CGFloat(item.level) * MarkdownText.listIndent
             let marker: NSAttributedString
             if let checked = item.checked {
                 marker = checkbox(checked, line: item.line)
@@ -637,7 +726,7 @@ enum MarkdownRichText {
             // The marker without its tab: a tab measured on its own is a stop
             // nobody set.
             let markerWidth = marker.attributedSubstring(from: NSRange(location: 0, length: marker.length - 1)).size().width
-            let textStart = indent + ceil(markerWidth) + markerGap
+            let textStart = indent + ceil(markerWidth) + MarkdownText.markerGap
             let style = paragraph {
                 $0.firstLineHeadIndent = indent
                 $0.headIndent = textStart
@@ -750,7 +839,13 @@ enum MarkdownRichText {
                 if intent.contains(.strikethrough) {
                     attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                 }
-                if let link = run.link {
+                // A destination `MarkdownFormatting.isLinkDestination` doesn't
+                // name renders as the plain words it wraps: a body is Markdown
+                // from a folder anything can write to, and
+                // `[Report](file:///Applications/Calculator.app)` is otherwise
+                // one click from launching an application. The same check runs
+                // again on the click (`openableDestination`).
+                if let link = run.link, MarkdownFormatting.isLinkDestination(link.absoluteString) {
                     attrs[.link] = link
                     attrs[.foregroundColor] = palette.link
                 }
@@ -774,21 +869,51 @@ enum MarkdownRichText {
     /// every marker spelled out, since plain text has no lists to make. HTML
     /// rides beside the RTF because that is the flavour a web-based app reads.
     static func export(_ attributed: NSAttributedString) -> Export {
-        let rich = spelledOut(listed(attributed))
+        let rich = portableText(attributed)
         let range = NSRange(location: 0, length: rich.length)
-        rich.removeAttribute(.foregroundColor, range: range)
-        rich.removeAttribute(.backgroundColor, range: range)
-        rich.removeAttribute(.markdownCheckbox, range: range)
-        rich.removeAttribute(.cursor, range: range)
-        rich.enumerateAttribute(.font, in: range) { value, run, _ in
-            guard let font = value as? NSFont else { return }
-            rich.addAttribute(.font, value: portable(font), range: run)
-        }
         return Export(
             string: spelledOut(attributed).string,
             rtf: rich.rtf(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]),
             html: try? rich.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.html])
         )
+    }
+
+    /// The string the rich flavours are written from: the lists made real, the
+    /// remaining marker runs spelled out, only the portable attributes left on
+    /// it, and every font a family another app can name.
+    static func portableText(_ attributed: NSAttributedString) -> NSAttributedString {
+        let rich = spelledOut(listed(attributed))
+        let range = NSRange(location: 0, length: rich.length)
+        stripToPortableAttributes(rich)
+        rich.enumerateAttribute(.font, in: range) { value, run, _ in
+            guard let font = value as? NSFont else { return }
+            rich.addAttribute(.font, value: portable(font), range: run)
+        }
+        return rich
+    }
+
+    /// Everything that may leave the view: the face, a destination, the two
+    /// decorations ⌘U and `~~` write, and the paragraph's geometry — which
+    /// carries the list, the indents and the spacing.
+    ///
+    /// An **allowlist**, not a list of the renderer's private keys: a wrong
+    /// export is only ever seen in some other application, so an attribute the
+    /// renderer gains later has to be dropped by default rather than leak until
+    /// somebody pastes it somewhere. Colour is the case that matters most — a
+    /// `labelColor` resolved in Dark Mode is white, invisible on a white page.
+    static let portableAttributes: Set<NSAttributedString.Key> = [
+        .font, .link, .underlineStyle, .strikethroughStyle, .paragraphStyle,
+    ]
+
+    private static func stripToPortableAttributes(_ text: NSMutableAttributedString) {
+        var strips: [(range: NSRange, keys: [NSAttributedString.Key])] = []
+        text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attrs, range, _ in
+            let extra = attrs.keys.filter { !portableAttributes.contains($0) }
+            if !extra.isEmpty { strips.append((range, extra)) }
+        }
+        for strip in strips {
+            for key in strip.keys { text.removeAttribute(key, range: strip.range) }
+        }
     }
 
     /// One level of an exported list, in points — Word's own half inch.

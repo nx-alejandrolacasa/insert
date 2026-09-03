@@ -208,8 +208,9 @@ struct NotesPanel: View {
 /// - **Edit mode** (the note is selected via `AppState.selectedNoteID`): the
 ///   symbol, title, **type pills** and the raw Markdown source become editable.
 ///
-/// It owns a mutable `draft` so typing is instant; writes are coalesced onto a
-/// ~0.4s debounce and flushed when editing ends or the card goes away.
+/// Its `CardEditingSession` owns a mutable draft so typing is instant; writes
+/// are coalesced onto a ~0.4s debounce and flushed when editing ends or the
+/// card goes away.
 private struct NoteCardView: View {
     /// The canonical note from the library. Changes here (e.g. an external
     /// Obsidian edit, or our own save bumping `updated`) flow in via `onChange`.
@@ -226,13 +227,10 @@ private struct NoteCardView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// The live, editable copy. Seeded from `note` and re-synced when the
-    /// upstream note meaningfully changes.
-    @State private var draft: Note
-    /// The in-flight debounced save, cancelled and restarted on every edit.
-    @State private var saveTask: Task<Void, Never>?
-    /// Holds every save path closed while the Trash move is being confirmed.
-    @State private var deleting = false
+    /// The draft, the debounce, the deferred focus write and the field-wise
+    /// merge of an upstream change — one implementation, shared with the task
+    /// row. See `CardEditingSession`.
+    @State private var session: CardEditingSession<Note>
 
     /// Height of the rendered body text, so the editor grows with content
     /// instead of the greedy `TextEditor` filling the whole scroll viewport.
@@ -248,19 +246,33 @@ private struct NoteCardView: View {
     @State private var actionsSize = CGSize(width: 20, height: 14)
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
-    /// The body editor's caret/selection, held here so `focusForEntry()` can
-    /// place it. Left alone otherwise — the editor writes the user's own
-    /// selection back through it.
-    @State private var bodySelection: TextSelection?
 
     init(note: Note, showsProjectChips: Bool, pins: Binding<NotePins>) {
         self.note = note
         self.showsProjectChips = showsProjectChips
         _pins = pins
-        _draft = State(initialValue: note)
+        _session = State(initialValue: CardEditingSession(note))
     }
 
-    private var type: NoteType { settings.noteType(id: draft.typeID) }
+    /// The face, size and leading this card's body is read at — resolved once
+    /// per render rather than a term at a time, so the sizing proxy, the editor
+    /// and the copied rich text cannot disagree about any of them. Read from
+    /// inside the view update, which is what registers the `@Observable`
+    /// accesses so a Settings change re-renders every card. See
+    /// `CardTextMetrics`.
+    private var metrics: CardTextMetrics {
+        CardTextMetrics.current(for: .body, settings: settings)
+    }
+
+    /// The two library calls the session makes on this card's behalf.
+    private var persistence: CardPersistence<Note> {
+        CardPersistence(
+            save: { library.updateNote($0) },
+            discard: { await library.deleteNote(id: $0) }
+        )
+    }
+
+    private var type: NoteType { settings.noteType(id: session.draft.typeID) }
     /// This card is the one currently open for editing.
     private var isEditing: Bool { appState.selectedNoteID == note.id }
     /// The system switch OR-ed with the Accessibility menu's in-app one.
@@ -268,27 +280,17 @@ private struct NoteCardView: View {
 
     var body: some View {
         tappableIsland
-        // Adopt upstream changes without clobbering local edits or looping on
-        // our own timestamp-only updates: only re-seed when content differs.
+        // Adopt an upstream change — an external Obsidian edit, or our own save
+        // bumping `updated` — without clobbering what is being typed. The rule
+        // and the two defects it replaces are on `CardEditingSession`.
         .onChange(of: note) { _, newValue in
-            if newValue.title != draft.title
-                || newValue.body != draft.body
-                || newValue.symbol != draft.symbol
-                || newValue.typeID != draft.typeID
-                || newValue.projectIDs != draft.projectIDs {
-                // The caret was measured against the body being replaced, so it
-                // describes a string that no longer exists — see `MarkdownCaret`.
-                // Dropping it lets the editor keep its own clamped caret rather
-                // than being sent to a position from the previous text.
-                if newValue.body != draft.body { bodySelection = nil }
-                draft = newValue
-            }
+            session.reseed(from: newValue, isEditing: isEditing)
         }
-        .onChange(of: draft.title) { scheduleSave() }
-        .onChange(of: draft.body) { scheduleSave() }
-        .onChange(of: draft.symbol) { scheduleSave() }
-        .onChange(of: draft.typeID) { scheduleSave() }
-        .onChange(of: draft.projectIDs) { scheduleSave() }
+        .onChange(of: session.draft.title) { scheduleSave() }
+        .onChange(of: session.draft.body) { scheduleSave() }
+        .onChange(of: session.draft.symbol) { scheduleSave() }
+        .onChange(of: session.draft.typeID) { scheduleSave() }
+        .onChange(of: session.draft.projectIDs) { scheduleSave() }
         .onAppear { if isEditing { focusForEntry() } }
         // Focus on entering edit; persist-or-discard on leaving it (e.g. when
         // another note is selected).
@@ -306,15 +308,7 @@ private struct NoteCardView: View {
                 finishEditing()
             }
         }
-        .onDisappear {
-            guard !deleting else {
-                saveTask?.cancel()
-                return
-            }
-            // Settle any pending edit — including mid-edit, where an empty
-            // note must still be discarded rather than flushed.
-            if isEditing { finishEditing() } else { flushSave() }
-        }
+        .onDisappear { settle() }
     }
 
     /// The card island. In view mode the whole island is a tap target that opens
@@ -413,8 +407,8 @@ private struct NoteCardView: View {
                 // same as in the task composer.
                 ProjectMentionField(
                     placeholder: "Title  (type @ to tag a project)",
-                    text: $draft.title,
-                    assigned: $draft.projectIDs,
+                    text: $session.draft.title,
+                    assigned: $session.draft.projectIDs,
                     font: Card.font(.title3, weight: .bold),
                     // The colour the view-mode title draws in, so the flip into
                     // edit mode changes the face's weight and nothing else.
@@ -432,7 +426,7 @@ private struct NoteCardView: View {
                 // because the alternative is indenting the editor to match and
                 // losing a line of writing width to a decoration.
                 TypeMarkTitle(
-                    text: draft.displayTitle,
+                    text: session.draft.displayTitle,
                     mark: type.tint.accent)
             }
 
@@ -480,18 +474,19 @@ private struct NoteCardView: View {
                 .fill(Stone.line)
                 .frame(width: 1, height: 11)
 
-            ForEach(draft.projectIDs, id: \.self) { id in
+            ForEach(session.draft.projectIDs, id: \.self) { id in
                 if let project = library.project(id: id) {
                     ProjectChip(project: project) {
-                        draft.projectIDs.removeAll { $0 == id }
+                        session.draft.projectIDs.removeAll { $0 == id }
                     }
                 }
             }
             // Bare ＋ beside chips it extends; the full wording only when
             // it stands alone.
-            AddProjectMenu(assigned: draft.projectIDs, compact: !draft.projectIDs.isEmpty) {
-                draft.projectIDs.append($0)
-            }
+            AddProjectMenu(
+                assigned: session.draft.projectIDs,
+                compact: !session.draft.projectIDs.isEmpty
+            ) { session.draft.projectIDs.append($0) }
             Spacer(minLength: 0)
 
             footer
@@ -516,12 +511,16 @@ private struct NoteCardView: View {
                     .fill(Stone.line)
                     .frame(width: 1, height: 11)
 
-                if draft.projectIDs.isEmpty {
+                if session.draft.projectIDs.isEmpty {
                     // Actionable where "Unassigned" was inert: the same pill
                     // flags the stray note *and* fixes it.
-                    AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
+                    AddProjectMenu(assigned: session.draft.projectIDs) {
+                        session.draft.projectIDs.append($0)
+                    }
                 } else {
-                    ProjectChipsRow(projects: draft.projectIDs.compactMap { library.project(id: $0) })
+                    ProjectChipsRow(
+                        projects: session.draft.projectIDs.compactMap { library.project(id: $0) }
+                    )
                 }
             }
 
@@ -596,12 +595,12 @@ private struct NoteCardView: View {
     /// keeps the field, and a file whose symbol tracks its type stays coherent
     /// for whatever reads it in Obsidian.
     private func selectType(_ newType: NoteType) {
-        guard newType.id != draft.typeID else { return }
-        let previous = settings.noteType(id: draft.typeID)
-        if draft.symbol == previous.symbol {
-            draft.symbol = newType.symbol
+        guard newType.id != session.draft.typeID else { return }
+        let previous = settings.noteType(id: session.draft.typeID)
+        if session.draft.symbol == previous.symbol {
+            session.draft.symbol = newType.symbol
         }
-        draft.typeID = newType.id
+        session.draft.typeID = newType.id
     }
 
     // MARK: Body — view mode
@@ -612,7 +611,7 @@ private struct NoteCardView: View {
     /// one view shared with the task row; the editor always shows everything.
     @ViewBuilder
     private var bodyView: some View {
-        if draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if session.draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // "Click", not "tap": this is a pointer-driven Mac.
             Text("Empty note — click to write")
                 .font(Card.font(.body))
@@ -621,7 +620,7 @@ private struct NoteCardView: View {
                 .padding(.horizontal, 5)
         } else {
             CollapsibleMarkdown(
-                markdown: draft.body,
+                markdown: session.draft.body,
                 previewLines: settings.notePreviewLines.lines,
                 expanded: $expanded,
                 chevronBox: actionsSize,
@@ -644,9 +643,10 @@ private struct NoteCardView: View {
     /// exists to prevent, reached from the one route that never sets
     /// `selectedNoteID`.
     private func toggleCheckbox(at line: Int) {
-        guard let toggled = MarkdownParser.toggleCheckbox(draft.body, atLine: line) else { return }
+        guard let toggled = MarkdownParser.toggleCheckbox(session.draft.body, atLine: line)
+        else { return }
         pins.pin(note)
-        draft.body = toggled
+        session.draft.body = toggled
     }
 
     // MARK: Body — edit mode
@@ -654,7 +654,11 @@ private struct NoteCardView: View {
     /// A plain Markdown text editor that grows with its content (a hidden text
     /// proxy drives the height) so notes read as fully expanded, not boxed.
     private var bodyEditor: some View {
-        ZStack(alignment: .topLeading) {
+        // One resolution for the whole editor: the proxy measures in the same
+        // `NSFont` the editor draws in, at the same scale and leading, so the
+        // card's height can't be computed in a face it no longer draws.
+        let metrics = metrics
+        return ZStack(alignment: .topLeading) {
             // Invisible sizing proxy (same font/insets as the editor). It stays
             // in the layout so the ZStack height tracks the wrapped text; the
             // editor is then pinned to that height rather than growing greedily.
@@ -662,13 +666,11 @@ private struct NoteCardView: View {
             // because a heading line is taller than a body line and a proxy in
             // the flat face would measure the editor short.
             MarkdownSizingProxy(
-                text: draft.body.isEmpty ? " " : draft.body,
-                base: Card.nsFont(.body),
-                typeface: settings.typeface,
-                scale: CardTextSize.scale(settings.cardFontSize),
-                lineSpacing: MarkdownText.lineSpacing(
-                    Card.nsFont(.body), lineHeight: settings.cardLineHeight
-                )
+                text: session.draft.body.isEmpty ? " " : session.draft.body,
+                base: metrics.nsFont,
+                typeface: metrics.typeface,
+                scale: metrics.scale,
+                lineSpacing: metrics.lineSpacing
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
@@ -678,9 +680,9 @@ private struct NoteCardView: View {
                     measuredBodyHeight = $0
                 }
 
-            if draft.body.isEmpty && !bodyFocused {
+            if session.draft.body.isEmpty && !bodyFocused {
                 Text("Write in Markdown…")
-                    .font(Card.font(.body))
+                    .font(metrics.font)
                     .foregroundStyle(.tertiary)
                     // (5, 0): the editor's first line starts at the very top of
                     // its frame, 5pt in — the placeholder sits on the caret.
@@ -689,8 +691,8 @@ private struct NoteCardView: View {
             }
 
             MarkdownEditor(
-                text: $draft.body,
-                font: Card.nsFont(.body),
+                text: $session.draft.body,
+                font: metrics.nsFont,
                 textColor: NSColor(settings.theme.bodyText),
                 onBacktab: { focusTitle() },
                 // Esc leaves the Markdown editor, matching the title field. A
@@ -698,7 +700,7 @@ private struct NoteCardView: View {
                 // and answers the key itself.
                 onEscape: { exitEdit() },
                 focused: $bodyFocused,
-                selection: $bodySelection
+                selection: $session.bodySelection
             )
                 .frame(height: max(34, measuredBodyHeight))
         }
@@ -721,7 +723,10 @@ private struct NoteCardView: View {
             // it — a menu item's shortcut is live for as long as the item's view
             // is, so every card on screen would claim ⌘C at once and take it off
             // the text selection in whichever card is open.
-            let copyText = MarkdownFiles.copyText(draft)
+            let copyText = MarkdownFiles.copyText(session.draft)
+            // Resolved here rather than in the action, so the reading settings
+            // are read inside the view update like every other consumer's.
+            let metrics = metrics
             Button {
                 // Two flavours: the Markdown as plain text, and the same writing
                 // rendered as rich text (`MarkdownRichText`, what the preview
@@ -729,8 +734,16 @@ private struct NoteCardView: View {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(copyText, forType: .string)
+                // The same `Config` the preview builds — size and leading
+                // included, or the rich flavour would be a render of settings
+                // the reader doesn't have while the plain one beside it is
+                // right.
                 let rendered = MarkdownRichText.render(copyText, config: .init(
-                    textStyle: .body, typeface: settings.typeface, theme: settings.theme
+                    textStyle: .body,
+                    typeface: metrics.typeface,
+                    theme: settings.theme,
+                    scale: metrics.scale,
+                    lineHeight: metrics.lineHeight
                 ))
                 let export = MarkdownRichText.export(rendered.text)
                 if let rtf = export.rtf { pasteboard.setData(rtf, forType: .rtf) }
@@ -740,16 +753,12 @@ private struct NoteCardView: View {
             }
             .disabled(copyText.isEmpty)
             Button(role: .destructive) {
-                if isEditing {
-                    saveTask?.cancel()
-                    saveTask = nil
-                    library.updateNote(draft)
-                }
-                deleting = true
+                if isEditing { session.persistNow(persistence) }
+                session.deleting = true
                 if isEditing { appState.selectedNoteID = nil }
                 Task {
-                    if !(await library.deleteNote(id: draft.id)) {
-                        deleting = false
+                    if !(await library.deleteNote(id: session.draft.id)) {
+                        session.deleting = false
                     }
                 }
             } label: {
@@ -784,52 +793,21 @@ private struct NoteCardView: View {
         if isEditing { appState.selectedNoteID = nil }
     }
 
-    /// Ending an edit either persists the draft or, when the note was left
-    /// with no text at all, discards it — which is also how a just-created
-    /// note is cancelled: blur the empty card and it's gone.
-    private func finishEditing() {
-        guard !deleting else { return }
-        let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if blank {
-            library.updateNote(draft)
-            deleting = true
-            saveTask?.cancel()
-            saveTask = nil
-            Task {
-                if !(await library.deleteNote(id: draft.id)) {
-                    deleting = false
-                }
-            }
-        } else {
-            flushSave()
-        }
-    }
+    /// Ending an edit persists the draft, or discards a note left with no text
+    /// at all. The rule lives in `CardEditingSession`; the delete is the one
+    /// half only the panel can make.
+    private func finishEditing() { session.finishEditing(persistence) }
 
-    /// Put the cursor where it's most useful: the title for a brand-new note,
-    /// otherwise the end of the body, ready to keep writing.
-    ///
-    /// **The one-turn delay is the point.** Called straight from
-    /// `onChange(of: isEditing)` this wrote focus into fields that did not exist
-    /// yet — the same update swaps the rendered Markdown for the editor, and a
-    /// `@FocusState` write naming a field SwiftUI hasn't registered is dropped
-    /// silently. That was the first click doing nothing visible: the card opened
-    /// with no caret, and Esc — which the editor answers through `onKeyPress` —
-    /// never reached it either, because nothing was focused to receive the key.
-    /// The second click then focused the field the AppKit way and both worked.
-    /// Deferring to the next main-actor turn puts the write after the editor is
-    /// in the hierarchy (and after the click's own responder handling, which is
-    /// the other thing that can take focus straight back).
+    /// The card is going away — the row scrolled out, the project changed.
+    private func settle() { session.settle(isEditing: isEditing, persistence) }
+
+    /// Focus on entry, deferred by one main-actor turn because the fields are
+    /// created by the very update that asks for it — see `CardEditingSession`.
     private func focusForEntry() {
-        Task { @MainActor in
-            guard isEditing else { return }
-            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                titleFocused = true
-            } else {
-                // The caret would otherwise land at offset 0, in front of the
-                // text, which reads as an editor that isn't ready.
-                bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
-                bodyFocused = true
+        session.focusForEntry(isEditing: { isEditing }) { field in
+            switch field {
+            case .title: titleFocused = true
+            case .body: bodyFocused = true
             }
         }
     }
@@ -860,7 +838,7 @@ private struct NoteCardView: View {
     private func focusBody() {
         // Before the focus, since the editor applies the selection as it arrives;
         // alongside a programmatic focus is the one place it may be written.
-        bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        session.placeCaretAtBodyEnd()
         if CardFocus.moveToEditorBesideCurrentField() { return }
         titleFocused = false
         bodyFocused = true
@@ -868,25 +846,5 @@ private struct NoteCardView: View {
 
     // MARK: Persistence
 
-    /// Restart the debounce: persist ~0.4s after the last edit. The snapshot is
-    /// captured by value so a later keystroke can't mutate what we're saving.
-    private func scheduleSave() {
-        saveTask?.cancel()
-        let snapshot = draft
-        saveTask = Task {
-            try? await Task.sleep(for: .seconds(0.4))
-            guard !Task.isCancelled else { return }
-            library.updateNote(snapshot)
-            saveTask = nil
-        }
-    }
-
-    /// Persist immediately, cancelling any pending debounce (used when editing
-    /// ends so nothing is lost).
-    private func flushSave() {
-        guard saveTask != nil else { return }
-        saveTask?.cancel()
-        saveTask = nil
-        library.updateNote(draft)
-    }
+    private func scheduleSave() { session.scheduleSave(persistence) }
 }

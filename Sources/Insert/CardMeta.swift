@@ -83,11 +83,19 @@ struct TypeMarkTitle: View {
 struct TypeCapsLabel: View {
     let type: NoteType
 
+    /// Between `.caption` and `.caption2`, which is why it is a size rather than
+    /// a text style — and the number the tracking is a ratio of.
+    private static let size: CGFloat = 10.5
+
     var body: some View {
         Text(type.name.uppercased())
-            .font(Mono.font(size: 10.5, weight: .semibold))
-            // 0.06em at 10.5pt.
-            .tracking(0.63)
+            // `card`, not `font`: the label is on a card, so it takes the
+            // reading size too (`Card.chrome(_:)`'s line, from the numeral
+            // face's side).
+            .font(Mono.card(size: Self.size, weight: .semibold))
+            // 0.06em, which is a ratio of the size rather than 0.63pt — a
+            // tracking left behind grows tighter as the label does.
+            .tracking(Self.size * 0.06 * CardTextSize.scale(SettingsStore.shared.cardFontSize))
             .foregroundStyle(type.tint.ink)
             .lineLimit(1)
             // The uppercase is presentation; VoiceOver should say "Meeting",

@@ -95,6 +95,45 @@ enum BundledFonts {
     static let grotesk = "Space Grotesk"
     static let mono = "IBM Plex Mono"
 
+    /// What each bundled family can be asked for a weight **through** — the two
+    /// facts `font(family:size:weight:)` picks its route from.
+    ///
+    /// A property of the family rather than a condition on one weight of one
+    /// family, which is how this was written: `family == grotesk && weight ==
+    /// .semibold` gets *this* unpublished weight right and rounds every other
+    /// one to a neighbouring instance without saying so.
+    private struct FamilyWeights {
+        /// The weights the family publishes as instances of its own, and so the
+        /// ones the ordinary weight trait lands on. Grotesk's variable file
+        /// names Light / Regular / Medium / Bold; Plex Mono ships three statics.
+        let published: Set<NSFont.Weight>
+        /// Whether the file carries a continuous `wght` axis — the only route to
+        /// a weight the family doesn't publish, and one to take no more often
+        /// than that (see `font(family:size:weight:)`).
+        let hasVariableWeightAxis: Bool
+    }
+
+    private static let families: [String: FamilyWeights] = [
+        grotesk: FamilyWeights(published: [.light, .regular, .medium, .bold],
+                               hasVariableWeightAxis: true),
+        mono: FamilyWeights(published: [.regular, .medium, .semibold],
+                            hasVariableWeightAxis: false),
+    ]
+
+    /// Whether `family`'s file carries a continuous `wght` axis. `false` for an
+    /// unregistered family, which is the safe answer: the weight trait resolves
+    /// to *something* everywhere, where a variation on a static file resolves to
+    /// nothing.
+    static func hasVariableWeightAxis(_ family: String) -> Bool {
+        families[family]?.hasVariableWeightAxis ?? false
+    }
+
+    /// Whether `family` publishes `weight` as an instance of its own. An unknown
+    /// family answers `true` — it has no axis either, so both routes agree.
+    static func publishes(_ weight: NSFont.Weight, in family: String) -> Bool {
+        families[family]?.published.contains(weight) ?? true
+    }
+
     /// Registers the bundled files once, for this process only.
     ///
     /// A lazy `static let` rather than a guarded function: the initialiser runs
@@ -145,11 +184,14 @@ enum BundledFonts {
     ///   traits and no variation, which leaves a later `.bold` free to resolve.
     ///   The family's default instance is Regular, despite the file naming it
     ///   `SpaceGrotesk-Light_Regular` after its Light origin.
-    /// - **Semibold on Grotesk** is the one case that needs the axis: the
-    ///   variable file's *named* instances are Light / Regular / Medium / Bold,
-    ///   so the trait route rounds 600 up to Bold. `wght: 600` gets the real
-    ///   instance. A face resolved this way can't be bolded further, which is
-    ///   fine — nothing asks a semibold title to become bold.
+    /// - **A weight the family doesn't publish**, on a family with an axis, gets
+    ///   the axis — today that is semibold on Grotesk and nothing else, since
+    ///   the variable file's *named* instances are Light / Regular / Medium /
+    ///   Bold and the trait route rounds 600 up to Bold. `wght: 600` gets the
+    ///   real instance. A face resolved this way can't be bolded further, which
+    ///   is fine — nothing asks a semibold title to become bold. Which weights
+    ///   those are is `families`' business rather than a name and a case spelled
+    ///   out here.
     /// - **Everything else** uses the ordinary weight trait, which lands on a
     ///   named instance for Grotesk and on the right static for Plex Mono.
     static func font(family: String, size: CGFloat, weight: NSFont.Weight?) -> NSFont? {
@@ -162,8 +204,9 @@ enum BundledFonts {
         return resolved.value(for: key) {
             var attributes: [NSFontDescriptor.AttributeName: Any] = [.family: family]
             if let weight, weight != .regular {
-                if family == grotesk, weight == .semibold {
-                    attributes[Self.variation] = [Self.wghtAxis: 600]
+                if !publishes(weight, in: family), hasVariableWeightAxis(family),
+                   let axis = Self.axisWeight[weight] {
+                    attributes[Self.variation] = [Self.wghtAxis: axis]
                 } else {
                     attributes[.traits] = [NSFontDescriptor.TraitKey.weight: weight.rawValue]
                 }
@@ -184,6 +227,16 @@ enum BundledFonts {
     /// `'wght'` as the four-character code CoreText wants. The axis runs
     /// 300–700 on this file.
     private static let wghtAxis = 0x77676874
+
+    /// A `wght` axis position per `NSFont.Weight`. The two scales are unrelated
+    /// — the axis is in CSS weights, where `NSFont.Weight`'s raw value is SF's
+    /// own −0.8…0.8 — so this is a table rather than a conversion. CoreText
+    /// clamps a position past the axis's ends, which is the right answer for a
+    /// weight the file doesn't reach.
+    private static let axisWeight: [NSFont.Weight: CGFloat] = [
+        .ultraLight: 100, .thin: 200, .light: 300, .regular: 400, .medium: 500,
+        .semibold: 600, .bold: 700, .heavy: 800, .black: 900,
+    ]
 }
 
 // MARK: - The numeral and label face
@@ -202,27 +255,24 @@ enum BundledFonts {
 /// saying different things, so the body face covers it instead. That is the one
 /// place this reads the typeface setting, and it reads it the way `Card` does —
 /// inside a view update, so the `@Observable` access registers and a change in
-/// Settings re-renders.
+/// Settings re-renders. What it does **not** do there is drop the size it was
+/// asked for, which it used to: substituting `.caption1` collapsed the band's
+/// 11pt count and the card's 10.5pt label onto one size.
+///
+/// **Two spellings, and the difference is the reading size.** `card(_:)` /
+/// `card(size:)` follow it, for the two places the numeral face lands on a card
+/// — the timestamp footer and the type label. `font(_:)` / `font(size:)` don't,
+/// for the two that are chrome: the column band's count and the Settings
+/// stepper. That is `Card.chrome(_:)`'s line, and the same argument decides it —
+/// the size setting's scope is the card, and a row whose height belongs to the
+/// window doesn't follow it.
 enum Mono {
+
+    // MARK: On the window's chrome — the system's own size
+
     @MainActor
     static func nsFont(_ style: NSFont.TextStyle, weight: NSFont.Weight = .medium) -> NSFont {
         nsFont(style, weight: weight, typeface: SettingsStore.shared.typeface)
-    }
-
-    static func nsFont(
-        _ style: NSFont.TextStyle,
-        weight: NSFont.Weight = .medium,
-        typeface: Typeface
-    ) -> NSFont {
-        let size = NSFont.preferredFont(forTextStyle: style).pointSize
-        if typeface == .monospaced {
-            return Card.nsFont(style, weight: weight, typeface: typeface)
-        }
-        return BundledFonts.font(family: BundledFonts.mono, size: size, weight: weight)
-            // Not the proportional system font: if Plex Mono is missing the
-            // point is still that these read as values, so SF Mono is the
-            // right degradation.
-            ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
     }
 
     @MainActor
@@ -230,26 +280,111 @@ enum Mono {
         Font(nsFont(style, weight: weight))
     }
 
+    /// A fixed point size rather than a text style, which the band's count pill
+    /// (11pt) is specified as because it sits between `.caption` and
+    /// `.caption2`. The card's type label is the same shape of value and takes
+    /// `card(size:)` instead, since it is on a card.
+    @MainActor
+    static func font(size: CGFloat, weight: NSFont.Weight = .medium) -> Font {
+        font(size: size, weight: weight, typeface: SettingsStore.shared.typeface)
+    }
+
+    // MARK: On a card — the size the reader chose
+
+    /// The numeral face **at the size the cards are read at**, for the two
+    /// places it lands on a card: the timestamp footer and the type label.
+    ///
+    /// This is `Card.chrome(_:)`'s line drawn from the other side. There, the
+    /// reading *face* reaches three pieces of chrome and the reading *size*
+    /// deliberately doesn't, because those rows' heights belong to the window.
+    /// Here the row belongs to the card, so the size comes too: at 22pt a body
+    /// under a 10pt timestamp is not one card. The band's count and the Settings
+    /// stepper keep the unscaled spelling above, and they are chrome by exactly
+    /// the same test.
+    @MainActor
+    static func nsCard(_ style: NSFont.TextStyle, weight: NSFont.Weight = .medium) -> NSFont {
+        let settings = SettingsStore.shared
+        return nsFont(style, weight: weight, typeface: settings.typeface,
+                      scale: CardTextSize.scale(settings.cardFontSize))
+    }
+
+    @MainActor
+    static func card(_ style: NSFont.TextStyle, weight: NSFont.Weight = .medium) -> Font {
+        Font(nsCard(style, weight: weight))
+    }
+
+    @MainActor
+    static func nsCard(size: CGFloat, weight: NSFont.Weight = .medium) -> NSFont {
+        let settings = SettingsStore.shared
+        return nsFont(size: size, weight: weight, typeface: settings.typeface,
+                      scale: CardTextSize.scale(settings.cardFontSize))
+    }
+
+    @MainActor
+    static func card(size: CGFloat, weight: NSFont.Weight = .medium) -> Font {
+        Font(nsCard(size: size, weight: weight))
+    }
+
+    // MARK: The explicit forms
+
+    /// `typeface:` and `scale:` spelled out, for the render passes (which run
+    /// nonisolated off a `Config` built on the main actor) and for the tests.
+    /// `scale` defaults to 1, so everything that must stay at the system's size
+    /// says so by saying nothing.
+    static func nsFont(
+        _ style: NSFont.TextStyle,
+        weight: NSFont.Weight = .medium,
+        typeface: Typeface,
+        scale: CGFloat = 1
+    ) -> NSFont {
+        if typeface == .monospaced {
+            return Card.nsFont(style, weight: weight, typeface: typeface, scale: scale)
+        }
+        return resolved(
+            size: NSFont.preferredFont(forTextStyle: style).pointSize * scale, weight: weight)
+    }
+
     static func font(
         _ style: NSFont.TextStyle,
         weight: NSFont.Weight = .medium,
-        typeface: Typeface
+        typeface: Typeface,
+        scale: CGFloat = 1
     ) -> Font {
-        Font(nsFont(style, weight: weight, typeface: typeface))
+        Font(nsFont(style, weight: weight, typeface: typeface, scale: scale))
     }
 
-    /// A fixed point size, for the two places that aren't on a text style: the
-    /// band's count pill (11pt) and the type label (10.5pt), both of which the
-    /// plan specifies as sizes because they sit between `.caption` and
-    /// `.caption2`.
-    @MainActor
-    static func font(size: CGFloat, weight: NSFont.Weight = .medium) -> Font {
-        let typeface = SettingsStore.shared.typeface
+    static func nsFont(
+        size: CGFloat,
+        weight: NSFont.Weight = .medium,
+        typeface: Typeface,
+        scale: CGFloat = 1
+    ) -> NSFont {
+        // The **requested** size under Monospace too, which it wasn't: this
+        // branch substituted `.caption1`, collapsing the band's 11pt count and
+        // the card's 10.5pt type label onto one size and ignoring the reader's
+        // own. Deferring to the card's face here is the documented rule (a
+        // second mono voice on a card would be two faces saying different
+        // things); dropping the size never was.
         if typeface == .monospaced {
-            return Font(Card.nsFont(.caption1, weight: weight, typeface: typeface))
+            return Card.nsFont(size: size * scale, weight: weight, typeface: typeface)
         }
-        let resolved = BundledFonts.font(family: BundledFonts.mono, size: size, weight: weight)
+        return resolved(size: size * scale, weight: weight)
+    }
+
+    static func font(
+        size: CGFloat,
+        weight: NSFont.Weight = .medium,
+        typeface: Typeface,
+        scale: CGFloat = 1
+    ) -> Font {
+        Font(nsFont(size: size, weight: weight, typeface: typeface, scale: scale))
+    }
+
+    private static func resolved(size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        BundledFonts.font(family: BundledFonts.mono, size: size, weight: weight)
+            // Not the proportional system font: if Plex Mono is missing the
+            // point is still that these read as values, so SF Mono is the
+            // right degradation.
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-        return Font(resolved)
     }
 }

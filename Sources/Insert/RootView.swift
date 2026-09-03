@@ -221,10 +221,20 @@ struct RootView: View {
 
     /// Bridges the app's simple `sidebarVisible` flag to the split view's
     /// three-state column visibility.
+    ///
+    /// The setter compares before it writes, the rule `DayClock.tick()` follows:
+    /// `@Observable` publishes on write rather than on change, and this
+    /// particular write is made from inside `NavigationSplitView`'s own layout
+    /// resolution — so a value that says nothing new still invalidates every
+    /// view reading `sidebarVisible`.
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
             get: { appState.sidebarVisible ? .all : .detailOnly },
-            set: { appState.sidebarVisible = ($0 != .detailOnly) }
+            set: { newValue in
+                let visible = newValue != .detailOnly
+                guard visible != appState.sidebarVisible else { return }
+                appState.sidebarVisible = visible
+            }
         )
     }
 
@@ -351,7 +361,7 @@ struct RootView: View {
                 // and lets the event reach the editor. Card titles are field
                 // editors, not `MarkdownTextView`s, so they keep the search.
                 let editing = MainActor.assumeIsolated {
-                    NSApp.keyWindow?.firstResponder is MarkdownTextView
+                    MarkdownResponder.focusedMarkdownBody() != nil
                 }
                 if editing { return event }
                 Task { @MainActor in focusSearch() }
@@ -479,6 +489,16 @@ private struct WindowConfigurator: NSViewRepresentable {
 private final class WindowProbe: NSView {
     private var configured = false
 
+    /// The last values *scheduled*, which is what a new measurement has to be
+    /// compared against. Comparing against `AppState`'s own while the write is
+    /// deferred defeated the coalescing it exists for: through a live resize
+    /// nothing had landed yet, so every pass read the same stale value, found it
+    /// different and scheduled another write. They are never cleared — once the
+    /// deferred write lands they agree with `AppState`, and until it does they
+    /// are the more recent of the two.
+    private var scheduledTitlebarHeight: CGFloat?
+    private var scheduledTrafficLightCenterY: CGFloat?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         configureWindow()
@@ -534,7 +554,9 @@ private final class WindowProbe: NSView {
         guard let window, let contentView = window.contentView else { return }
 
         let titlebar = contentView.bounds.height - window.contentLayoutRect.height
-        if titlebar > 0, abs(titlebar - AppState.shared.titlebarHeight) > 0.5 {
+        let publishedTitlebar = scheduledTitlebarHeight ?? AppState.shared.titlebarHeight
+        if titlebar > 0, abs(titlebar - publishedTitlebar) > 0.5 {
+            scheduledTitlebarHeight = titlebar
             Task { @MainActor in AppState.shared.titlebarHeight = titlebar }
         }
 
@@ -546,7 +568,9 @@ private final class WindowProbe: NSView {
         // Ignore anything outside the band — a bad read here once dumped the
         // sidebar's buttons at the bottom of the window.
         guard centre > 0, centre < max(titlebar, Metrics.titlebarHeight) else { return }
-        if abs(centre - AppState.shared.trafficLightCenterY) > 0.5 {
+        let publishedCentre = scheduledTrafficLightCenterY ?? AppState.shared.trafficLightCenterY
+        if abs(centre - publishedCentre) > 0.5 {
+            scheduledTrafficLightCenterY = centre
             Task { @MainActor in AppState.shared.trafficLightCenterY = centre }
         }
     }

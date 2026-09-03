@@ -301,9 +301,9 @@ struct TasksPanel: View {
 ///   title becomes a `@project` field, the notes become a Markdown editor with
 ///   a "Notes…" placeholder, and the assignment chips grow a ＋.
 ///
-/// Like `NoteCardView` it owns a mutable `draft` so typing is instant, and
-/// coalesces writes onto a ~0.4s debounce (each `updateTask` rewrites a file
-/// and bumps `updated`).
+/// Like `NoteCardView` it holds a `CardEditingSession` — the same one — so
+/// typing is instant and writes are coalesced onto a ~0.4s debounce (each
+/// `updateTask` rewrites a file and bumps `updated`).
 private struct TaskCardView: View {
     /// The canonical task from the library. External edits and our own saves
     /// flow back in via `onChange`.
@@ -323,11 +323,10 @@ private struct TaskCardView: View {
     @Environment(DayClock.self) private var clock
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var draft: TaskItem
-    /// The in-flight debounced save, cancelled and restarted on every edit.
-    @State private var saveTask: Task<Void, Never>?
-    /// Holds every save path closed while the Trash move is being confirmed.
-    @State private var deleting = false
+    /// The draft, the debounce, the deferred focus write and the field-wise
+    /// merge of an upstream change — one implementation, shared with the note
+    /// card. See `CardEditingSession`.
+    @State private var session: CardEditingSession<TaskItem>
     @State private var expanded = false
     @State private var showDuePopover = false
     /// The ⋯ menu's box, which the expand chevron takes as its own so the two line
@@ -339,15 +338,30 @@ private struct TaskCardView: View {
 
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
-    /// The notes editor's caret/selection, held here so `focusForEntry()` can
-    /// place it; the editor writes the user's own selection back through it.
-    @State private var bodySelection: TextSelection?
 
     init(task: TaskItem, showsProjectChips: Bool, pins: Binding<TaskPins>) {
         self.task = task
         self.showsProjectChips = showsProjectChips
         _pins = pins
-        _draft = State(initialValue: task)
+        _session = State(initialValue: CardEditingSession(task))
+    }
+
+    /// The face, size and leading this row's notes are read at — `.callout`,
+    /// where the note card's body is `.body`. Resolved once per render rather
+    /// than a term at a time, so the sizing proxy and the editor cannot
+    /// disagree about any of them. Read from inside the view update, which is
+    /// what registers the `@Observable` accesses so a Settings change
+    /// re-renders every row. See `CardTextMetrics`.
+    private var metrics: CardTextMetrics {
+        CardTextMetrics.current(for: .callout, settings: settings)
+    }
+
+    /// The two library calls the session makes on this card's behalf.
+    private var persistence: CardPersistence<TaskItem> {
+        CardPersistence(
+            save: { library.updateTask($0) },
+            discard: { await library.deleteTask(id: $0) }
+        )
     }
 
     /// This card is the one currently open for editing.
@@ -357,44 +371,30 @@ private struct TaskCardView: View {
     private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
     private var hasBody: Bool {
-        !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !session.draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
         tappableCard
-        // Adopt upstream changes without clobbering local edits or looping on
-        // our own timestamp-only updates: only re-seed when content differs.
+        // Adopt an upstream change — a tick from the menu bar, an external
+        // Obsidian edit, or our own save bumping `updated` — without clobbering
+        // what is being typed. Field-wise, and skipped outright while editing:
+        // the rule and the two defects it replaces are on `CardEditingSession`.
         .onChange(of: task) { _, newValue in
-            if newValue.title != draft.title
-                || newValue.body != draft.body
-                || newValue.done != draft.done
-                || newValue.due != draft.due
-                || newValue.projectIDs != draft.projectIDs {
-                // The caret was measured against the body being replaced, so it
-                // describes a string that no longer exists — see `MarkdownCaret`.
-                if newValue.body != draft.body { bodySelection = nil }
-                draft = newValue
-            }
+            session.reseed(from: newValue, isEditing: isEditing)
         }
-        .onChange(of: draft.title) { scheduleSave() }
-        .onChange(of: draft.body) { scheduleSave() }
-        .onChange(of: draft.projectIDs) { scheduleSave() }
+        .onChange(of: session.draft.title) { scheduleSave() }
+        .onChange(of: session.draft.body) { scheduleSave() }
+        .onChange(of: session.draft.projectIDs) { scheduleSave() }
         .onAppear { if isEditing { focusForEntry() } }
         // Focus on entering edit; persist-or-discard on leaving it (e.g. when
         // another task is opened).
         .onChange(of: isEditing) { _, editing in
             if editing { focusForEntry() } else { finishEditing() }
         }
-        .onDisappear {
-            guard !deleting else {
-                saveTask?.cancel()
-                return
-            }
-            // Settle any pending edit so nothing is lost when the row scrolls
-            // out or the project changes — including mid-edit, where an empty
-            // task must still be discarded rather than flushed.
-            if isEditing { finishEditing() } else { flushSave() }
-        }
+        // Settles any pending edit so nothing is lost when the row scrolls out
+        // or the project changes.
+        .onDisappear { settle() }
     }
 
     /// The row island. In view mode the whole island is a tap target that opens
@@ -434,7 +434,7 @@ private struct TaskCardView: View {
         }
         .padding(12)
         .island(radius: Metrics.rowRadius)
-        .opacity(draft.done ? 0.7 : 1)
+        .opacity(session.draft.done ? 0.7 : 1)
         .contentShape(RoundedRectangle(cornerRadius: Metrics.rowRadius, style: .continuous))
         .gesture(TapGesture().onEnded { enterEdit() }, isEnabled: !isEditing)
         // A bare tap gesture is pointer-only; the container action and the ⋯
@@ -478,8 +478,8 @@ private struct TaskCardView: View {
                 // same as in the composer.
                 ProjectMentionField(
                     placeholder: "Task  (type @ to tag a project)",
-                    text: $draft.title,
-                    assigned: $draft.projectIDs,
+                    text: $session.draft.title,
+                    assigned: $session.draft.projectIDs,
                     font: Card.font(.body, weight: .medium),
                     color: settings.theme.titleText,
                     // Return commits the quick-capture flow: type, Return, done.
@@ -495,13 +495,15 @@ private struct TaskCardView: View {
                     .buttonStyle(.actionCapsule)
                     .controlSize(.small)
             } else {
-                Text(draft.title.isEmpty ? "Untitled" : draft.title)
+                Text(session.draft.title.isEmpty ? "Untitled" : session.draft.title)
                     .font(Card.font(.body, weight: .medium))
                     // Done stays `.secondary` — a finished task is quieter than
                     // the theme's title colour by design, and that is a state
                     // rather than a palette.
-                    .foregroundStyle(draft.done ? Color.secondary : settings.theme.titleText)
-                    .strikethrough(draft.done)
+                    .foregroundStyle(
+                        session.draft.done ? Color.secondary : settings.theme.titleText
+                    )
+                    .strikethrough(session.draft.done)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -521,7 +523,7 @@ private struct TaskCardView: View {
 
     private var checkbox: some View {
         Button(action: toggleDone) {
-            Image(systemName: draft.done ? "checkmark.circle.fill" : "circle")
+            Image(systemName: session.draft.done ? "checkmark.circle.fill" : "circle")
                 .font(.title2)
                 // Padded out to a comfortable target; the glyph keeps its size.
                 .frame(width: 28, height: 28)
@@ -529,18 +531,18 @@ private struct TaskCardView: View {
                 // the app/system accent and ignores the `.tint()` the
                 // preference threads through, which left the tick system blue
                 // whatever the user chose.
-                .foregroundStyle(draft.done ? settings.theme.primary : Color.secondary)
+                .foregroundStyle(session.draft.done ? settings.theme.primary : Color.secondary)
                 .contentShape(Rectangle())
         }
         .centredOnTextCap()
         .buttonStyle(.plain)
-        .help(draft.done ? "Mark as not done" : "Mark as done")
+        .help(session.draft.done ? "Mark as not done" : "Mark as done")
         // Done-ness was conveyed by glyph and colour only. Announce it as a
         // checkbox with a state so VoiceOver reads the task's status, and the
         // strikethrough isn't the sole non-visual cue.
         .accessibilityLabel("Done")
         .accessibilityAddTraits(.isToggle)
-        .accessibilityValue(draft.done ? "On" : "Off")
+        .accessibilityValue(session.draft.done ? "On" : "Off")
     }
 
     /// Flip the done state via the library. Any in-flight text edit is flushed
@@ -550,8 +552,8 @@ private struct TaskCardView: View {
         // Before the flip, so the pin records the place the row is in now.
         pins.pin(task)
         flushSave()
-        library.toggleTask(id: draft.id)
-        draft.done.toggle()
+        library.toggleTask(id: session.draft.id)
+        session.draft.done.toggle()
     }
 
     // MARK: Meta row (chips + due badge)
@@ -561,10 +563,10 @@ private struct TaskCardView: View {
             // Edit mode always shows the assignments (that's where they're
             // managed); otherwise only the aggregate view labels rows.
             if isEditing || showsProjectChips {
-                ForEach(draft.projectIDs, id: \.self) { id in
+                ForEach(session.draft.projectIDs, id: \.self) { id in
                     if let project = library.project(id: id) {
                         ProjectChip(project: project) {
-                            draft.projectIDs.removeAll { $0 == id }
+                            session.draft.projectIDs.removeAll { $0 == id }
                         }
                     }
                 }
@@ -572,10 +574,14 @@ private struct TaskCardView: View {
             // Unassigned: the full "＋ Add project" pill, always on show like
             // "Add due" across the row. Once assigned, adding *another* is an
             // edit-mode affair — a bare ＋ beside the chips it extends.
-            if draft.projectIDs.isEmpty {
-                AddProjectMenu(assigned: draft.projectIDs) { draft.projectIDs.append($0) }
+            if session.draft.projectIDs.isEmpty {
+                AddProjectMenu(assigned: session.draft.projectIDs) {
+                    session.draft.projectIDs.append($0)
+                }
             } else if isEditing {
-                AddProjectMenu(assigned: draft.projectIDs, compact: true) { draft.projectIDs.append($0) }
+                AddProjectMenu(assigned: session.draft.projectIDs, compact: true) {
+                    session.draft.projectIDs.append($0)
+                }
             }
 
             Spacer(minLength: 0)
@@ -593,7 +599,9 @@ private struct TaskCardView: View {
             HStack(spacing: 4) {
                 Image(systemName: "calendar")
                 // Undated, the badge is an affordance, so it says what it does.
-                Text(draft.due == nil ? "Add due" : DueFormat.relative(draft.due, now: clock.today))
+                Text(session.draft.due == nil
+                    ? "Add due"
+                    : DueFormat.relative(session.draft.due, now: clock.today))
             }
             .font(.caption.weight(isOverdue ? .semibold : .regular))
             .foregroundStyle(isOverdue ? Semantic.overdue : settings.theme.metaText)
@@ -618,7 +626,7 @@ private struct TaskCardView: View {
 
     /// Spoken form of the due badge, spelling out the state the colour encodes.
     private var dueLabel: String {
-        guard let due = draft.due else { return "Set due date" }
+        guard let due = session.draft.due else { return "Set due date" }
         let cal = Calendar.current
         let today = clock.today
         let day = cal.startOfDay(for: due)
@@ -626,7 +634,7 @@ private struct TaskCardView: View {
         // ago"), so don't put "due" in front of it — "Due 3 days ago" is clumsy
         // where "Overdue, 3 days ago" isn't.
         let date = DueFormat.relative(due, now: today)
-        if draft.done { return date }
+        if session.draft.done { return date }
         if day < today { return "Overdue, \(date)" }
         return "Due \(date)"
     }
@@ -636,7 +644,7 @@ private struct TaskCardView: View {
     /// date already says; overdue is the one state worth a colour, and reserving
     /// red for it is what makes the red mean something.
     private var isOverdue: Bool {
-        guard let due = draft.due, !draft.done else { return false }
+        guard let due = session.draft.due, !session.draft.done else { return false }
         return Calendar.current.startOfDay(for: due) < clock.today
     }
 
@@ -647,15 +655,27 @@ private struct TaskCardView: View {
             // as every other pill row: a `Grid` sized both columns to the
             // widest label, so "Today" carried "End of week"'s width and the
             // four pills read as a sparse table rather than a pill row.
+            //
+            // Today is read once for the whole popover, and read *here* —
+            // inside the view update — so the `@Observable` access registers
+            // and a popover left open across midnight re-lights the right
+            // pill. It was `Date()`, which registers nothing. See `DayClock`.
+            let today = clock.today
+            let lit = DuePreset.firstMatch(
+                for: session.draft.due, now: today, weekStyle: settings.weekStyle
+            )
             HStack(spacing: 6) {
-                ForEach(DuePreset.allCases) { presetPill($0) }
+                ForEach(DuePreset.allCases) { presetPill($0, lit: lit, today: today) }
             }
 
+            // The highlight and the month are two answers, not one — see
+            // `DueMonth`. `today` is `clock.today`, read above inside the view
+            // update, so an undated task's grid doesn't open on last month
+            // after midnight.
+            let grid = DueMonth.opening(due: session.draft.due, today: today)
             MonthCalendar(
-                selection: Binding(
-                    get: { draft.due ?? Calendar.current.startOfDay(for: Date()) },
-                    set: { setDue($0) }
-                )
+                selection: Binding(get: { grid.selectedDay }, set: { setDue($0) }),
+                month: grid.month
             )
 
             Button(role: .destructive) {
@@ -665,7 +685,7 @@ private struct TaskCardView: View {
                 Label("Clear due date", systemImage: "xmark.circle")
             }
             .buttonStyle(.plain)
-            .disabled(draft.due == nil)
+            .disabled(session.draft.due == nil)
         }
         .padding(14)
         // Wide enough that the month grid gets room to breathe — the calendar
@@ -676,9 +696,12 @@ private struct TaskCardView: View {
         .opaquePopoverWhenTransparencyReduced()
     }
 
-    private func presetPill(_ preset: DuePreset) -> some View {
-        DuePill(label: preset.label, selected: firstMatchingPreset == preset) {
-            setDue(preset.date(now: Date(), weekStyle: settings.weekStyle))
+    /// One pill. Both the highlight and the date it sets resolve against the
+    /// *same* day, so a pill can never light up for one date and write
+    /// another.
+    private func presetPill(_ preset: DuePreset, lit: DuePreset?, today: Date) -> some View {
+        DuePill(label: preset.label, selected: lit == preset) {
+            setDue(preset.date(now: today, weekStyle: settings.weekStyle))
             showDuePopover = false
         }
     }
@@ -693,18 +716,8 @@ private struct TaskCardView: View {
     /// leaves the popover open, looked fine. See `TaskPins`.
     private func setDue(_ date: Date?) {
         pins.pin(task)
-        draft.due = date
+        session.draft.due = date
         persistNow()
-    }
-
-    /// Presets can collide — on a Thursday in work-week mode, "Tomorrow" and
-    /// "End of week" are both Friday. Highlight only the first match so two
-    /// pills never light up for one date.
-    private var firstMatchingPreset: DuePreset? {
-        guard let due = draft.due else { return nil }
-        return DuePreset.allCases.first {
-            Calendar.current.isDate(due, inSameDayAs: $0.date(now: Date(), weekStyle: settings.weekStyle))
-        }
     }
 
     // MARK: Body — the swap between modes
@@ -776,7 +789,7 @@ private struct TaskCardView: View {
     private var bodySection: some View {
         if hasBody {
             CollapsibleMarkdown(
-                markdown: draft.body,
+                markdown: session.draft.body,
                 textStyle: .callout,
                 previewLines: settings.taskPreviewLines.lines,
                 expanded: $expanded,
@@ -797,8 +810,9 @@ private struct TaskCardView: View {
     /// note card's: a task sorts by done / due / created, and a body edit moves
     /// none of them.
     private func toggleCheckbox(at line: Int) {
-        guard let toggled = MarkdownParser.toggleCheckbox(draft.body, atLine: line) else { return }
-        draft.body = toggled
+        guard let toggled = MarkdownParser.toggleCheckbox(session.draft.body, atLine: line)
+        else { return }
+        session.draft.body = toggled
     }
 
     // MARK: Body — edit mode
@@ -808,13 +822,14 @@ private struct TaskCardView: View {
     /// task has none yet. Mirrors `NoteCardView`'s sizing-proxy approach so the
     /// row expands to fit rather than scrolling internally.
     private var bodyEditor: some View {
-        ZStack(alignment: .topLeading) {
+        let metrics = metrics
+        return ZStack(alignment: .topLeading) {
             // Shown whenever the notes are empty — the field takes focus on
             // entry, and hiding the placeholder then would leave nothing saying
             // what the empty space is for.
-            if draft.body.isEmpty {
+            if session.draft.body.isEmpty {
                 Text("Notes…")
-                    .font(Card.font(.callout))
+                    .font(metrics.font)
                     .foregroundStyle(.tertiary)
                     // (5, 0): the editor's first line starts at the very top of
                     // its frame, 5pt in — the placeholder sits on the caret.
@@ -823,8 +838,8 @@ private struct TaskCardView: View {
             }
 
             MarkdownEditor(
-                text: $draft.body,
-                font: Card.nsFont(.callout),
+                text: $session.draft.body,
+                font: metrics.nsFont,
                 textColor: NSColor(settings.theme.bodyText),
                 onBacktab: { focusTitle() },
                 // Esc leaves the editor, matching the title field. A hook rather
@@ -832,7 +847,7 @@ private struct TaskCardView: View {
                 // the key itself.
                 onEscape: { exitEdit() },
                 focused: $bodyFocused,
-                selection: $bodySelection
+                selection: $session.bodySelection
             )
         }
         // One number is the row's height, and it eases. Wrapping a line used to
@@ -854,13 +869,11 @@ private struct TaskCardView: View {
         // flat face would measure the editor short. Memoised inside
         // `segments`, because this measures in view mode too.
         MarkdownSizingProxy(
-            text: draft.body.isEmpty ? " " : draft.body,
-            base: Card.nsFont(.callout),
-            typeface: settings.typeface,
-            scale: CardTextSize.scale(settings.cardFontSize),
-            lineSpacing: MarkdownText.lineSpacing(
-                Card.nsFont(.callout), lineHeight: settings.cardLineHeight
-            )
+            text: session.draft.body.isEmpty ? " " : session.draft.body,
+            base: metrics.nsFont,
+            typeface: metrics.typeface,
+            scale: metrics.scale,
+            lineSpacing: metrics.lineSpacing
         )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
@@ -886,16 +899,12 @@ private struct TaskCardView: View {
                 Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
             }
             Button(role: .destructive) {
-                if isEditing {
-                    saveTask?.cancel()
-                    saveTask = nil
-                    library.updateTask(draft)
-                }
-                deleting = true
+                if isEditing { session.persistNow(persistence) }
+                session.deleting = true
                 if isEditing { appState.selectedTaskID = nil }
                 Task {
-                    if !(await library.deleteTask(id: draft.id)) {
-                        deleting = false
+                    if !(await library.deleteTask(id: session.draft.id)) {
+                        session.deleting = false
                     }
                 }
             } label: {
@@ -930,21 +939,13 @@ private struct TaskCardView: View {
         if isEditing { appState.selectedTaskID = nil }
     }
 
-    /// Put the cursor where it's most useful: the title for a brand-new task,
-    /// otherwise the end of the notes.
-    ///
-    /// Deferred by one main-actor turn for the reason spelled out on
-    /// `NoteCardView.focusForEntry()` — the fields are created by the very
-    /// update that calls this, so an immediate `@FocusState` write is dropped and
-    /// the row opens with no caret and no Esc.
+    /// Focus on entry, deferred by one main-actor turn because the fields are
+    /// created by the very update that asks for it — see `CardEditingSession`.
     private func focusForEntry() {
-        Task { @MainActor in
-            guard isEditing else { return }
-            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                titleFocused = true
-            } else {
-                bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
-                bodyFocused = true
+        session.focusForEntry(isEditing: { isEditing }) { field in
+            switch field {
+            case .title: titleFocused = true
+            case .body: bodyFocused = true
             }
         }
     }
@@ -959,74 +960,64 @@ private struct TaskCardView: View {
     }
 
     private func focusBody() {
-        bodySelection = TextSelection(insertionPoint: draft.body.endIndex)
+        session.placeCaretAtBodyEnd()
         if CardFocus.moveToEditorBesideCurrentField() { return }
         titleFocused = false
         bodyFocused = true
     }
 
-    /// Ending an edit either persists the draft or, when the task was left
-    /// with no text at all, discards it — a task *is* its text, so there's
-    /// nothing to keep. This is also how "New Task" gets cancelled: blur the
-    /// empty card and it's gone.
-    private func finishEditing() {
-        guard !deleting else { return }
-        let blank = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if blank {
-            library.updateTask(draft)
-            deleting = true
-            saveTask?.cancel()
-            saveTask = nil
-            Task {
-                if !(await library.deleteTask(id: draft.id)) {
-                    deleting = false
-                }
-            }
-        } else {
-            flushSave()
-        }
-    }
+    /// Ending an edit persists the draft, or discards a task left with no text
+    /// at all — a task *is* its text, so there's nothing to keep. This is also
+    /// how "New Task" gets cancelled: blur the empty card and it's gone. The
+    /// rule lives in `CardEditingSession`; the delete is the one half only the
+    /// panel can make.
+    private func finishEditing() { session.finishEditing(persistence) }
+
+    /// The row is going away — scrolled out of the column, or the project
+    /// changed under it.
+    private func settle() { session.settle(isEditing: isEditing, persistence) }
 
     // MARK: Persistence
 
-    /// Restart the debounce for text edits: persist ~0.4s after the last change.
-    /// The snapshot is captured by value so a later keystroke can't mutate what
-    /// we're saving.
-    private func scheduleSave() {
-        saveTask?.cancel()
-        let snapshot = draft
-        saveTask = Task {
-            try? await Task.sleep(for: .seconds(0.4))
-            guard !Task.isCancelled else { return }
-            library.updateTask(snapshot)
-            saveTask = nil
-        }
-    }
+    private func scheduleSave() { session.scheduleSave(persistence) }
 
-    /// Persist an immediate, structural change (done/due). Cancels the text
-    /// debounce and flushes the whole draft so nothing is lost and no stale
-    /// snapshot can revert what we just set.
-    private func persistNow() {
-        saveTask?.cancel()
-        saveTask = nil
-        library.updateTask(draft)
-    }
+    /// An immediate, structural change (done state, due date), where a stale
+    /// debounced snapshot would otherwise revert what was just set.
+    private func persistNow() { session.persistNow(persistence) }
 
-    /// Flush a pending debounced save, if any (editing ended or the row is
-    /// going away).
-    private func flushSave() {
-        guard saveTask != nil else { return }
-        saveTask?.cancel()
-        saveTask = nil
-        library.updateTask(draft)
-    }
+    private func flushSave() { session.flushSave(persistence) }
 }
 
 // MARK: - Due-date pills
 
+/// What the due popover's month grid shows: the day it draws as chosen, and
+/// the month it opens on.
+///
+/// The two are separate because an **undated** task has a month but no chosen
+/// day. Substituting today for a missing due date collapsed them, and the grid
+/// then painted today as already picked while "Clear due date" — correctly —
+/// stayed disabled: the popover claimed the task was due today *and* that
+/// there was nothing to clear.
+struct DueMonth: Equatable {
+    /// The day the grid fills, or `nil` while nothing has been picked.
+    let selectedDay: Date?
+    /// Midnight on the first of the month on show — the due date's month, or
+    /// the one `today` falls in when there is no due date.
+    let month: Date
+
+    static func opening(
+        due: Date?, today: Date, calendar: Calendar = Formatting.calendar
+    ) -> DueMonth {
+        let day = due.map { calendar.startOfDay(for: $0) }
+        return DueMonth(
+            selectedDay: day,
+            month: MonthGrid.startOfMonth(for: day ?? today, calendar: calendar)
+        )
+    }
+}
+
 /// The quick relative due-date options offered in the due-date popover.
-private enum DuePreset: String, CaseIterable, Identifiable {
+enum DuePreset: String, CaseIterable, Identifiable {
     case today, tomorrow, endOfWeek, nextWeek
 
     var id: String { rawValue }
@@ -1060,6 +1051,19 @@ private enum DuePreset: String, CaseIterable, Identifiable {
         case .nextWeek:
             return Self.next(weekday: 2, from: start, orToday: false, cal: cal) // Monday
         }
+    }
+
+    /// Which pill lights up for `due`, resolved against the day `now` falls in.
+    ///
+    /// Presets can collide — on a Thursday in work-week mode, "Tomorrow" and
+    /// "End of week" are both Friday — so only the *first* match counts and two
+    /// pills never light up for one date. A pure function over the three values
+    /// it needs, `now` injected, so the day boundary is testable: the panel
+    /// passes `clock.today`.
+    static func firstMatch(for due: Date?, now: Date, weekStyle: WeekStyle) -> DuePreset? {
+        guard let due else { return nil }
+        let cal = Calendar.current
+        return allCases.first { cal.isDate(due, inSameDayAs: $0.date(now: now, weekStyle: weekStyle)) }
     }
 
     /// The next occurrence of `weekday` (Sunday = 1 … Saturday = 7). When

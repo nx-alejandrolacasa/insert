@@ -62,23 +62,62 @@ enum Frontmatter {
 
     // MARK: - Scalars
 
+    /// Scalars that make a value unreadable if written bare. The two line breaks
+    /// are the load-bearing ones: a raw newline puts the second half of a value on
+    /// a frontmatter line of its own, and a pasted line reading `---` closes the
+    /// fence, so everything after it is re-read as body.
+    ///
+    /// **Scalars, not `Character`s** — measured: `"\r\n"` is a *single* grapheme
+    /// cluster, so a `Set<Character>` holding `"\r"` and `"\n"` matches neither
+    /// half of a Windows line ending, and the value goes out unquoted with the
+    /// break intact. Both the test and the check below have to walk scalars.
+    private static let mustQuote: Set<Unicode.Scalar> = [":", "#", "[", "]", "{", "}", "\"", ",", "\n", "\r"]
+
     static func quote(_ value: String) -> String {
         // Quote when the value could otherwise be misread (empty, has special
         // chars, or leading/trailing space).
         let needsQuote = value.isEmpty
             || value != value.trimmingCharacters(in: .whitespaces)
-            || value.contains(where: { ":#[]{}\",".contains($0) })
+            || value.unicodeScalars.contains(where: { mustQuote.contains($0) })
         if !needsQuote { return value }
-        let escaped = value.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\n": escaped += "\\n"
+            case "\r": escaped += "\\r"
+            default: escaped.unicodeScalars.append(scalar)
+            }
+        }
         return "\"\(escaped)\""
     }
 
+    /// The exact inverse of `quote`'s escaping, read left to right in one pass.
+    ///
+    /// One pass rather than a chain of `replacingOccurrences`: with four escapes
+    /// to undo, sequential passes decode `\\n` — an escaped backslash followed by
+    /// an `n` — as a newline. An escape `quote` never writes keeps its backslash,
+    /// so the parser stays exactly as narrow as the writer.
     static func unquote(_ value: String) -> String {
         guard value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") else { return value }
-        let inner = String(value.dropFirst().dropLast())
-        return inner.replacingOccurrences(of: "\\\"", with: "\"")
-            .replacingOccurrences(of: "\\\\", with: "\\")
+        var out = ""
+        var escaped = false
+        for scalar in value.unicodeScalars.dropFirst().dropLast() {
+            guard escaped else {
+                if scalar == "\\" { escaped = true } else { out.unicodeScalars.append(scalar) }
+                continue
+            }
+            escaped = false
+            switch scalar {
+            case "\\", "\"": out.unicodeScalars.append(scalar)
+            case "n": out.append("\n")
+            case "r": out.append("\r")
+            default: out.append("\\"); out.unicodeScalars.append(scalar)
+            }
+        }
+        if escaped { out.append("\\") }
+        return out
     }
 
     // MARK: - Flow arrays: [a, b, c]

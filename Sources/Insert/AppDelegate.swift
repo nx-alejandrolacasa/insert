@@ -106,6 +106,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SpellChecking.applyToFocusedEditors()
     }
 
+    /// The windows the three window passes in `applicationDidUpdate` may restyle:
+    /// **the app's own, and no other.** One answer for all three, so a fourth pass
+    /// can't get the predicate wrong — which is what had happened.
+    /// `flattenToolbarGlass()` gated on the toolbar alone and so walked the
+    /// Settings titlebar that its two siblings skip by name.
+    ///
+    /// A toolbar is what separates a window with chrome from the chromeless ones —
+    /// the menu-bar extra's window, every popover — which have no titlebar worth
+    /// walking and no column split view to police, and which `splitView(in:)`
+    /// would otherwise visit in full before answering nil, per event. Settings has
+    /// a toolbar and is excluded anyway, because none of the three has business
+    /// there: its title is a pane name, which is chrome rather than content; its
+    /// form is not the column split view; and its titlebar is the system's, so
+    /// whatever is drawn in it is not ours to flatten.
+    @MainActor
+    private static var restylableWindows: [NSWindow] {
+        NSApp.windows.filter {
+            $0.toolbar != nil && !SettingsWindowController.shared.owns($0)
+        }
+    }
+
     /// Draws the toolbar's title — the selected project's name — in the chosen
     /// card face, so the three column headings and the window's own title agree.
     ///
@@ -129,11 +150,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// excluded** (`NSSearchField` is an `NSTextField` subclass, so it would
     /// otherwise match, and the search field is meant to stay the system's — the
     /// same exclusion `SpellChecking` makes for the same reason). **The Settings
-    /// window is excluded**, since its toolbar has a pane name of its own that is
-    /// chrome, not content. And **only the size is preserved, never set**: the
-    /// weight is read off the font AppKit chose and handed back, so this changes
-    /// the face and nothing else. If no field matches, nothing happens and the
-    /// title keeps the system font — benign, like the glass coming back.
+    /// window is excluded** by `restylableWindows`, since its toolbar has a pane
+    /// name of its own that is chrome, not content. And **only the size is
+    /// preserved, never set**: the weight is read off the font AppKit chose and
+    /// handed back, so this changes the face and nothing else. If no field
+    /// matches, nothing happens and the title keeps the system font — benign,
+    /// like the glass coming back.
     ///
     /// Nothing here is contractual, and that is the trade `flattenToolbarGlass()`
     /// already makes: it matches on `NSTextField`, which is at least the class a
@@ -142,10 +164,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private static func restyleWindowTitle() {
         let face = SettingsStore.shared.typeface
-        for window in NSApp.windows where window.toolbar != nil {
-            guard !SettingsWindowController.shared.owns(window),
-                  let frame = window.contentView?.superview
-            else { continue }
+        for window in restylableWindows {
+            guard let frame = window.contentView?.superview else { continue }
             restyleTitles(in: frame, skipping: window.contentView, typeface: face)
         }
     }
@@ -228,10 +248,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// **The content view is skipped**, which is load-bearing rather than an
     /// optimisation: the projects sidebar is Liquid Glass too, and it's meant to stay
-    /// glass. Only the titlebar band is touched.
+    /// glass. Only the titlebar band is touched — and only in the app's own window,
+    /// since `restylableWindows` keeps this off the Settings titlebar the same way
+    /// it keeps its two siblings off it.
     @MainActor
     private static func flattenToolbarGlass() {
-        for window in NSApp.windows where window.toolbar != nil {
+        for window in restylableWindows {
             // The frame view owns both the titlebar container and the content view;
             // start there and skip the latter.
             guard let frame = window.contentView?.superview else { continue }
@@ -436,17 +458,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// "Once" now means once per *window*, not once per tick: only the main
     /// window has a column split view to police, and `splitView(in:)` visits
     /// **every** view of a window that has none — the Settings form, the
-    /// menu-bar extra, each open popover — before answering nil, per event. The
-    /// toolbar gate drops the chromeless windows outright, Settings is excluded
-    /// by name the way `restyleWindowTitle` excludes it, and a found split view
-    /// is remembered weakly so the walk doesn't repeat while it lives.
+    /// menu-bar extra, each open popover — before answering nil, per event.
+    /// `restylableWindows` drops all of those, and a found split view is
+    /// remembered weakly so the walk doesn't repeat while it lives.
     @MainActor
     private static func configureSplitViews() {
-        for window in NSApp.windows {
-            guard window.toolbar != nil,
-                  !SettingsWindowController.shared.owns(window),
-                  let split = columnSplitView(in: window)
-            else { continue }
+        for window in restylableWindows {
+            guard let split = columnSplitView(in: window) else { continue }
             constrainSidebarWidth(in: split)
             disableSidebarPeek(in: split)
         }

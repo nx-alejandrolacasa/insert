@@ -164,17 +164,19 @@ final class UpdateChecker {
         // Replacing a running app's bundle is safe on macOS — the running
         // process keeps its open files; the new bundle is picked up on
         // relaunch. `ditto` preserves the code signature, like build.sh.
-        // Stage the copy next to the destination first (same volume, so the
-        // final move is an atomic rename) — the old bundle is only removed
-        // once the copy from the DMG has fully succeeded.
+        // Stage the copy next to the destination first (same volume), then swap
+        // it in with `replaceItemAt`, which either lands the new bundle or
+        // leaves the old one in place. Remove-then-move had a window between the
+        // two calls where a throw left *neither* bundle on disk — and the
+        // `catch` below then deleted the staged copy as well, so the failure
+        // reported an app that no longer existed.
         let destination = Bundle.main.bundleURL
         let staging = destination.deletingLastPathComponent()
             .appendingPathComponent(".\(destination.lastPathComponent).update")
         try? FileManager.default.removeItem(at: staging)
         do {
             try await run("/usr/bin/ditto", app.path, staging.path)
-            try FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: staging, to: destination)
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
         } catch {
             try? FileManager.default.removeItem(at: staging)
             throw error

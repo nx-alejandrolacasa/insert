@@ -12,7 +12,16 @@ import SwiftUI
 /// `Formatting.calendar`, so weekday and month names come out in the app's
 /// language while the week still starts on `Calendar.firstWeekday` (Monday here).
 struct MonthCalendar: View {
-    @Binding var selection: Date
+    /// The day drawn as chosen — **`nil` when nothing has been chosen yet**,
+    /// which is a state the grid has to be able to show. Substituting today for
+    /// a missing date collapses it into `month` below, and the grid then paints
+    /// today as already picked: on an undated task that claimed the task was due
+    /// today while "Clear due date" — correctly — stayed disabled.
+    @Binding var selection: Date?
+    /// The month the grid opens on while nothing is chosen. Separate from
+    /// `selection` because a caller always has a month to show and may have no
+    /// day to highlight.
+    var month: Date
     /// The tint the grid wears. A `Tint` rather than a single `Color` because the
     /// two things that need colouring want opposite ends of it: the selected day
     /// is a *fill* carrying white type (`deep`), while today's marker and the
@@ -23,11 +32,14 @@ struct MonthCalendar: View {
     /// The month on screen, which the user can page away from the selection.
     @State private var visibleMonth: Date
 
-    init(selection: Binding<Date>, tint: Tint = .blue) {
+    init(selection: Binding<Date?>, month: Date, tint: Tint = .blue) {
         _selection = selection
+        self.month = month
         self.tint = tint
         _visibleMonth = State(
-            initialValue: MonthGrid.startOfMonth(for: selection.wrappedValue, calendar: Formatting.calendar)
+            initialValue: MonthGrid.startOfMonth(
+                for: selection.wrappedValue ?? month, calendar: Formatting.calendar
+            )
         )
     }
 
@@ -42,7 +54,11 @@ struct MonthCalendar: View {
             grid(calendar)
         }
         // Picking a date elsewhere (a preset pill) should bring its month up.
+        // Clearing one should not: there is no month to move to, and paging the
+        // grid back to `month` would take the user away from wherever they were
+        // looking on the click that only cleared a date.
         .onChange(of: selection) { _, newValue in
+            guard let newValue else { return }
             visibleMonth = MonthGrid.startOfMonth(for: newValue, calendar: Formatting.calendar)
         }
     }
@@ -117,7 +133,7 @@ struct MonthCalendar: View {
     }
 
     private func dayCell(_ day: Date, calendar: Calendar, today: Date) -> some View {
-        let isSelected = calendar.isDate(day, inSameDayAs: selection)
+        let isSelected = MonthGrid.isChosen(day, selection: selection, calendar: calendar)
         let isToday = calendar.isDate(day, inSameDayAs: today)
         let inMonth = calendar.isDate(day, equalTo: visibleMonth, toGranularity: .month)
 
@@ -179,6 +195,14 @@ enum MonthGrid {
         let leading = (weekday - calendar.firstWeekday + 7) % 7
         guard let start = calendar.date(byAdding: .day, value: -leading, to: first) else { return [] }
         return (0..<(weeks * 7)).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    /// Whether a cell draws as the chosen day. `nil` chooses **nothing** — the
+    /// whole point of the optional selection — so a grid with no date set has no
+    /// filled cell anywhere in it.
+    static func isChosen(_ day: Date, selection: Date?, calendar: Calendar) -> Bool {
+        guard let selection else { return false }
+        return calendar.isDate(day, inSameDayAs: selection)
     }
 
     /// One-or-two letter weekday headers, rotated to start on the locale's first

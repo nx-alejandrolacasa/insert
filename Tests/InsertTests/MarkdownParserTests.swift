@@ -1,11 +1,19 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Insert
 
-/// Pins the two pieces of `MarkdownParser` that decide what a card *shows*
-/// rather than how it is spaced: the line a collapsed task row teases
-/// (`lead(_:)`), and the block structure of a quote, whose line breaks are part
-/// of the quote. Both are `String`-in, values-out, so neither needs a view — the
-/// same reason `MarkdownFormattingTests` can pin the ⌘B/⌘I rules.
+/// Pins the pieces of `MarkdownParser` that decide what a card *shows* rather
+/// than how it is spaced: the line a collapsed task row teases (`lead(_:)`), and
+/// the block structure of a quote, whose line breaks are part of the quote.
+///
+/// Plus the three pieces of `MarkdownText` every layout of a card's Markdown is
+/// built from, which live here for the same reason: the one line splitter and
+/// its UTF-16 offsets, the one base-paragraph-style factory and the rule it
+/// states (a `lineSpacing`, never a `lineHeightMultiple`), and the emphasis
+/// resolver on an already-weighted base. All of them are `String`-in,
+/// values-out, so none needs a view — the same reason
+/// `MarkdownFormattingTests` can pin the ⌘B/⌘I rules.
 final class MarkdownParserTests: XCTestCase {
 
     /// The lines of the first quote block in a source, or `nil` if there is none.
@@ -331,5 +339,138 @@ final class MarkdownParserTests: XCTestCase {
     /// toggle must refuse it too — flipping it would corrupt the link.
     func testToggleRefusesALinkAtTheHeadOfABullet() {
         XCTAssertNil(MarkdownParser.toggleCheckbox("- [x](https://example.com) site", atLine: 0))
+    }
+
+    // MARK: The one line splitter
+
+    private func split(_ source: String) -> [MarkdownText.Line] {
+        MarkdownText.lines(of: source)
+    }
+
+    private func line(_ text: Substring, _ start: Int, _ end: Int) -> MarkdownText.Line {
+        MarkdownText.Line(text: text, start: start, end: end)
+    }
+
+    /// `MarkdownText.lines(of:)` is what the parser, the highlighter's pass and
+    /// the sizing proxy's segments all walk, and the offsets are the half that
+    /// can be wrong silently: the highlighter attributes `NSRange`s over these
+    /// lines, so an offset a unit out dresses the wrong character as syntax.
+    func testTheSplitterCarriesEachLinesTextAndItsUTF16Offsets() {
+        XCTAssertEqual(split("one\ntwo"), [line("one", 0, 3), line("two", 4, 7)])
+        // A trailing newline opens one more, empty, line — which is what the
+        // editor shows for it, and what `components(separatedBy:)` answers.
+        XCTAssertEqual(split("one\n"), [line("one", 0, 3), line("", 4, 4)])
+        XCTAssertEqual(split(""), [line("", 0, 0)])
+        XCTAssertEqual(split("\n"), [line("", 0, 0), line("", 1, 1)])
+        // An interior blank line is a line of its own, `start == end`.
+        XCTAssertEqual(split("a\n\nb"), [line("a", 0, 1), line("", 2, 2), line("b", 3, 4)])
+    }
+
+    /// A `\r` stays on the line it ends, because the editor's passes address the
+    /// storage as it stands and a normalisation on the way in would shift every
+    /// offset after it. Walked over the unicode scalars for the reason recorded
+    /// at the function: `"\r\n"` is a **single** `Character`, so a
+    /// character-wise walk leaves a CRLF source as one long line.
+    func testACarriageReturnStaysOnItsLineAndStillEndsIt() {
+        XCTAssertEqual(split("a\r\nb"), [line("a\r", 0, 2), line("b", 3, 4)])
+        XCTAssertEqual("a\r\nb".utf16.count, 4)
+    }
+
+    /// Offsets are UTF-16, and an emoji is two units of it — the case that
+    /// breaks a splitter counting characters, and the one that would hand the
+    /// highlighter a range splitting a surrogate pair.
+    func testAnEmojiCostsTwoUnitsAndNoOffsetLandsInsideIt() {
+        let source = "🙂 hola\n🙂"
+        XCTAssertEqual(split(source), [line("🙂 hola", 0, 7), line("🙂", 8, 10)])
+        XCTAssertEqual(source.utf16.count, 10)
+        var boundaries: Set<Int> = [source.utf16.count]
+        for index in source.indices { boundaries.insert(index.utf16Offset(in: source)) }
+        for line in MarkdownText.lines(of: source) {
+            XCTAssertTrue(boundaries.contains(line.start), "start \(line.start)")
+            XCTAssertTrue(boundaries.contains(line.end), "end \(line.end)")
+        }
+    }
+
+    // MARK: The base paragraph style
+
+    /// The one factory both AppKit layouts of a card's Markdown start from, and
+    /// the rule it exists to state: the reading leading is a **`lineSpacing`**,
+    /// never a `lineHeightMultiple`. The multiple inflates every line including
+    /// the first and SwiftUI has no counterpart for it, so the four places a
+    /// card's text is laid out could not have been held to one rhythm through
+    /// it — which is why this is asserted as an equality *and* as an absence.
+    func testTheBaseParagraphStyleSpacesLinesAndNeverMultipliesThem() {
+        for typeface in Typeface.allCases {
+            let font = Card.nsFont(.body, typeface: typeface)
+            var lineHeight = CardLineHeight.range.lowerBound
+            while lineHeight <= CardLineHeight.range.upperBound + 0.0001 {
+                let style = MarkdownText.paragraphStyle(base: font, lineHeight: lineHeight)
+                XCTAssertEqual(style.lineSpacing,
+                               MarkdownText.lineSpacing(font, lineHeight: lineHeight),
+                               "\(typeface) at \(CardLineHeight.label(lineHeight))")
+                XCTAssertEqual(style.lineHeightMultiple, 0,
+                               "\(typeface) at \(CardLineHeight.label(lineHeight))")
+                XCTAssertEqual(style.minimumLineHeight, 0)
+                XCTAssertEqual(style.maximumLineHeight, 0)
+                lineHeight += CardLineHeight.step
+            }
+        }
+    }
+
+    /// At 1.0 the lines sit at the **font's own leading** and nothing is added,
+    /// which is what every card was drawn at before the setting existed: an
+    /// install that never opens the pane must lay out identically.
+    func testTheDefaultLeadingAddsNothingToTheFontsOwn() {
+        for typeface in Typeface.allCases {
+            let font = Card.nsFont(.body, typeface: typeface)
+            XCTAssertEqual(
+                MarkdownText.paragraphStyle(base: font, lineHeight: CardLineHeight.standard)
+                    .lineSpacing,
+                0, "\(typeface)"
+            )
+        }
+    }
+
+    // MARK: Emphasis on a weighted base
+
+    /// `***both***` and `*emphasis*` **inside a heading** are the same case: the
+    /// base is already bold, and the slant has to join that weight rather than
+    /// replace it. Asking for the italic trait on its own replaces the whole
+    /// symbolic set and drops the bold — and then the "is this a real italic?"
+    /// name check believes the different name, which is how bold-italic once
+    /// came out neither.
+    ///
+    /// Checked in all five faces because the slant arrives two different ways:
+    /// a real italic face where one exists, and a shear in the **font matrix**
+    /// under Rounded, which ships none.
+    @MainActor
+    func testEmphasisOnABoldBaseStaysBoldAndSlantsInEveryFace() {
+        for typeface in Typeface.allCases {
+            let bold = Card.nsFont(.body, weight: .bold, typeface: typeface)
+            var source = AttributedString("both")
+            source.inlinePresentationIntent = [.stronglyEmphasized, .emphasized]
+            let run = MarkdownText.italicised(source, in: bold).runs.first
+
+            // The face `italicised` is expected to have baked in: the editor's
+            // own resolver, asked for both traits at once, which is what keeps
+            // a run reading the same open and closed.
+            let resolved = MarkdownHighlight.font(
+                for: .init(bold: true, italic: true), base: bold, typeface: .standard
+            )
+            XCTAssertEqual(run?.font, Font(resolved), "\(typeface.label)")
+
+            let plainItalic = Card.italic(Card.nsFont(.body, typeface: typeface))
+            XCTAssertNotEqual(
+                resolved.fontName, plainItalic.fontName,
+                "\(typeface.label) bold-italic resolved to the same face as plain italic"
+            )
+            let slanted = resolved.fontName != bold.fontName
+                || CTFontGetMatrix(resolved as CTFont).c != 0
+            XCTAssertTrue(slanted, "\(typeface.label) is not slanted: \(resolved.fontName)")
+
+            // And the emphasis intents are given up with the font, or SwiftUI
+            // resolves them again on top and throws a synthesised oblique away.
+            XCTAssertNil(run?.inlinePresentationIntent, "\(typeface.label)")
+        }
     }
 }

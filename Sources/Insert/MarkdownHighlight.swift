@@ -37,13 +37,17 @@ enum MarkdownHighlight {
     /// inside a heading carries both facts — so applying spans never depends on
     /// the order they were emitted in for its *fonts*; colours are only set
     /// where a span names one.
-    struct Style: Equatable {
+    struct Style: Hashable {
         /// Sized as this heading level (the preview's own heading fonts).
         var heading: Int? = nil
         var bold = false
         var italic = false
         /// Inline code and fenced blocks: monospaced at the context's size.
         var mono = false
+        /// A **fenced** block, which is monospaced at the code block's own size
+        /// (`MarkdownText.codeFont`) rather than at the context's. Inline code
+        /// keeps the context's, because it sits on a line of prose.
+        var fenced = false
         var strikethrough = false
         var underline = false
         var colour: Colour? = nil
@@ -58,7 +62,7 @@ enum MarkdownHighlight {
 
     /// The two colours a span can ask for, by role: `marker` is every syntax
     /// character (dimmed, the theme's metadata grey), `link` is a link's label.
-    enum Colour: Equatable {
+    enum Colour: Hashable {
         case marker
         case link
     }
@@ -84,10 +88,20 @@ enum MarkdownHighlight {
         var followsItem: Bool
     }
 
+    /// A heading's line, and which level it is. The level is what decides the
+    /// air above it (`MarkdownText.headingGap`) — the second shape that changes
+    /// the *paragraph* rather than the glyphs on it, and the one both renderers
+    /// were already opening while the editor and its sizing proxy were not.
+    struct HeadingLine: Equatable {
+        var range: NSRange
+        var level: Int
+    }
+
     /// Everything one pass over the source finds.
     struct Scan: Equatable {
         var spans: [Span]
         var listLines: [ListLine]
+        var headingLines: [HeadingLine] = []
     }
 
     /// The resolved colours the editor applies. `NSColor`s rather than theme
@@ -114,11 +128,14 @@ enum MarkdownHighlight {
         /// carries it, but a heading is resolved from its *own* style rather
         /// than from `base`, so the scale has to travel separately to reach it.
         var scale: CGFloat = 1
-        /// The gap between two lines the reading leading asks for. In the
-        /// config because a change to it has to re-run the pass — the editor's
-        /// paragraph style is rebuilt from it, and the bridge decides whether
-        /// anything changed by comparing configs.
-        var lineSpacing: CGFloat = 0
+        /// The reading leading, as the reader's multiple of the font's own line
+        /// height — the multiple rather than the resolved gap, so the base
+        /// paragraph style comes out of the one factory
+        /// (`MarkdownText.paragraphStyle(base:lineHeight:)`), which is where the
+        /// `lineSpacing`-never-`lineHeightMultiple` rule lives. In the config
+        /// because a change to it has to re-run the pass, and the bridge decides
+        /// whether anything changed by comparing configs.
+        var lineHeight: Double = 1
     }
 
     // MARK: The revealed line
@@ -154,25 +171,52 @@ enum MarkdownHighlight {
     /// on Grotesk, whose *regular* descriptor carries no `wght` axis and so
     /// still answers the symbolic trait (the trap only the semibold axis case
     /// has). Italic is `Card.italic`, real face or synthesised oblique.
+    ///
+    /// Memoised, because this is asked once per span per pass and a pass runs
+    /// per keystroke: a body with forty emphasis runs cost forty descriptor
+    /// matches per character typed. The key carries the **typeface**, which is
+    /// what makes a Settings change need no invalidation — the same move
+    /// `Card`, `Card.italic` and `BundledFonts` already make.
     static func font(for style: Style, base: NSFont, typeface: Typeface,
                      scale: CGFloat = 1) -> NSFont {
-        var font = style.heading.map {
-            MarkdownText.headingFont($0, typeface: typeface, scale: scale)
-        } ?? base
-        if style.mono {
-            font = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+        let key = StyleFontKey(style: style, base: base.fontName, size: base.pointSize,
+                               typeface: typeface, scale: scale)
+        return styleFonts.value(for: key) {
+            var font = style.heading.map {
+                MarkdownText.headingFont($0, typeface: typeface, scale: scale)
+            } ?? base
+            if style.mono {
+                font = style.fenced
+                    ? MarkdownText.codeFont(scale: scale)
+                    : .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+            }
+            if style.bold {
+                // Unioned, never set: `withSymbolicTraits` replaces the whole
+                // set, so asking for `.bold` alone on an italic base drops the
+                // slant — the trap `Card.italic` documents, from this side.
+                let descriptor = font.fontDescriptor.withSymbolicTraits(
+                    font.fontDescriptor.symbolicTraits.union(.bold)
+                )
+                font = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
+            }
+            if style.italic {
+                font = Card.italic(font)
+            }
+            return font
         }
-        if style.bold {
-            let descriptor = font.fontDescriptor.withSymbolicTraits(
-                font.fontDescriptor.symbolicTraits.union(.bold)
-            )
-            font = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
-        }
-        if style.italic {
-            font = Card.italic(font)
-        }
-        return font
     }
+
+    /// The whole `Style`, rather than only the four fields `font(for:)` reads,
+    /// so a fifth font-affecting field can't silently share a cached answer.
+    private struct StyleFontKey: Hashable {
+        let style: Style
+        let base: String
+        let size: CGFloat
+        let typeface: Typeface
+        let scale: CGFloat
+    }
+
+    private static let styleFonts = MemoCache<StyleFontKey, NSFont>()
 
     // MARK: Applying — the editor
 
@@ -202,6 +246,25 @@ enum MarkdownHighlight {
             storage.addAttribute(
                 .paragraphStyle,
                 value: line.followsItem ? spacedItem : item,
+                range: (text as NSString).paragraphRange(for: line.range)
+            )
+        }
+        // The air above a heading, which both renderers already open and the
+        // editor did not — a note with three `##` measured 6pt taller in view
+        // mode. The rule and the value are `MarkdownText.headingGap`'s, and it
+        // answers one of two things, so the styles are built once rather than
+        // per line.
+        var headingStyles: [CGFloat: NSParagraphStyle] = [:]
+        for line in scanned.headingLines where line.range.upperBound <= full.length {
+            let gap = MarkdownText.headingGap(line.level)
+            let style = headingStyles[gap] ?? {
+                let style = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+                style.paragraphSpacingBefore = gap
+                headingStyles[gap] = style
+                return style
+            }()
+            storage.addAttribute(
+                .paragraphStyle, value: style,
                 range: (text as NSString).paragraphRange(for: line.range)
             )
         }
@@ -261,8 +324,9 @@ enum MarkdownHighlight {
         var gap: CGFloat
     }
 
-    /// The source cut into `Segment`s: every list line on its own, every run
-    /// of other lines together. The proxies used to lay the raw source out in
+    /// The source cut into `Segment`s: every list line and every heading line
+    /// on its own — each opens a gap of its own — and every run of other lines
+    /// together. The proxies used to lay the raw source out in
     /// the flat card face, which was right for as long as the editor drew
     /// everything at one size; a heading line is taller now, so the proxy has
     /// to wear the same fonts or the editor is measured short. Colours are
@@ -291,8 +355,11 @@ enum MarkdownHighlight {
             }
 
             let ns = text as NSString
-            let gap = MarkdownText.listGap(base)
+            let listGap = MarkdownText.listGap(base)
             let items = Dictionary(uniqueKeysWithValues: scanned.listLines.map { ($0.range.location, $0) })
+            let headings = Dictionary(
+                uniqueKeysWithValues: scanned.headingLines.map { ($0.range.location, $0) }
+            )
             func plain(_ range: NSRange) -> Segment {
                 let slice = ns.substring(with: range)
                 var text: AttributedString
@@ -307,29 +374,38 @@ enum MarkdownHighlight {
                 return Segment(text: text, inset: 0, gap: 0)
             }
 
-            // Lines as the editor shows them: a final newline opens one more.
+            // Lines as the editor shows them, off the one splitter — a final
+            // newline opens one more. A list line and a heading line each take a
+            // segment of their own, because each opens a gap the editor's
+            // paragraph style opens and a `Text` inside a run cannot.
             var out: [Segment] = []
             var run: NSRange?
-            var lineStart = 0
-            while lineStart <= ns.length {
-                var lineEnd = lineStart
-                while lineEnd < ns.length, ns.character(at: lineEnd) != 0x0A { lineEnd += 1 }
-                if let item = items[lineStart], let range = Range(item.range, in: styled) {
-                    if let open = run { out.append(plain(open)); run = nil }
+            func flush() {
+                if let open = run { out.append(plain(open)); run = nil }
+            }
+            for line in MarkdownText.lines(of: text) {
+                if let item = items[line.start], let range = Range(item.range, in: styled) {
+                    flush()
                     out.append(Segment(
                         text: AttributedString(styled[range]),
                         inset: MarkdownText.listInset,
-                        gap: item.followsItem ? gap : 0
+                        gap: item.followsItem ? listGap : 0
+                    ))
+                } else if let heading = headings[line.start],
+                          let range = Range(heading.range, in: styled) {
+                    flush()
+                    out.append(Segment(
+                        text: AttributedString(styled[range]),
+                        inset: 0,
+                        gap: MarkdownText.headingGap(heading.level)
                     ))
                 } else if let open = run {
-                    run = NSRange(location: open.location, length: lineEnd - open.location)
+                    run = NSRange(location: open.location, length: line.end - open.location)
                 } else {
-                    run = NSRange(location: lineStart, length: lineEnd - lineStart)
+                    run = NSRange(location: line.start, length: line.end - line.start)
                 }
-                if lineEnd >= ns.length { break }
-                lineStart = lineEnd + 1
             }
-            if let open = run { out.append(plain(open)) }
+            flush()
             return out
         }
     }
@@ -353,50 +429,62 @@ enum MarkdownHighlight {
         scan(text).spans
     }
 
-    /// One pass over the source: the styled runs, and the list lines whose
+    /// What a scanned line turned out to be — the two kinds whose *paragraph*
+    /// takes a shape of its own, and everything else.
+    private enum LineKind: Equatable {
+        case item
+        case heading(Int)
+        case other
+    }
+
+    /// One pass over the source: the styled runs, and the lines whose
     /// paragraphs take a shape of their own.
+    ///
+    /// The lines come from `MarkdownText.lines(of:)`, the one splitter, which
+    /// carries the UTF-16 offsets the attribution needs as well as the text.
     static func scan(_ text: String) -> Scan {
         let u = Array(text.utf16)
         var scanned = Scan(spans: [], listLines: [])
         var inFence = false
         var previousWasItem = false
 
-        var lineStart = 0
-        while lineStart <= u.count {
-            var lineEnd = lineStart
-            while lineEnd < u.count, u[lineEnd] != nl { lineEnd += 1 }
-            let isItem = scanLine(u, lineStart..<lineEnd, inFence: &inFence, into: &scanned.spans)
-            if isItem {
-                scanned.listLines.append(ListLine(
-                    range: NSRange(location: lineStart, length: lineEnd - lineStart),
-                    followsItem: previousWasItem
-                ))
+        for line in MarkdownText.lines(of: text) {
+            let kind = scanLine(u, line.start..<line.end, inFence: &inFence, into: &scanned.spans)
+            switch kind {
+            case .item:
+                scanned.listLines.append(
+                    ListLine(range: line.range, followsItem: previousWasItem)
+                )
+            case .heading(let level):
+                scanned.headingLines.append(HeadingLine(range: line.range, level: level))
+            case .other:
+                break
             }
-            previousWasItem = isItem
-            if lineEnd >= u.count { break }
-            lineStart = lineEnd + 1
+            previousWasItem = kind == .item
         }
         return scanned
     }
 
-    /// Scans one line into `spans`; `true` when the line is a list item.
+    /// Scans one line into `spans` and says which of the three kinds it is.
     private static func scanLine(
         _ u: [UInt16], _ line: Range<Int>, inFence: inout Bool, into spans: inout [Span]
-    ) -> Bool {
+    ) -> LineKind {
         // Leading whitespace, the way `MarkdownParser` trims before classifying.
         var s = line.lowerBound
         while s < line.upperBound, u[s] == space || u[s] == tab { s += 1 }
-        guard s < line.upperBound else { return false }
+        guard s < line.upperBound else { return .other }
 
-        // A fence line toggles the block; both it and every line inside are mono.
-        if matches(u, at: s, "```"), s + 3 <= line.upperBound {
-            add(&spans, s..<line.upperBound, Style(mono: true, colour: .marker))
+        // A fence line toggles the block; both it and every line inside are the
+        // code block's own face, which is not the card's base — see
+        // `MarkdownText.codeFont`.
+        if matches(u, at: s, fence), s + fence.count <= line.upperBound {
+            add(&spans, s..<line.upperBound, Style(mono: true, fenced: true, colour: .marker))
             inFence.toggle()
-            return false
+            return .other
         }
         if inFence {
-            add(&spans, line, Style(mono: true))
-            return false
+            add(&spans, line, Style(mono: true, fenced: true))
+            return .other
         }
 
         // Heading: the whole line at the level's size, the hashes dimmed.
@@ -407,13 +495,13 @@ enum MarkdownHighlight {
             add(&spans, s..<line.upperBound, Style(heading: level))
             add(&spans, s..<hashes, Style(heading: level, colour: .marker))
             scanInline(u, (hashes + 1)..<line.upperBound, context: Style(heading: level), into: &spans)
-            return false
+            return .heading(level)
         }
 
         // Rule — exactly the three spellings the parser reads.
         if isRule(u, s..<line.upperBound) {
             add(&spans, s..<line.upperBound, Style(colour: .marker))
-            return false
+            return .other
         }
 
         // Block quote: the run of `>`s dims, the quoted text stays the writing.
@@ -422,7 +510,7 @@ enum MarkdownHighlight {
             while q < line.upperBound, u[q] == gt { q += 1 }
             add(&spans, s..<q, Style(colour: .marker))
             scanInline(u, q..<line.upperBound, context: Style(), into: &spans)
-            return false
+            return .other
         }
 
         // List item: the marker dims; a checked box strikes its text through,
@@ -434,11 +522,11 @@ enum MarkdownHighlight {
                     Style(strikethrough: true, colour: .marker))
             }
             scanInline(u, marker.contentStart..<line.upperBound, context: Style(), into: &spans)
-            return true
+            return .item
         }
 
         scanInline(u, s..<line.upperBound, context: Style(), into: &spans)
-        return false
+        return .other
     }
 
     /// The inline shapes, within one line: code spans, `*`/`_` emphasis,
@@ -491,8 +579,8 @@ enum MarkdownHighlight {
             }
 
             // `<u>…</u>`, the span ⌘U writes.
-            if c == lt, matches(u, at: j, "<u>") {
-                if let close = find(u, "</u>", from: j + 3, before: range.upperBound) {
+            if c == lt, matches(u, at: j, underlineOpen) {
+                if let close = find(u, underlineClose, from: j + 3, before: range.upperBound) {
                     var marker = context; marker.colour = .marker
                     var underlined = context; underlined.underline = true
                     add(&spans, j..<(j + 3), marker)
@@ -507,7 +595,7 @@ enum MarkdownHighlight {
 
             // `[label](url)` — the label in the link colour, everything else dimmed.
             if c == lbracket {
-                if let mid = find(u, "](", from: j + 1, before: range.upperBound),
+                if let mid = find(u, linkMiddle, from: j + 1, before: range.upperBound),
                    let close = find(u, rparen, from: mid + 2, before: range.upperBound) {
                     var marker = context; marker.colour = .marker
                     var label = context; label.colour = .link
@@ -615,10 +703,16 @@ enum MarkdownHighlight {
         ))
     }
 
-    private static func matches(_ u: [UInt16], at i: Int, _ literal: String) -> Bool {
-        let l = Array(literal.utf16)
-        guard i + l.count <= u.count else { return false }
-        return Array(u[i..<(i + l.count)]) == l
+    /// Whether `literal` sits at `i`. Compared unit by unit against the buffer
+    /// already in hand — no slice, no `Array` — because this and the `find`
+    /// below are stepped over the source on every keystroke's pass, and the
+    /// slicing spelling allocated once per position stepped.
+    private static func matches(_ u: [UInt16], at i: Int, _ literal: [UInt16]) -> Bool {
+        guard i + literal.count <= u.count else { return false }
+        for k in literal.indices {
+            if u[i + k] != literal[k] { return false }
+        }
+        return true
     }
 
     private static func find(_ u: [UInt16], _ unit: UInt16, from: Int, before: Int) -> Int? {
@@ -639,12 +733,11 @@ enum MarkdownHighlight {
         return nil
     }
 
-    private static func find(_ u: [UInt16], _ literal: String, from: Int, before: Int) -> Int? {
-        let l = Array(literal.utf16)
-        guard !l.isEmpty else { return nil }
+    private static func find(_ u: [UInt16], _ literal: [UInt16], from: Int, before: Int) -> Int? {
+        guard let first = literal.first else { return nil }
         var i = from
-        while i + l.count <= before {
-            if Array(u[i..<(i + l.count)]) == l { return i }
+        while i + literal.count <= before {
+            if u[i] == first, matches(u, at: i, literal) { return i }
             i += 1
         }
         return nil
@@ -677,6 +770,13 @@ enum MarkdownHighlight {
     private static let rparen: UInt16 = 0x29
     private static let zero: UInt16 = 0x30
     private static let nine: UInt16 = 0x39
+
+    // The multi-unit literals, converted once for the process rather than per
+    // call: `find` and `matches` are stepped over the source on every pass.
+    private static let fence: [UInt16] = Array("```".utf16)
+    private static let underlineOpen: [UInt16] = Array("<u>".utf16)
+    private static let underlineClose: [UInt16] = Array("</u>".utf16)
+    private static let linkMiddle: [UInt16] = Array("](".utf16)
 }
 
 /// The hidden view a card measures its editor's height from: the source laid

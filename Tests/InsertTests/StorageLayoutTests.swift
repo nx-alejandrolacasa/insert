@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import Insert
 
@@ -114,7 +115,7 @@ final class StorageLayoutTests: XCTestCase {
         check("Tasks/Done/ on disk", mdCount(library.tasksDoneDir), 30)
 
         print("\n— a reload finds the same thing, from the new layout —")
-        library.reloadAll()
+        await library.reloadAll()
         check("notes loaded", library.notes.count, 400)
         check("tasks loaded", library.tasks.count, 40)
         check("done tasks loaded", library.tasks.filter(\.done).count, 30)
@@ -260,7 +261,7 @@ final class StorageLayoutTests: XCTestCase {
     /// same every run — `deduped` breaks ties between two files claiming one id by
     /// position, and a tie-break that varied run to run would be a horrible bug.
     @MainActor
-    func testParallelLoadIsCompleteAndOrdered() throws {
+    func testParallelLoadIsCompleteAndOrdered() async throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("insert-parallel-\(UUID().uuidString)", isDirectory: true)
@@ -283,7 +284,7 @@ final class StorageLayoutTests: XCTestCase {
 
         let order = library.notes.map(\.id)
         for _ in 0..<5 {
-            library.reloadAll()
+            await library.reloadAll()
             XCTAssertEqual(library.notes.count, 1_001, "a chunk went missing")
             XCTAssertEqual(library.notes.map(\.id), order, "load order is not stable")
         }
@@ -480,7 +481,7 @@ final class StorageLayoutTests: XCTestCase {
     /// reorder gets its off-by-one: dropping a project into the gap it already fills
     /// must change nothing, and "before nobody" means last.
     @MainActor
-    func testProjectsReorderByDragAndPersist() throws {
+    func testProjectsReorderByDragAndPersist() async throws {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("insert-order-\(UUID().uuidString)", isDirectory: true)
@@ -515,9 +516,236 @@ final class StorageLayoutTests: XCTestCase {
         XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"])
 
         // And the whole thing survives a round trip through the Markdown.
-        library.reloadAll()
+        await library.reloadAll()
         XCTAssertEqual(order(), ["Alpha", "Beta", "Delta", "Gamma"], "the order did not persist")
     }
+    // MARK: Completion stamps
+
+    /// A task ticked off in Obsidian arrives done with no `completed` stamp, and
+    /// the retention purge used to age one on `updated` — an edit date, not a
+    /// completion date — so a task last edited a year ago and finished this
+    /// morning was trashed on the first housekeeping run. The load stamps it
+    /// instead, and both halves of that are pinned here: the stamp is written, to
+    /// the index and to the file, and the task then ages from the day Insert saw
+    /// it rather than the day it was last edited.
+    ///
+    /// The purge's own refusal to age an unstamped task is a second line of
+    /// defence and is deliberately not reached from here: with the load stamping
+    /// every done task, nothing that goes through `Library` can leave an unstamped
+    /// one in the index for the purge to see. What this pins is what a user gets.
+    @MainActor
+    func testAnExternallyTickedTaskIsStampedOnLoadAndSurvivesRetention() async throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-stamp-\(UUID().uuidString)", isDirectory: true)
+        let tasks = root.appendingPathComponent("Tasks", isDirectory: true)
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [tasks, trashBin] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+        let moveToTestTrash: Library.TrashOperation = { source in
+            let destination = trashBin.appendingPathComponent(
+                "\(UUID().uuidString)-\(source.lastPathComponent)"
+            )
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+
+        let cal = Calendar.current
+        let now = Date()
+        let lastYear = cal.date(byAdding: .day, value: -400, to: now)!
+
+        // Ticked off outside Insert: done, no stamp, and an edit date old enough
+        // that the `updated` fallback would have taken it on sight.
+        let unstamped = TaskItem(
+            title: "Ticked in Obsidian", done: true, completed: nil,
+            created: lastYear, updated: lastYear
+        )
+        // And one Insert finished itself, long enough ago to really go.
+        let expired = TaskItem(
+            title: "Finished last year", done: true, completed: lastYear,
+            created: lastYear, updated: lastYear
+        )
+        for task in [unstamped, expired] {
+            try MarkdownFiles.encode(task).write(
+                to: tasks.appendingPathComponent(MarkdownFiles.taskFilename(task)),
+                atomically: true, encoding: .utf8)
+        }
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        // Point the singleton at an empty folder before it is first touched — this
+        // test can be the one that creates it — so its `init` can neither read nor
+        // write the real library. See `testFolderLayoutAndWrites`.
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        library.setRoot(root)
+
+        let loaded = try XCTUnwrap(library.tasks.first { $0.id == unstamped.id })
+        let stamp = try XCTUnwrap(loaded.completed, "the load left a ticked task unstamped")
+        XCTAssertTrue(cal.isDate(stamp, inSameDayAs: now),
+                      "the stamp is not the day Insert first saw the task done")
+        XCTAssertEqual(loaded.updated.timeIntervalSince1970,
+                       lastYear.timeIntervalSince1970, accuracy: 1,
+                       "stamping a completion is not an edit")
+
+        // On disk too, or every launch stamps it afresh and it never ages.
+        library.flushDiskWrites()
+        let file = try XCTUnwrap(loaded.fileURL)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let onDisk = try XCTUnwrap(MarkdownFiles.decodeTask(from: text, url: file))
+        XCTAssertNotNil(onDisk.completed, "the stamp was not written back")
+
+        let purged = await library.purgeCompletedTasks(
+            retention: .month, now: now, trashOperation: moveToTestTrash)
+        XCTAssertEqual(purged, 1, "the purge took something other than the one old task")
+        XCTAssertTrue(library.tasks.contains { $0.id == unstamped.id },
+                      "a task ticked off outside Insert was purged on its edit date")
+
+        // It does expire — a month after the day it was seen, not a month after
+        // the year-old edit.
+        let twoMonthsOn = cal.date(byAdding: .day, value: 60, to: now)!
+        let later = await library.purgeCompletedTasks(
+            retention: .month, now: twoMonthsOn, trashOperation: moveToTestTrash)
+        XCTAssertEqual(later, 1, "the stamped task never expires")
+        XCTAssertFalse(library.tasks.contains { $0.id == unstamped.id })
+    }
+
+    // MARK: Two files, one id
+
+    /// Two files under one id with the same `updated` are two pieces of writing,
+    /// not a duplicate. The loser of the tie used to be trashed on directory
+    /// order, which is how a Finder copy whose frontmatter was untouched but whose
+    /// body carried the writing was lost — so both files stay now, and the one
+    /// that gives up the id is saved under a fresh one.
+    @MainActor
+    func testAnUpdatedTieKeepsBothFilesUnderDistinctIDs() async throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-tie-\(UUID().uuidString)", isDirectory: true)
+        let notes = root.appendingPathComponent("Notes", isDirectory: true)
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [notes, trashBin] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+        func mdCount(_ dir: URL) -> Int {
+            ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "md" }.count
+        }
+
+        let shared = UUID()
+        let stamp = Date()
+        let original = Note(id: shared, title: "Original", body: "the original",
+                            created: stamp, updated: stamp)
+        let duplicate = Note(id: shared, title: "Original copy",
+                             body: "the copy, carrying the writing",
+                             created: stamp, updated: stamp)
+        for note in [original, duplicate] {
+            try MarkdownFiles.encode(note).write(
+                to: notes.appendingPathComponent(MarkdownFiles.noteFilename(note)),
+                atomically: true, encoding: .utf8)
+        }
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        // Point the singleton at an empty folder before it is first touched — this
+        // test can be the one that creates it — so its `init` can neither read nor
+        // write the real library. See `testFolderLayoutAndWrites`.
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        // A duplicate found while loading has no caller to hand a trash operation
+        // to, so the singleton's own is what points at the test bin.
+        library.duplicateTrashOperation = { source in
+            let destination = trashBin.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        library.setRoot(root)
+        library.flushDiskWrites()
+
+        XCTAssertEqual(library.notes.count, 2, "one of the two notes was dropped")
+        XCTAssertEqual(Set(library.notes.map(\.id)).count, 2, "the two notes still share an id")
+        XCTAssertEqual(library.notes.filter { $0.id == shared }.count, 1,
+                       "the id should be kept by exactly one of them")
+        XCTAssertEqual(Set(library.notes.map(\.body)),
+                       ["the original", "the copy, carrying the writing"],
+                       "a body was lost")
+        XCTAssertEqual(mdCount(notes), 2, "a file went missing")
+        XCTAssertEqual(mdCount(trashBin), 0, "nothing here is a true duplicate")
+        for note in library.notes {
+            XCTAssertTrue(fm.fileExists(atPath: try XCTUnwrap(note.fileURL).path),
+                          "a note's file is not where the index says")
+        }
+
+        // The re-identification is a one-off: the second load finds no duplicate,
+        // so nothing is re-identified again and no id moves under the UI.
+        let ids = Set(library.notes.map(\.id))
+        await library.reloadAll()
+        library.flushDiskWrites()
+        XCTAssertEqual(Set(library.notes.map(\.id)), ids, "a note was re-identified twice")
+        XCTAssertEqual(mdCount(notes), 2)
+    }
+
+    /// A file that encodes to the same string as one already loaded is a true
+    /// duplicate — same id, same `updated`, same content — so there is no writing
+    /// in it to save and it still goes to the Trash rather than being kept under
+    /// a second id.
+    @MainActor
+    func testATrueDuplicateIsStillTrashed() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-dupe-\(UUID().uuidString)", isDirectory: true)
+        let notes = root.appendingPathComponent("Notes", isDirectory: true)
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [notes, trashBin] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+        func mdCount(_ dir: URL) -> Int {
+            ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "md" }.count
+        }
+
+        // A Finder duplicate: one byte-identical file under a second name.
+        let note = Note(title: "Meeting notes", body: "one copy of this")
+        let encoded = MarkdownFiles.encode(note)
+        try encoded.write(to: notes.appendingPathComponent(MarkdownFiles.noteFilename(note)),
+                          atomically: true, encoding: .utf8)
+        try encoded.write(to: notes.appendingPathComponent("meeting-notes copy.md"),
+                          atomically: true, encoding: .utf8)
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        // Point the singleton at an empty folder before it is first touched — this
+        // test can be the one that creates it — so its `init` can neither read nor
+        // write the real library. See `testFolderLayoutAndWrites`.
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        library.duplicateTrashOperation = { source in
+            let destination = trashBin.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        library.setRoot(root)
+        library.flushDiskWrites()
+
+        XCTAssertEqual(library.notes.count, 1, "a byte-identical duplicate was kept")
+        XCTAssertEqual(library.notes.first?.id, note.id,
+                       "the duplicate was re-identified instead of trashed")
+        XCTAssertEqual(mdCount(notes), 1, "the duplicate is still in the folder")
+        XCTAssertEqual(mdCount(trashBin), 1, "the duplicate did not reach the Trash")
+        XCTAssertTrue(fm.fileExists(atPath: try XCTUnwrap(library.notes.first?.fileURL).path),
+                      "the survivor's file is gone")
+    }
+
     // MARK: Copying a note to the pasteboard
 
     /// What the ⋯ menu's Copy puts on the pasteboard is the writing — the title
@@ -550,4 +778,300 @@ final class StorageLayoutTests: XCTestCase {
         XCTAssertTrue(MarkdownFiles.copyText(Note(title: "", body: "\n  \n")).isEmpty)
     }
 
+    // MARK: Searching
+
+    /// Search is one rule for all three columns, and it is case- *and*
+    /// diacritic-insensitive: `range(of:options:)` in place, rather than a
+    /// `lowercased()` copy of every record's title and body per keystroke. The
+    /// diacritic half is a behaviour gain and it works from both sides — an
+    /// unaccented query finds accented writing and the other way about — which is
+    /// the whole point on a Spanish keyboard.
+    ///
+    /// No locale is involved: both options are locale-independent, so this holds
+    /// whatever `Locale.current` says. See `Formatting`.
+    @MainActor
+    func testSearchIsCaseAndDiacriticInsensitiveInAllThreeColumns() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-search-\(UUID().uuidString)", isDirectory: true)
+        let notesDir = root.appendingPathComponent("Notes", isDirectory: true)
+        let tasksDir = root.appendingPathComponent("Tasks", isDirectory: true)
+        for dir in [notesDir, tasksDir] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+
+        try MarkdownFiles.encodeProjects([
+            Project(name: "Navegación"),
+            Project(name: "Búsqueda"),
+        ]).write(to: root.appendingPathComponent("Projects.md"),
+                 atomically: true, encoding: .utf8)
+
+        // One note matched by its accented title, one by an unaccented body — so a
+        // query in either spelling has to reach both.
+        for note in [Note(title: "Navegación de la app", body: "revisar también el menú"),
+                     Note(title: "Plain ascii note", body: "navegacion sin tilde")] {
+            try MarkdownFiles.encode(note).write(
+                to: notesDir.appendingPathComponent(MarkdownFiles.noteFilename(note)),
+                atomically: true, encoding: .utf8)
+        }
+        let task = TaskItem(title: "Arreglar la Navegación", body: "y también el foco")
+        try MarkdownFiles.encode(task).write(
+            to: tasksDir.appendingPathComponent(MarkdownFiles.taskFilename(task)),
+            atomically: true, encoding: .utf8)
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        library.setRoot(root)
+        XCTAssertEqual(library.notes.count, 2)
+        XCTAssertEqual(library.tasks.count, 1)
+
+        // The toolbar field: every column at once, in four spellings of one query.
+        for query in ["Navegación", "navegacion", "NAVEGACION", "NAVEGACIÓN"] {
+            let hits = library.search(query)
+            XCTAssertEqual(hits.projects.map(\.name), ["Navegación"], "projects, for “\(query)”")
+            XCTAssertEqual(hits.notes.count, 2, "notes, for “\(query)”")
+            XCTAssertEqual(hits.tasks.count, 1, "tasks, for “\(query)”")
+        }
+
+        // A body-only match, and one that is diacritic-insensitive in the other
+        // direction: the writing carries the accent, the query does not.
+        let alsos = library.search("TAMBIEN")
+        XCTAssertEqual(alsos.projects.count, 0)
+        XCTAssertEqual(alsos.notes.map(\.title), ["Navegación de la app"])
+        XCTAssertEqual(alsos.tasks.count, 1)
+
+        XCTAssertEqual(library.search("BUSQUEDA").projects.map(\.name), ["Búsqueda"])
+        XCTAssertTrue(library.search("zzz").isEmpty, "the fold matched something it shouldn't")
+
+        // And the two column queries, which search by the same rule.
+        XCTAssertEqual(
+            library.notes(forProject: nil, sort: .updatedDesc, typeFilter: nil,
+                          search: "  NAVEGACION  ").count,
+            2, "the notes column does not fold its query"
+        )
+        XCTAssertEqual(
+            library.tasks(forProject: nil, filter: .all, search: "tambien").map(\.title),
+            ["Arreglar la Navegación"], "the tasks column does not fold its query"
+        )
+    }
+
+    // MARK: Project counts
+
+    /// `counts(forProject:)` answers from a table built in one pass over both
+    /// arrays, because the sidebar asks per row on every mutation — including each
+    /// debounced save while someone types. The table is only worth having if the
+    /// invalidation is complete, so every kind of mutation is walked here: a
+    /// create, an update that moves an assignment, a delete, a tick that changes
+    /// no assignment at all, a project deletion (which rewrites records in place)
+    /// and a full reload.
+    ///
+    /// The last check is the other half, and it is the one a cache usually gets
+    /// wrong: the table is `@ObservationIgnored`, so `counts(forProject:)` has to
+    /// register the dependency itself or a sidebar row would draw its number once
+    /// and never again.
+    @MainActor
+    func testProjectCountsFollowEveryMutation() async throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-counts-\(UUID().uuidString)", isDirectory: true)
+        let notesDir = root.appendingPathComponent("Notes", isDirectory: true)
+        let tasksDir = root.appendingPathComponent("Tasks", isDirectory: true)
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [notesDir, tasksDir, trashBin] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+        let moveToTestTrash: Library.TrashOperation = { source in
+            let destination = trashBin.appendingPathComponent(
+                "\(UUID().uuidString)-\(source.lastPathComponent)"
+            )
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+
+        let projectA = UUID(), projectB = UUID()
+        try MarkdownFiles.encodeProjects([
+            Project(id: projectA, name: "Alpha"),
+            Project(id: projectB, name: "Beta"),
+        ]).write(to: root.appendingPathComponent("Projects.md"),
+                 atomically: true, encoding: .utf8)
+
+        let seedNote = Note(title: "Alpha's note", projectIDs: [projectA])
+        try MarkdownFiles.encode(seedNote).write(
+            to: notesDir.appendingPathComponent(MarkdownFiles.noteFilename(seedNote)),
+            atomically: true, encoding: .utf8)
+        let seedTask = TaskItem(title: "Alpha's task", projectIDs: [projectA])
+        try MarkdownFiles.encode(seedTask).write(
+            to: tasksDir.appendingPathComponent(MarkdownFiles.taskFilename(seedTask)),
+            atomically: true, encoding: .utf8)
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        library.setRoot(root)
+
+        // A tuple can't be `Equatable`, so the pair is compared as two numbers.
+        func counts(_ id: UUID) -> [Int] {
+            let c = library.counts(forProject: id)
+            return [c.notes, c.tasks]
+        }
+
+        XCTAssertEqual(counts(projectA), [1, 1], "the load's own counts are wrong")
+        XCTAssertEqual(counts(projectB), [0, 0])
+        XCTAssertEqual(counts(UUID()), [0, 0], "an unknown project should count nothing")
+
+        let extraNote = library.addNote(title: "Second note", projectIDs: [projectA])
+        XCTAssertEqual(counts(projectA), [2, 1], "a created note is not counted")
+        let extraTask = library.addTask(title: "Second task", projectIDs: [projectA])
+        XCTAssertEqual(counts(projectA), [2, 2], "a created task is not counted")
+
+        // Moving an assignment is the in-place `notes[idx] = …` path, which the
+        // invalidation has to catch as surely as a whole-array assignment does.
+        var moved = try XCTUnwrap(library.notes.first { $0.id == extraNote.id })
+        moved.projectIDs = [projectB]
+        library.updateNote(moved)
+        XCTAssertEqual(counts(projectA), [1, 2], "a reassigned note is still counted under Alpha")
+        XCTAssertEqual(counts(projectB), [1, 0], "a reassigned note is not counted under Beta")
+
+        let extraDeleted = await library.deleteNote(
+            id: extraNote.id, trashOperation: moveToTestTrash)
+        XCTAssertTrue(extraDeleted)
+        XCTAssertEqual(counts(projectB), [0, 0], "a deleted note is still counted")
+
+        // Ticking a task changes no assignment, so the same numbers have to come
+        // back — through an invalidation that did happen.
+        library.toggleTask(id: extraTask.id)
+        XCTAssertEqual(counts(projectA), [1, 2], "a tick moved a count")
+
+        // A reload replaces both arrays wholesale and must not answer from the
+        // table the mutations above left behind.
+        await library.reloadAll()
+        XCTAssertEqual(counts(projectA), [1, 2], "the counts did not survive a reload")
+
+        // `deleteProject` unassigns the project from every record, in place.
+        library.deleteProject(id: projectA)
+        XCTAssertEqual(counts(projectA), [0, 0], "a deleted project's records are still counted")
+        await library.reloadAll()
+        XCTAssertEqual(counts(projectA), [0, 0],
+                       "the unassignment did not reach disk, or the reload read a stale table")
+
+        // Warm the table first: a cache *hit* is the path that could skip the read
+        // of `notes`/`tasks` and so register no dependency at all.
+        _ = counts(projectB)
+        let signal = MutationSignal()
+        _ = withObservationTracking {
+            library.counts(forProject: projectB)
+        } onChange: {
+            signal.fire()
+        }
+        _ = library.addNote(title: "Watched", projectIDs: [projectB])
+        XCTAssertTrue(signal.fired,
+                      "reading a count registers no @Observable dependency, so a sidebar row would never update")
+        XCTAssertEqual(counts(projectB), [1, 0])
+    }
+
+    // MARK: Draining the disk queue
+
+    /// `reloadAll` drains the write queue **off** the main actor now — the drain
+    /// used to be a `diskQueue.sync {}` as its first statement, so a stalled
+    /// iCloud rename held the window, which is the stall the queue was added to
+    /// remove. What it gave the block up for has to survive: nothing may be
+    /// decoded until every queued write has landed, or the reload reverts the
+    /// index to what the disk still says.
+    ///
+    /// The queue is genuinely occupied here rather than raced against. A Trash
+    /// operation runs on the same serial queue every write goes to, so one that
+    /// sleeps holds everything enqueued behind it — and the gate is what makes the
+    /// ordering a fact rather than a hope: the edit below is only made once the
+    /// sleeping block is known to be *running*.
+    @MainActor
+    func testReloadWaitsForEveryPendingDiskWrite() async throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("insert-drain-\(UUID().uuidString)", isDirectory: true)
+        let notesDir = root.appendingPathComponent("Notes", isDirectory: true)
+        let trashBin = root.appendingPathComponent("Test Trash", isDirectory: true)
+        for dir in [notesDir, trashBin] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? fm.removeItem(at: root) }
+
+        let resident = Note(title: "Resident", body: "as it was on disk")
+        try MarkdownFiles.encode(resident).write(
+            to: notesDir.appendingPathComponent(MarkdownFiles.noteFilename(resident)),
+            atomically: true, encoding: .utf8)
+
+        UserDefaults.standard.set(true, forKey: "didSeed")
+        UserDefaults.standard.set(
+            root.appendingPathComponent("unused", isDirectory: true).path,
+            forKey: "rootFolderPath"
+        )
+        let library = Library.shared
+        library.setRoot(root)
+
+        // A throwaway note, only so that deleting it puts a slow block on the queue.
+        let filler = library.addNote(title: "Occupies the queue")
+        library.flushDiskWrites()
+
+        let gate = MutationSignal()
+        let slowTrash: Library.TrashOperation = { source in
+            gate.fire()
+            Thread.sleep(forTimeInterval: 0.4)
+            let destination = trashBin.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        let deletion = Task { await library.deleteNote(id: filler.id, trashOperation: slowTrash) }
+
+        // Bounded, so a Trash operation that never reaches the queue fails the test
+        // rather than hanging it.
+        var spins = 0
+        while !gate.fired, spins < 100_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertTrue(gate.fired, "the Trash operation never reached the disk queue")
+
+        // Enqueued behind the sleeping block, so it cannot have landed yet.
+        var edited = try XCTUnwrap(library.notes.first { $0.id == resident.id })
+        edited.body = "written while the queue was busy"
+        library.updateNote(edited)
+
+        await library.reloadAll()
+        let reloaded = try XCTUnwrap(library.notes.first { $0.id == resident.id })
+        XCTAssertEqual(reloaded.body, "written while the queue was busy",
+                       "the reload decoded before the queue had drained")
+
+        let fillerDeleted = await deletion.value
+        XCTAssertTrue(fillerDeleted)
+        XCTAssertFalse(library.notes.contains { $0.id == filler.id })
+    }
+
+}
+
+/// A flag `withObservationTracking`'s `@Sendable` change handler — and a Trash
+/// operation running on the disk queue — can raise from off the main actor.
+private final class MutationSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+
+    func fire() {
+        lock.lock()
+        raised = true
+        lock.unlock()
+    }
+
+    var fired: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return raised
+    }
 }

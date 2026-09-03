@@ -44,16 +44,22 @@ enum SpellChecking {
     static func applyToFocusedEditors() {
         let wanted = SettingsStore.shared.checkSpelling
         for window in NSApp.windows {
-            guard let editor = window.firstResponder as? NSTextView, editor.isEditable else {
+            // A body's text view is its own and always follows the preference —
+            // `MarkdownResponder` is the one place a body is told apart from a
+            // title's field editor and from the view-mode preview.
+            if let body = MarkdownResponder.markdownBody(in: window) {
+                apply(spellChecking: wanted, to: body)
                 continue
             }
             // A title's field editor is shared, so what it should do depends on
-            // the field it is attached to right now; a body's text view is its
-            // own and always follows the preference.
-            let enabled = editor.isFieldEditor
-                ? wanted && checkable(field(of: editor), in: window)
-                : wanted
-            apply(spellChecking: enabled, to: editor)
+            // the field it is attached to right now.
+            guard let editor = window.firstResponder as? NSTextView,
+                  editor.isEditable, editor.isFieldEditor
+            else { continue }
+            apply(
+                spellChecking: wanted && checkable(field(of: editor), in: window),
+                to: editor
+            )
         }
     }
 

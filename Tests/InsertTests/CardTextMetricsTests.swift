@@ -11,9 +11,12 @@ import XCTest
 /// the pane, and the only symptom would be cards that look slightly wrong to
 /// somebody who changed nothing. And the rhythm rule — that a card's preview and
 /// its source are laid out to the same height, so the flip between them moves
-/// nothing — is arithmetic over four separate call sites; the last two tests
-/// here lay the text out for real and compare, because reading them is exactly
-/// how the off-by-one they guard against survived being written down.
+/// nothing — is arithmetic over four separate call sites, which is why the tests
+/// under "The rhythm" lay both halves out **for real** and compare: reading the
+/// arithmetic is exactly how the off-by-ones they guard against survived being
+/// written down. `CardTextMetrics.current(for:)` is here for the same reason
+/// from the other end — it is the one resolver those four sites now consume, so
+/// it is checked against the derivations it replaced rather than trusted.
 final class CardTextMetricsTests: XCTestCase {
 
     // MARK: The size
@@ -236,5 +239,203 @@ final class CardTextMetricsTests: XCTestCase {
         XCTAssertEqual(store.cardLineHeight, 1.4, accuracy: 0.0001)
         store.cardLineHeight = store.cardLineHeight
         XCTAssertEqual(store.cardLineHeight, 1.4, accuracy: 0.0001)
+    }
+
+    // MARK: The resolver
+
+    /// `CardTextMetrics.current(for:)` replaced four independent derivations of
+    /// the same five values — each panel's hidden sizing proxy, the editor's
+    /// highlight config and the view-mode render's — and the reason it exists is
+    /// that a term derived differently at one of them shows up as the card
+    /// **changing shape** on the flip between reading and editing. So this
+    /// re-derives all five the long way and compares, at every Text size and
+    /// every Line height, in all five faces, for both styles a card body reads
+    /// at.
+    @MainActor
+    func testTheResolverAgreesWithTheDerivationsItReplaced() {
+        let store = SettingsStore.shared
+        let size = store.cardFontSize
+        let height = store.cardLineHeight
+        let face = store.typeface
+        defer {
+            store.cardFontSize = size
+            store.cardLineHeight = height
+            store.typeface = face
+        }
+
+        for typeface in Typeface.allCases {
+            store.typeface = typeface
+            for points in CardTextSize.range {
+                store.cardFontSize = points
+                var lineHeight = CardLineHeight.range.lowerBound
+                while lineHeight <= CardLineHeight.range.upperBound + 0.0001 {
+                    store.cardLineHeight = lineHeight
+                    for style in [NSFont.TextStyle.body, .callout] {
+                        let metrics = CardTextMetrics.current(for: style, settings: store)
+                        let scale = CardTextSize.scale(store.cardFontSize)
+                        let nsFont = Card.nsFont(style, typeface: store.typeface, scale: scale)
+                        let where_ = "\(typeface) \(style) \(points)pt × \(CardLineHeight.label(lineHeight))"
+                        XCTAssertEqual(metrics.typeface, store.typeface, where_)
+                        XCTAssertEqual(metrics.scale, scale, where_)
+                        XCTAssertEqual(metrics.lineHeight, store.cardLineHeight,
+                                       accuracy: 0.0001, where_)
+                        XCTAssertEqual(metrics.nsFont, nsFont, where_)
+                        XCTAssertEqual(metrics.nsFont.pointSize, nsFont.pointSize, where_)
+                        XCTAssertEqual(metrics.font, Font(nsFont), where_)
+                        XCTAssertEqual(
+                            metrics.lineSpacing,
+                            MarkdownText.lineSpacing(nsFont, lineHeight: store.cardLineHeight),
+                            where_
+                        )
+                    }
+                    lineHeight += CardLineHeight.step
+                }
+            }
+        }
+    }
+
+    // MARK: The rhythm through a heading and a fenced block
+
+    /// The editor's storage, styled exactly as the bridge styles it: the raw
+    /// source, the highlighter's attributes, and the one base paragraph style
+    /// both halves start from.
+    @MainActor
+    private func editorSource(
+        _ markdown: String, typeface: Typeface, scale: CGFloat, lineHeight: Double
+    ) -> NSTextStorage {
+        let base = Card.nsFont(.body, typeface: typeface, scale: scale)
+        let storage = NSTextStorage(string: markdown)
+        MarkdownHighlight.apply(
+            to: storage,
+            config: MarkdownHighlight.Config(
+                base: base,
+                typeface: typeface,
+                palette: .init(text: .labelColor, marker: .gray,
+                               faintMarker: .lightGray, link: .linkColor),
+                scale: scale,
+                lineHeight: lineHeight
+            ),
+            paragraphStyle: MarkdownText.paragraphStyle(base: base, lineHeight: lineHeight)
+        )
+        return storage
+    }
+
+    private func previewRender(
+        _ markdown: String, typeface: Typeface, scale: CGFloat, lineHeight: Double
+    ) -> NSAttributedString {
+        MarkdownRichText.render(markdown, config: MarkdownRichText.Config(
+            textStyle: .body, typeface: typeface, theme: .system,
+            scale: scale, lineHeight: lineHeight
+        )).text
+    }
+
+    /// A **heading** must cost the two halves the same height, which is the fix
+    /// this pins: both renderers opened 2pt above an h1/h2 and the editor —
+    /// and its sizing proxy — opened none, so a note with three `##` was 6pt
+    /// taller in view mode than the editor it flipped out of.
+    ///
+    /// Measured as a *difference of differences*, and that is deliberate. The
+    /// two halves already sit up to a point apart per block boundary, because
+    /// the preview rounds its blank line once where the source rounds each of
+    /// its own fragments (the slack the rhythm test above allows for) — which
+    /// is the same order as the 2pt being pinned. Replacing the heading with an
+    /// ordinary paragraph holds the boundaries, the blank lines and the base
+    /// font fixed and leaves only the heading, so the heading's contribution to
+    /// the drift is measured on its own and has to be **zero**. Measured: 0 at
+    /// every setting with the fix, exactly 2.0 without it.
+    @MainActor
+    func testAHeadingCostsTheTwoHalvesTheSameHeight() {
+        let withHeading = "A paragraph.\n\n## Section\n\nAnother."
+        let without = "A paragraph.\n\nSection\n\nAnother."
+        for typeface in Typeface.allCases {
+            for points in CardTextSize.range {
+                let scale = CardTextSize.scale(points)
+                var lineHeight = CardLineHeight.range.lowerBound
+                while lineHeight <= CardLineHeight.range.upperBound + 0.0001 {
+                    func drift(_ markdown: String) -> CGFloat {
+                        laidOut(previewRender(markdown, typeface: typeface, scale: scale,
+                                              lineHeight: lineHeight))
+                            - laidOut(editorSource(markdown, typeface: typeface, scale: scale,
+                                                   lineHeight: lineHeight))
+                    }
+                    XCTAssertEqual(
+                        drift(withHeading), drift(without), accuracy: 0.001,
+                        "\(typeface) at \(points)pt × \(CardLineHeight.label(lineHeight))"
+                    )
+                    lineHeight += CardLineHeight.step
+                }
+            }
+        }
+    }
+
+    /// And the same air, read straight off both halves' heading paragraphs, at
+    /// every level — including the two that get none.
+    @MainActor
+    func testEveryHeadingLevelOpensTheSameAirInBothHalves() {
+        for level in 1...6 {
+            let hashes = String(repeating: "#", count: level)
+            let markdown = "A paragraph.\n\n\(hashes) Section\n\nAnother."
+            let preview = previewRender(markdown, typeface: .grotesk, scale: 1, lineHeight: 1)
+            let source = editorSource(markdown, typeface: .grotesk, scale: 1, lineHeight: 1)
+            func air(_ text: NSAttributedString, at sub: String) -> CGFloat? {
+                let at = (text.string as NSString).range(of: sub).location
+                return (text.attribute(.paragraphStyle, at: at, effectiveRange: nil)
+                    as? NSParagraphStyle)?.paragraphSpacingBefore
+            }
+            XCTAssertEqual(air(preview, at: "Section"), MarkdownText.headingGap(level), "h\(level)")
+            XCTAssertEqual(air(source, at: "\(hashes) Section"),
+                           MarkdownText.headingGap(level), "h\(level)")
+        }
+    }
+
+    /// A **fenced block** is set at its own size — `.callout` scaled, never the
+    /// card's base — and the editor sized it off the base, which on a note card
+    /// is `.body`: one point bigger, times the reading scale, on every line of
+    /// every fenced block. The sizing proxy agreed with the editor, so nothing
+    /// caught it.
+    ///
+    /// Pinned by taking the code line's font out of **both real outputs** and
+    /// laying a line out in each. Whole-body equality is not available here and
+    /// is not the claim: the preview elides the two fence lines and draws 10pt
+    /// of padding above and below the block instead, so the two halves differ
+    /// in height for a fenced body by construction. What must not differ is the
+    /// size the code itself is set at.
+    @MainActor
+    func testAFencedBlockIsSetAtOneSizeInBothHalves() {
+        let markdown = "```\nlet a = 1\n```"
+        // The offset of the code line in the source: past the opening fence and
+        // its newline.
+        let codeLine = 4
+        for typeface in Typeface.allCases {
+            for points in CardTextSize.range {
+                let scale = CardTextSize.scale(points)
+                let where_ = "\(typeface) at \(points)pt"
+                let preview = previewRender(markdown, typeface: typeface, scale: scale,
+                                            lineHeight: 1)
+                let source = editorSource(markdown, typeface: typeface, scale: scale,
+                                          lineHeight: 1)
+                let previewFont = preview.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+                let sourceFont = source.attribute(.font, at: codeLine, effectiveRange: nil) as? NSFont
+                XCTAssertEqual(previewFont, MarkdownText.codeFont(scale: scale), where_)
+                XCTAssertEqual(sourceFont, previewFont, where_)
+                // The measurement, not just the descriptor: one line of code
+                // has to occupy the same height whichever half is showing.
+                XCTAssertEqual(
+                    laidOut(NSAttributedString(string: "let a = 1",
+                                               attributes: [.font: previewFont as Any])),
+                    laidOut(NSAttributedString(string: "let a = 1",
+                                               attributes: [.font: sourceFont as Any])),
+                    where_
+                )
+                // And it is genuinely a different size from the card's base, so
+                // the test would have failed before the fix rather than passing
+                // by coincidence.
+                XCTAssertNotEqual(
+                    sourceFont?.pointSize,
+                    Card.nsFont(.body, typeface: typeface, scale: scale).pointSize,
+                    where_
+                )
+            }
+        }
     }
 }

@@ -110,6 +110,39 @@ final class TypefaceTests: XCTestCase {
         )
     }
 
+    /// The variable axis is a property of the **family**, not a name and a
+    /// weight spelled out at the branch: it was `family == grotesk && weight ==
+    /// .semibold`, which gets the one weight anybody asks for right and rounds
+    /// every other unpublished one to a neighbouring instance in silence.
+    func testTheVariableWeightAxisIsAPropertyOfTheFamily() {
+        XCTAssertTrue(BundledFonts.hasVariableWeightAxis(BundledFonts.grotesk))
+        XCTAssertFalse(BundledFonts.hasVariableWeightAxis(BundledFonts.mono),
+                       "Plex Mono ships as statics — a variation on one resolves to nothing")
+        // An unregistered family answers "no axis, publishes everything", so
+        // both routes agree on the weight trait.
+        XCTAssertFalse(BundledFonts.hasVariableWeightAxis("Helvetica"))
+        XCTAssertTrue(BundledFonts.publishes(.semibold, in: "Helvetica"))
+
+        // Grotesk's variable file names Light / Regular / Medium / Bold, and
+        // SemiBold — the weight the card titles want — is the gap the axis
+        // exists to fill.
+        for weight: NSFont.Weight in [.light, .regular, .medium, .bold] {
+            XCTAssertTrue(BundledFonts.publishes(weight, in: BundledFonts.grotesk), "\(weight)")
+        }
+        XCTAssertFalse(BundledFonts.publishes(.semibold, in: BundledFonts.grotesk))
+        // Plex Mono publishes the very weight Grotesk doesn't, which is why
+        // this can't be a rule about the weight.
+        XCTAssertTrue(BundledFonts.publishes(.semibold, in: BundledFonts.mono))
+        XCTAssertFalse(BundledFonts.publishes(.bold, in: BundledFonts.mono))
+
+        // And a weight neither publishes still resolves rather than answering
+        // nil — the axis clamps to its own end.
+        XCTAssertNotNil(
+            BundledFonts.font(family: BundledFonts.grotesk, size: 13, weight: .heavy))
+        XCTAssertNotNil(
+            BundledFonts.font(family: BundledFonts.mono, size: 13, weight: .heavy))
+    }
+
     /// Space Grotesk is Latin-only. Nothing in the app handles that — CoreText's
     /// own cascade substitutes per glyph — so this pins the assumption rather
     /// than a behaviour: if the family ever *did* claim Cyrillic, a title in it
@@ -159,6 +192,69 @@ final class TypefaceTests: XCTestCase {
                 )
             }
         }
+    }
+
+    /// The two sizes that aren't text styles have to **stay two sizes**, in
+    /// every face. Under Monospace this substituted `.caption1` and dropped the
+    /// requested size altogether, so the band's 11pt count and the card's
+    /// 10.5pt type label came out identical — and neither at the size asked
+    /// for. The Monospace *rule* is unchanged (the card's own face covers the
+    /// numeral role there, rather than a second mono voice); only the size was
+    /// wrong.
+    func testMonoHonoursAFixedSizeInEveryFace() {
+        XCTAssertTrue(BundledFonts.register())
+        for typeface in Typeface.allCases {
+            let count = Mono.nsFont(size: 11, weight: .semibold, typeface: typeface)
+            let label = Mono.nsFont(size: 10.5, weight: .semibold, typeface: typeface)
+            XCTAssertEqual(count.pointSize, 11, accuracy: 0.001, typeface.label)
+            XCTAssertEqual(label.pointSize, 10.5, accuracy: 0.001, typeface.label)
+            XCTAssertNotEqual(count.pointSize, label.pointSize,
+                              "\(typeface.label) collapsed the two sizes onto one")
+        }
+        // The one face that defers to the card's own, and the half of the rule
+        // that was right all along.
+        XCTAssertNotEqual(
+            Mono.nsFont(size: 11, typeface: .monospaced).familyName, BundledFonts.mono)
+    }
+
+    /// The numeral face on a **card** follows the reading size; on the window's
+    /// chrome it doesn't. At Text size 22 the body was 22pt and the timestamp
+    /// under it still ~10pt, because `Mono` was never handed
+    /// `CardTextSize.scale` — and the band's count and the Settings stepper are
+    /// the other side of the same line (`Card.chrome(_:)`).
+    @MainActor
+    func testTheNumeralFaceFollowsTheReadingSizeOnACardOnly() {
+        let store = SettingsStore.shared
+        let saved = store.cardFontSize
+        defer { store.cardFontSize = saved }
+        store.cardFontSize = CardTextSize.range.upperBound
+
+        let scale = CardTextSize.scale(store.cardFontSize)
+        XCTAssertGreaterThan(scale, 1, "the ceiling has to be bigger than the default to test this")
+
+        // The card's two sites: the timestamp (a text style) and the type label
+        // (a fixed size).
+        let stamp = NSFont.preferredFont(forTextStyle: .caption2).pointSize
+        XCTAssertEqual(Mono.nsCard(.caption2).pointSize, stamp * scale, accuracy: 0.001)
+        XCTAssertEqual(Mono.nsCard(size: 10.5, weight: .semibold).pointSize, 10.5 * scale,
+                       accuracy: 0.001)
+
+        // The chrome's two: the band's count and the stepper's value, at the
+        // system's own size whatever the reader chose.
+        // Asserted as "the chrome spelling *is* the unscaled one" rather than by
+        // measuring a point size, because the band's count asks for a `Font`
+        // and only the explicit form hands back an `NSFont` to measure.
+        XCTAssertEqual(Mono.font(size: 11, weight: .semibold),
+                       Mono.font(size: 11, weight: .semibold, typeface: store.typeface))
+        XCTAssertEqual(Mono.nsFont(.callout, weight: .medium).pointSize,
+                       NSFont.preferredFont(forTextStyle: .callout).pointSize, accuracy: 0.001)
+
+        // Back at the default the two spellings are the same font, which is what
+        // keeps an install that never opened the pane on the fonts it had.
+        store.cardFontSize = CardTextSize.system
+        XCTAssertEqual(CardTextSize.scale(store.cardFontSize), 1)
+        XCTAssertEqual(Mono.nsCard(.caption2), Mono.nsFont(.caption2))
+        XCTAssertEqual(Mono.nsCard(size: 11, weight: .semibold).pointSize, 11, accuracy: 0.001)
     }
 
     /// The OFL obliges Insert to distribute the licence with the fonts, so an

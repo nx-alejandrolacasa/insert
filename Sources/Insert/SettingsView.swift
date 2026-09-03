@@ -371,10 +371,10 @@ private struct AppearanceSettingsTab: View {
             Section {
                 LabeledContent("Text size") {
                     ValueStepper(
-                        value: "\(settings.cardFontSize)",
+                        value: settings.cardFontSize,
+                        bounds: CardTextSize.range,
+                        text: "\(settings.cardFontSize)",
                         widest: "\(CardTextSize.range.upperBound)",
-                        canDecrease: settings.cardFontSize > CardTextSize.range.lowerBound,
-                        canIncrease: settings.cardFontSize < CardTextSize.range.upperBound,
                         decreaseLabel: "Smaller text",
                         increaseLabel: "Larger text"
                     ) {
@@ -385,10 +385,10 @@ private struct AppearanceSettingsTab: View {
                 }
                 LabeledContent("Line height") {
                     ValueStepper(
-                        value: CardLineHeight.label(settings.cardLineHeight),
+                        value: settings.cardLineHeight,
+                        bounds: CardLineHeight.range,
+                        text: CardLineHeight.label(settings.cardLineHeight),
                         widest: CardLineHeight.label(CardLineHeight.range.upperBound),
-                        canDecrease: settings.cardLineHeight > CardLineHeight.range.lowerBound,
-                        canIncrease: settings.cardLineHeight < CardLineHeight.range.upperBound,
                         decreaseLabel: "Tighter lines",
                         increaseLabel: "Looser lines"
                     ) {

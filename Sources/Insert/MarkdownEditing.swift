@@ -164,7 +164,7 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         view.isAutomaticTextReplacementEnabled = true
 
         let config = highlightConfig
-        applyTabStops(to: view, font: font, lineSpacing: config.lineSpacing)
+        applyTabStops(to: view, font: font, lineHeight: config.lineHeight)
 
         view.string = text
         view.highlightConfig = config
@@ -179,10 +179,21 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
     /// The highlight pass's inputs, read here — inside a view update — so the
     /// `@Observable` accesses register and a theme or typeface change re-styles
     /// an open editor the way it re-renders a preview.
+    ///
+    /// The three reading values come from `CardTextMetrics`, the one resolver
+    /// the sizing proxies and the view-mode render already consume — the whole
+    /// point of it being that a term derived differently at one of the four
+    /// sites shows up as the card changing shape across the flip. The **base
+    /// font** stays the caller's: the card resolved the face and handed it over,
+    /// so which text style it came from is not this view's to know, and the
+    /// three values that are wanted here (typeface, reading scale, leading
+    /// multiple) are settings rather than styles — they are the same set
+    /// whichever style is asked for.
     private var highlightConfig: MarkdownHighlight.Config {
-        MarkdownHighlight.Config(
+        let reading = CardTextMetrics.current(for: .body)
+        return MarkdownHighlight.Config(
             base: font,
-            typeface: SettingsStore.shared.typeface,
+            typeface: reading.typeface,
             palette: MarkdownHighlight.Palette(
                 text: textColor,
                 marker: NSColor(SettingsStore.shared.theme.metaText),
@@ -196,10 +207,8 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
                 ),
                 link: NSColor(SettingsStore.shared.theme.link)
             ),
-            scale: CardTextSize.scale(SettingsStore.shared.cardFontSize),
-            lineSpacing: MarkdownText.lineSpacing(
-                font, lineHeight: SettingsStore.shared.cardLineHeight
-            )
+            scale: reading.scale,
+            lineHeight: reading.lineHeight
         )
     }
 
@@ -227,17 +236,30 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
     /// It is also where the reading leading lands, since this is the editor's
     /// one base paragraph style — `MarkdownHighlight.apply` derives its list
     /// styles by copying it, so they inherit the spacing rather than restating
-    /// it. Hence the name is now half a lie and the caller re-runs this whenever
-    /// *either* input moves.
-    private func applyTabStops(to view: MarkdownTextView, font: NSFont, lineSpacing: CGFloat) {
-        let style = NSMutableParagraphStyle()
+    /// it. Hence the name is now half a lie.
+    ///
+    /// **It compares its own inputs.** The caller used to name them, and a
+    /// caller that names two of them is a caller that can omit the third — which
+    /// left `defaultParagraphStyle` (and every list style copied from it) stale
+    /// while the colours and fonts around it updated. The record lives on the
+    /// view, like `highlightConfig`, so what is compared is the two inputs
+    /// themselves rather than whatever object the view hands back.
+    private func applyTabStops(to view: MarkdownTextView, font: NSFont, lineHeight: Double) {
+        let inputs = MarkdownTextView.ParagraphInputs(font: font, lineHeight: lineHeight)
+        guard view.paragraphInputs != inputs else { return }
+
+        // The leading arrives already solved, from the one factory both AppKit
+        // layouts of a card's Markdown start at; the tab step is this editor's
+        // own extra, layered on a copy of it.
+        let style = MarkdownText.paragraphStyle(base: font, lineHeight: lineHeight)
+            .mutableCopy() as! NSMutableParagraphStyle
         style.tabStops = []
         style.defaultTabInterval = 4 * NSAttributedString(
             string: " ", attributes: [.font: font]
         ).size().width
-        style.lineSpacing = lineSpacing
         view.defaultParagraphStyle = style
         view.typingAttributes[.paragraphStyle] = style
+        view.paragraphInputs = inputs
     }
 
     func updateNSView(_ view: MarkdownTextView, context: Context) {
@@ -253,6 +275,29 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
             MainActor.assumeIsolated { coordinator.report(focus: focused) }
         }
 
+        // Nothing below may touch the storage, the caret, the font, the tab
+        // stops or the record of what was last applied while an **IME
+        // composition** is open — a dead key, which on a Spanish layout is how
+        // every accented character is typed. Pressing `´` marks a provisional
+        // character: `view.string` grows by it, `textViewDidChangeSelection`
+        // fires, and `textDidChange` does **not** (measured on macOS 26: one
+        // dead key posts two selection changes and zero text changes). So the
+        // selection binding is written from the marked string while the text
+        // binding still holds the string without it, and this update — kicked
+        // off by that very write — used to answer by assigning the shorter text
+        // over the composition and then converting the longer string's index
+        // against it, which trapped in `String.UTF16View._offsetRange`.
+        //
+        // The guard sits above the styling pass as well as above the text write,
+        // because `rehighlight()` declines while marked but `view.font` and
+        // `highlightConfig` did not: a Settings change arriving mid-composition
+        // flattened every styled run to the base font and then recorded the new
+        // config as applied, so the pass that would have restored them never
+        // ran. Nothing is recorded here, so nothing has to converge by itself —
+        // the composition's commit posts `textDidChange`, which writes the text
+        // binding and brings this update round again with both sides agreeing.
+        guard !view.hasMarkedText() else { return }
+
         // The storage's fonts and colours are the highlighter's now, so neither
         // `view.font` nor `view.textColor` can be compared against — both read
         // whatever run the styled text happens to start with. The config is the
@@ -261,14 +306,12 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         // passes come from `textDidChange` instead.
         let config = highlightConfig
         if view.highlightConfig != config {
-            if view.highlightConfig?.base != font
-                || view.highlightConfig?.lineSpacing != config.lineSpacing {
-                view.font = font
-                // The step is measured in the font, so it moves with it — and
-                // the same style carries the line spacing, so a change to the
-                // leading has to come back through here too.
-                applyTabStops(to: view, font: font, lineSpacing: config.lineSpacing)
-            }
+            if view.highlightConfig?.base != font { view.font = font }
+            // The step is measured in the font, so it moves with it — and the
+            // same style carries the line spacing, so a change to the leading
+            // has to come back through here too. Which of the two moved is
+            // `applyTabStops`' own question now.
+            applyTabStops(to: view, font: font, lineHeight: config.lineHeight)
             view.highlightConfig = config
             view.rehighlight()
         }
@@ -284,21 +327,6 @@ private struct MarkdownTextViewBridge: NSViewRepresentable {
         if view.isContinuousSpellCheckingEnabled != spelling {
             view.isContinuousSpellCheckingEnabled = spelling
         }
-
-        // Nothing below may touch the storage or the caret while an **IME
-        // composition** is open — a dead key, which on a Spanish layout is how
-        // every accented character is typed. Pressing `´` marks a provisional
-        // character: `view.string` grows by it, `textViewDidChangeSelection`
-        // fires, and `textDidChange` does **not** (measured on macOS 26: one
-        // dead key posts two selection changes and zero text changes). So the
-        // selection binding is written from the marked string while the text
-        // binding still holds the string without it, and this update — kicked
-        // off by that very write — used to answer by assigning the shorter text
-        // over the composition and then converting the longer string's index
-        // against it, which trapped in `String.UTF16View._offsetRange`. The
-        // composition settles itself; when it commits, `textDidChange` fires
-        // with the finished text and this runs again with both sides agreeing.
-        guard !view.hasMarkedText() else { return }
 
         // Only ever write the text when it really differs: typing round-trips
         // through the binding and comes back equal, and assigning it then would
@@ -464,6 +492,18 @@ final class MarkdownTextView: NSTextView {
     /// What the last highlight pass was made of, kept so the bridge only
     /// re-runs a pass when an input really changed. Set by the bridge.
     var highlightConfig: MarkdownHighlight.Config?
+
+    /// Everything the editor's base paragraph style is built from — see
+    /// `MarkdownTextViewBridge.applyTabStops`, which owns both the build and
+    /// the comparison.
+    struct ParagraphInputs: Equatable {
+        var font: NSFont
+        var lineHeight: Double
+    }
+
+    /// What `defaultParagraphStyle` was last built from. Set by the bridge,
+    /// alongside the style itself.
+    var paragraphInputs: ParagraphInputs?
 
     /// Whether this editor holds the keyboard, tracked here rather than read
     /// off `window?.firstResponder`, whose value during the two overrides below
@@ -751,9 +791,13 @@ final class MarkdownTextView: NSTextView {
     /// command because AppKit binds it to nothing: Return alone is
     /// `insertNewline(_:)`, and with ⌘ held there is no action to override. Only
     /// the first responder gets `keyDown`, so two open cards can't both answer.
+    ///
+    /// **Not while a composition is open**, for the reason `cancelOperation`
+    /// below gives: the marked character is what the key is being pressed at.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76,
            event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command],
+           !hasMarkedText(),
            let onEscape {
             onEscape()
             return
@@ -765,13 +809,28 @@ final class MarkdownTextView: NSTextView {
     /// `cancelOperation(_:)` because Esc is bound to *completion* in a text view
     /// by default — the inline word list this editor has no use for, and which
     /// would otherwise swallow the key.
+    ///
+    /// **Except while text is marked**, where Esc belongs to the composition: on
+    /// a Spanish layout `´` is provisional until the vowel lands, and Esc is how
+    /// you abandon it. Answering it here closed the card and took the character
+    /// in flight with it. Nothing is lost by waiting: Esc pressed again, with
+    /// nothing marked, leaves the card.
+    ///
+    /// `cancelOperation(_:)` cannot defer to `super` the way `complete(_:)`
+    /// does — `NSTextView` doesn't implement it (it is an optional key-binding
+    /// action), and calling it raises `NSInvalidArgumentException` for an
+    /// unrecognized selector. Measured. So the composition is discarded here
+    /// instead, which is the behaviour deferring was after.
     override func cancelOperation(_ sender: Any?) {
-        guard let onEscape else { return super.cancelOperation(sender) }
-        onEscape()
+        if hasMarkedText() {
+            inputContext?.discardMarkedText()
+            return
+        }
+        onEscape?()
     }
 
     override func complete(_ sender: Any?) {
-        guard let onEscape else { return super.complete(sender) }
+        guard !hasMarkedText(), let onEscape else { return super.complete(sender) }
         onEscape()
     }
 }
@@ -891,10 +950,10 @@ enum MarkdownReturn {
         guard event.modifierFlags
             .intersection([.command, .control, .option, .shift]).isEmpty else { return false }
 
-        // SwiftUI's `TextEditor` is backed by an `NSTextView` subclass
-        // (`PlatformTextView`), which is the first responder while it has focus.
-        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
-              textView.isEditable, !textView.isFieldEditor else { return false }
+        // A body, and only a body: a card's title borrows the window's field
+        // editor and the view-mode preview is a text view of its own, so the
+        // question is asked in one place — see `MarkdownResponder`.
+        guard let textView = MarkdownResponder.focusedMarkdownBody() else { return false }
         // Only a caret continues a list. With text selected Return replaces the
         // selection, which is the text view's job, not ours.
         let selected = textView.selectedRange()
@@ -918,25 +977,26 @@ enum MarkdownReturn {
 /// and leaves the caret placed by the same code that places it when you type,
 /// and `didChangeText()` is what tells SwiftUI to pull the new string back into
 /// the binding.
+///
+/// **Every write goes through `replace(_:in:to:selection:)`, and that is where
+/// the composition guard lives.** Return, Tab, ⇧Tab, ⌘B/I/U/K, ⇧⌘X and the
+/// `FormattingBar`'s eight buttons all funnel through the two `apply` overloads,
+/// so one guard covers the lot and a seventh entry point inherits it — which is
+/// the reason it isn't written at the six call sites.
 @MainActor
 enum MarkdownEdits {
     /// `false` when the edit can't be made, which is the caller's cue to let the
     /// key through untouched.
     static func apply(_ edit: MarkdownFormatting.Edit, to textView: NSTextView) -> Bool {
-        guard let range = nsRange(of: edit.range, in: textView.string),
-              textView.shouldChangeText(in: range, replacementString: edit.replacement)
-        else { return false }
-
-        textView.textStorage?.replaceCharacters(in: range, with: edit.replacement)
-        textView.didChangeText()
-
-        // The edit says where the caret lands, and it is an offset into the text
-        // *after* the replacement — so it is resolved against the new string.
-        let updated = textView.string
-        let caret = max(0, min(edit.caret, updated.count))
-        let index = updated.index(updated.startIndex, offsetBy: caret)
-        textView.setSelectedRange(NSRange(location: index.utf16Offset(in: updated), length: 0))
-        return true
+        guard let range = nsRange(of: edit.range, in: textView.string) else { return false }
+        return replace(edit.replacement, in: range, to: textView) { updated in
+            // The edit says where the caret lands, and it is an offset into the
+            // text *after* the replacement — so it is resolved against the new
+            // string.
+            let caret = max(0, min(edit.caret, updated.count))
+            let index = updated.index(updated.startIndex, offsetBy: caret)
+            return NSRange(location: index.utf16Offset(in: updated), length: 0)
+        }
     }
 
     /// The formatting toggles hand back a whole new string plus the range to
@@ -955,16 +1015,39 @@ enum MarkdownEdits {
               old[old.count - 1 - suffix] == new[new.count - 1 - suffix] { suffix += 1 }
 
         let replacement = String(new[prefix..<(new.count - suffix)])
-        guard let range = nsRange(of: prefix..<(old.count - suffix), in: textView.string),
+        guard let range = nsRange(of: prefix..<(old.count - suffix), in: textView.string)
+        else { return false }
+        return replace(replacement, in: range, to: textView) { updated in
+            nsRange(of: change.selection, in: updated)
+        }
+    }
+
+    /// The one write. `selection` is asked for the range to leave selected,
+    /// against the string as it stands *after* the replacement.
+    ///
+    /// **Declines while the text view has marked text.** A dead key — every
+    /// accented character on a Spanish layout — leaves a provisional character
+    /// in the storage that the input context owns and that SwiftUI has never
+    /// been given (see `MarkdownTextViewBridge.updateNSView`). Rewriting a range
+    /// across it destroys the composition and swallows the commit; it is also
+    /// the state that produced 0.17.1's `String index is out of bounds` trap.
+    /// Answering `false` is what the callers already understand as "this key
+    /// isn't ours", so Return, Tab and the rest fall through to AppKit and the
+    /// composition finishes.
+    private static func replace(
+        _ replacement: String,
+        in range: NSRange,
+        to textView: NSTextView,
+        selection: (String) -> NSRange?
+    ) -> Bool {
+        guard !textView.hasMarkedText(),
               textView.shouldChangeText(in: range, replacementString: replacement)
         else { return false }
 
         textView.textStorage?.replaceCharacters(in: range, with: replacement)
         textView.didChangeText()
 
-        if let selection = nsRange(of: change.selection, in: textView.string) {
-            textView.setSelectedRange(selection)
-        }
+        if let wanted = selection(textView.string) { textView.setSelectedRange(wanted) }
         return true
     }
 
@@ -1370,13 +1453,20 @@ enum MarkdownFormatting {
         if i + 1 < line.count, "-*+".contains(line[i]), line[i + 1] == " " {
             let bullet = line[i]
             let afterBullet = i + 2
-            if afterBullet + 3 < line.count,
+            // The `]` must be followed by a space **or the end of the line** —
+            // `MarkdownParser.checkboxMarker`'s rule, and the renderer's, so a
+            // line reading `- [x]` is the ticked box it draws rather than a
+            // plain bullet carrying the literal text `[x]`. Requiring the space
+            // here had Return insert a bare `- ` under it and `toggleList` leave
+            // the brackets behind as words.
+            if afterBullet + 2 < line.count,
                line[afterBullet] == "[", line[afterBullet + 2] == "]",
-               line[afterBullet + 3] == " " {
+               afterBullet + 3 == line.count || line[afterBullet + 3] == " " {
+                let boxLength = afterBullet + 3 == line.count ? 3 : 4
                 return LineMarker(
                     indent: indent,
                     lead: [bullet, " ", "[", " ", "]", " "],
-                    contentStart: afterBullet + 4
+                    contentStart: afterBullet + boxLength
                 )
             }
             return LineMarker(indent: indent, lead: [bullet, " "], contentStart: afterBullet)

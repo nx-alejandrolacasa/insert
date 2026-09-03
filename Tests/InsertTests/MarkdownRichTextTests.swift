@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Insert
 
@@ -64,6 +65,33 @@ final class MarkdownRichTextTests: XCTestCase {
         let range = (text.string as NSString).range(of: "the docs")
         XCTAssertEqual(text.attribute(.link, at: range.location, effectiveRange: nil) as? URL,
                        URL(string: "https://example.com/x"))
+    }
+
+    /// A body is Markdown from a folder anything can write to, so the render
+    /// only draws a destination `MarkdownFormatting.isLinkDestination` names:
+    /// `[Report](file:///Applications/Calculator.app)` would otherwise be one
+    /// click from launching an application.
+    func testOnlyAWebDestinationRendersAsALink() {
+        let text = render("A [report](file:///Applications/Calculator.app) and [docs](https://example.com)").text
+        XCTAssertEqual(text.string, "A report and docs")
+        let string = text.string as NSString
+        XCTAssertNil(text.attribute(.link, at: string.range(of: "report").location, effectiveRange: nil),
+                     "a file:// destination is the plain words it wraps")
+        XCTAssertEqual(text.attribute(.link, at: string.range(of: "docs").location, effectiveRange: nil) as? URL,
+                       URL(string: "https://example.com"))
+    }
+
+    /// The same check where the click lands, since a `.link` attribute is only
+    /// ever one attribute in a storage other code can write to.
+    func testTheViewFollowsOnlyADestinationTheRenderWouldHaveDrawn() {
+        XCTAssertNil(MarkdownPreviewView.openableDestination(
+            URL(string: "file:///Applications/Calculator.app")!))
+        XCTAssertNil(MarkdownPreviewView.openableDestination("file:///Applications/Calculator.app"))
+        XCTAssertNil(MarkdownPreviewView.openableDestination(42))
+        XCTAssertEqual(MarkdownPreviewView.openableDestination(URL(string: "https://example.com")!),
+                       URL(string: "https://example.com"))
+        XCTAssertEqual(MarkdownPreviewView.openableDestination("mailto:someone@example.com"),
+                       URL(string: "mailto:someone@example.com"))
     }
 
     func testListItemsIndentByLevelAndWrapUnderTheirText() {
@@ -175,6 +203,46 @@ final class MarkdownRichTextTests: XCTestCase {
                        URL(string: "https://example.com"))
     }
 
+    /// The sanitiser is an **allowlist**, so an attribute the renderer gains
+    /// later is dropped by default rather than leaking into a pasted document —
+    /// the one failure that is only ever seen in some other application. Pinned
+    /// on the attributed string the flavours are written from rather than on
+    /// the RTF, which drops attributes of its own and so can't tell "we dropped
+    /// it" from "the format never carried it".
+    func testExportKeepsOnlyThePortableAttributes() {
+        let text = NSMutableAttributedString(
+            attributedString: render("Plain **bold** [docs](https://example.com)").text
+        )
+        let whole = NSRange(location: 0, length: text.length)
+        text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: whole)
+        text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: whole)
+        // Three the allowlist doesn't name: one of the renderer's own, one it
+        // could plausibly gain, one it never will.
+        text.addAttribute(.markdownCheckbox, value: 0, range: whole)
+        text.addAttribute(.kern, value: 4.0, range: whole)
+        text.addAttribute(.toolTip, value: "not ours to export", range: whole)
+
+        let rich = MarkdownRichText.portableText(text)
+        var keys: Set<NSAttributedString.Key> = []
+        rich.enumerateAttributes(in: NSRange(location: 0, length: rich.length)) { attrs, _, _ in
+            keys.formUnion(attrs.keys)
+        }
+        XCTAssertEqual(keys, MarkdownRichText.portableAttributes)
+        XCTAssertEqual(keys, [.font, .link, .underlineStyle, .strikethroughStyle, .paragraphStyle],
+                       "widening the allowlist is a decision, not a tweak")
+
+        // And each of the five is really carrying its value out.
+        let string = rich.string as NSString
+        XCTAssertEqual(rich.attribute(.link, at: string.range(of: "docs").location, effectiveRange: nil) as? URL,
+                       URL(string: "https://example.com"))
+        let font = rich.attribute(.font, at: string.range(of: "bold").location, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(font?.familyName, "Helvetica Neue")
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        XCTAssertNotNil(rich.attribute(.underlineStyle, at: 0, effectiveRange: nil))
+        XCTAssertNotNil(rich.attribute(.strikethroughStyle, at: 0, effectiveRange: nil))
+        XCTAssertNotNil(rich.attribute(.paragraphStyle, at: 0, effectiveRange: nil))
+    }
+
     func testFormattingSurvivesTheRoundTripThroughRTF() {
         let text = render("# Head\n\nSome **bold** and *italic* and `code`").text
         guard let rtf = MarkdownRichText.export(text).rtf,
@@ -212,12 +280,14 @@ final class MarkdownRichTextTests: XCTestCase {
         view.textContainerInset = .zero
         let short = render("One line").text
         view.textStorage?.setAttributedString(short)
-        let oneLine = view.height(forWidth: 300)
+        let oneLine = view.usedSize(forWidth: 300).height
         XCTAssertGreaterThan(oneLine, 0)
         let long = render(String(repeating: "word ", count: 60)).text
         view.textStorage?.setAttributedString(long)
-        XCTAssertGreaterThan(view.height(forWidth: 200), oneLine * 2, "a long paragraph wraps at the width it is given")
-        XCTAssertGreaterThan(view.height(forWidth: 200), view.height(forWidth: 400), "wider wraps less")
+        XCTAssertGreaterThan(view.usedSize(forWidth: 200).height, oneLine * 2,
+                             "a long paragraph wraps at the width it is given")
+        XCTAssertGreaterThan(view.usedSize(forWidth: 200).height, view.usedSize(forWidth: 400).height,
+                             "wider wraps less")
     }
 
     /// The ideal width is the longest line's, and it is only asked for when no
@@ -235,6 +305,56 @@ final class MarkdownRichTextTests: XCTestCase {
         XCTAssertGreaterThan(natural.width, wrapped.width)
         XCTAssertLessThan(natural.height, wrapped.height, "unwrapped is one line")
         XCTAssertLessThanOrEqual(view.usedSize(forWidth: 300).width, 300)
+    }
+
+    /// Only the *width* answered to a zero-width proposal is zero. The height
+    /// question a wrap can't answer there: laid out at one point the body
+    /// stacks one character per line, a height nothing on screen will ever
+    /// have, so it takes the ideal width's height.
+    @MainActor
+    func testAZeroWidthProposalTakesTheIdealWidthsHeight() throws {
+        let body = String(repeating: "word ", count: 40)
+        let view = MarkdownPreviewView(usingTextLayoutManager: true)
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textStorage?.setAttributedString(render(body).text)
+        view.key = MarkdownPreviewView.Key(markdown: body, config: config)
+
+        let zero = try XCTUnwrap(MarkdownPreview.size(for: ProposedViewSize(width: 0, height: nil), of: view))
+        let ideal = try XCTUnwrap(MarkdownPreview.size(for: ProposedViewSize(width: nil, height: nil), of: view))
+        let wrapped = try XCTUnwrap(MarkdownPreview.size(for: ProposedViewSize(width: 300, height: nil), of: view))
+
+        XCTAssertEqual(zero.width, 0, "the row is still told the body can go as narrow as it likes")
+        XCTAssertEqual(zero.height, ideal.height)
+        XCTAssertLessThan(zero.height, wrapped.height, "unwrapped is one line; 300pt is several")
+        XCTAssertEqual(wrapped.width, 300)
+    }
+
+    // MARK: Clicks
+
+    /// A click in the card's empty space below the body is the card's "open
+    /// me", and it stays one for a body whose last character is a marker's tab.
+    /// An empty checklist item at the end of a note is exactly that, and the
+    /// click used to be read as a flip of its box — which saves.
+    @MainActor
+    func testAClickBelowABodyEndingInAnEmptyCheckboxIsATap() throws {
+        let view = MarkdownPreviewView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.isSelectable = true
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.onToggleCheckbox = { _ in }
+        view.textStorage?.setAttributedString(render("Intro\n\n- [ ]").text)
+        let size = view.usedSize(forWidth: 320)
+        // The card is taller than its text, so the click lands under it.
+        view.setFrameSize(CGSize(width: 320, height: size.height + 40))
+
+        XCTAssertEqual(view.clickTarget(at: CGPoint(x: 160, y: size.height + 20)), .tap)
+
+        // The mark itself still flips, so the guard hasn't taken the checkbox
+        // with it — and that mark is the last run in this body.
+        let mark = try XCTUnwrap(view.checkboxRects().last)
+        XCTAssertEqual(view.clickTarget(at: CGPoint(x: mark.midX, y: mark.midY)), .checkbox(line: 2))
     }
 
     // MARK: Cursor

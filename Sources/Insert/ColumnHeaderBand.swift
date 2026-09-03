@@ -108,6 +108,11 @@ private struct CountPill: View {
         // otherwise English window (the `Formatting.locale` rule, which is
         // usually about dates but is the same rule).
         Text(count, format: .number.locale(Formatting.locale))
+            // `font`, not `card`: the band is chrome, and its height is the
+            // window's business — a reader asking for larger notes is not asking
+            // for a taller header (`Card.chrome(_:)`'s line). The cards' own
+            // timestamps and type labels take `Mono.card` for the same reason
+            // read the other way.
             .font(Mono.font(size: 11, weight: .semibold))
             // Digits of one width, so the pill doesn't breathe as the count
             // changes. Free with a mono face for the glyphs themselves; this

@@ -1,8 +1,42 @@
+import CryptoKit
 import Foundation
 
 /// Converts models to and from their on-disk Markdown representation and owns
 /// the filename conventions. Pure functions — no IO here (see `Library`).
 enum MarkdownFiles {
+
+    // MARK: - Identity
+
+    /// The id a record loads under: its `id:` when the file carries a readable
+    /// one, otherwise a UUID **derived from the filename**.
+    ///
+    /// Minting a fresh `UUID()` per load was silent data loss. `Library` matches
+    /// records by id, so a file with no `id:` — one written by hand in Obsidian —
+    /// arrived under a different identity on every load, and a reload landing
+    /// inside a card's ~0.4s save debounce made `updateNote`'s `firstIndex` miss:
+    /// the edit was dropped with nothing said.
+    ///
+    /// Deriving rather than writing an `id:` back is a decision — the user's vault
+    /// stays as they left it — and it is what makes the derivation's requirement
+    /// strict: the id has to be identical across processes and machines, so
+    /// `Hasher` (seeded per process) is unusable. Renaming the file does change
+    /// the id, which is the accepted cost of holding the identity nowhere.
+    static func identity(_ raw: String?, filename: String) -> UUID {
+        if let raw, let id = UUID(uuidString: raw) { return id }
+        return derivedID(filename: filename)
+    }
+
+    /// SHA-256 over the filename's UTF-8, first 16 bytes, stamped with
+    /// RFC-4122's version-4 and variant bits — so a derived id is
+    /// indistinguishable from the `UUID()` it replaces everywhere downstream,
+    /// `shortID(_:)` and the filename conventions included.
+    static func derivedID(filename: String) -> UUID {
+        var b = Array(SHA256.hash(data: Data(filename.utf8)).prefix(16))
+        b[6] = (b[6] & 0x0F) | 0x40
+        b[8] = (b[8] & 0x3F) | 0x80
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                           b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
 
     // MARK: - Filenames
 
@@ -73,7 +107,7 @@ enum MarkdownFiles {
     static func decodeNote(from content: String, url: URL) -> Note? {
         let parsed = Frontmatter.parse(content)
         let s = parsed.scalars
-        let id = UUID(uuidString: s["id"] ?? "") ?? UUID()
+        let id = identity(s["id"], filename: url.lastPathComponent)
         // `projects: [a, b]` is the current shape. Files written before notes
         // could belong to several projects carry a single `project: <id>`, so
         // fall back to that — rewritten into the list shape on the next save.
@@ -118,7 +152,7 @@ enum MarkdownFiles {
     static func decodeTask(from content: String, url: URL) -> TaskItem? {
         let parsed = Frontmatter.parse(content)
         let s = parsed.scalars
-        let id = UUID(uuidString: s["id"] ?? "") ?? UUID()
+        let id = identity(s["id"], filename: url.lastPathComponent)
         let projectIDs = Frontmatter.decodeArray(s["projects"] ?? "[]").compactMap(UUID.init(uuidString:))
         let done = (s["done"] ?? "false").lowercased() == "true"
         return TaskItem(

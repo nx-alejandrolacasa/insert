@@ -234,7 +234,13 @@ final class FormattingBarPanel {
 
     /// Hides the bar if it is `editor`'s. Another editor's bar is left alone,
     /// since a resigning editor and the one taking over both report in.
+    ///
+    /// An already-hidden bar returns at once: this arrives from `update(for:)`
+    /// whenever there is no anchor to place the bar over, which is per keystroke
+    /// and per scroll frame for every open editor, and `orderOut` on a window
+    /// that isn't up is work with nothing to show for it.
     func hide(for editor: MarkdownTextView) {
+        guard self.editor != nil || panel.isVisible else { return }
         guard self.editor === editor || self.editor == nil else { return }
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)

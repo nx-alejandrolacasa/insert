@@ -99,6 +99,11 @@ Sources/Insert/
   Frontmatter.swift           YAML-subset frontmatter reader/writer + date coding
   MarkdownFiles.swift         model <-> Markdown + filename conventions
   DirectoryWatcher.swift      debounced FS watcher (external edits)
+  UpdateChecker.swift         checks for a new release and swaps the bundle in
+  CardEditingSession.swift    the one editing session both cards drive: the save
+                              debounce, the deferred focus, and the reseed rule
+  MarkdownResponder.swift     `markdownBody(in:)` — the one first-responder
+                              predicate, replacing four spellings of it
   MemoCache.swift             locked memo for immutable derived values (resolved
                               fonts, parsed Markdown, relative-day labels)
   DateSections.swift          overdue/today/upNext buckets for the menu bar
@@ -185,6 +190,26 @@ to the same height.
 pasteboard and what it deliberately strips — see the selection bullet under Design
 intent — because a wrong export is only ever seen in some *other* app.
 
+Four suites arrived with the September 2026 remediation pass, and each pins a
+defect that had shipped rather than a rule that might drift.
+`CardEditingSessionTests` covers the reseed — skipped while editing, merged
+field-wise otherwise — which is the *typed text reverting* cluster, and it is
+testable at all only because the merge rule was extracted as a pure function
+over values rather than left inside a view.
+`FrontmatterIdentityTests` covers the two ways a frontmatter value could
+corrupt a file (a newline written across two lines, and a pasted `---` closing
+the fence early so the body was re-read as garbage) plus that an id-less file
+keeps **one** id across two loads — and it writes two derived UUIDs down as
+literals on purpose, because comparing the derivation with itself in-process
+passes just as happily against a per-process seed, which is the exact failure
+the pin exists to catch.
+`CheckboxToggleTests` covers the NBSP- and em-space-indented checklist item,
+where a trim over `CharacterSet.whitespaces` and an ASCII-only index walk
+disagreed and one click wrote `- [x]` → `-  x]`.
+`DuePopoverTests` covers the two claims the popover used to make at once on an
+undated task, and the day boundary that used to leave an open popover's
+highlight stale.
+
 `ThemePaletteTests` is the odd one out — it measures **colour**, and it is here for
 the same "fails silently" reason. `AppTheme`'s table is 400-odd generated sRGB
 literals across six themes and two appearances, so a band tone off by a step, a
@@ -206,6 +231,144 @@ really reaches 7:1.
 ## Design intent
 
 Behaviour that isn't obvious from the code, and shouldn't drift:
+
+- **The September 2026 remediation pass** answered a ten-angle review of the
+  whole codebase, prompted by "it's been buggy lately": 48 findings, 37 of them
+  following from the code by reading alone. It changed no design — every fix is
+  a defect fix — so it is recorded here for the **rules** it leaves behind and
+  the handful of things it *measured*, not as a new intent. `docs/fixing-the-
+  review-findings.md` keeps the per-finding ledger, including the failure
+  scenario for each, which is worth more than this summary if you are chasing a
+  regression. Three clusters explained most of the reported bugginess, and they
+  are the three to know:
+  - **Silent data loss on the storage paths.** Retention fell back to `updated`
+    when `completed` was nil and nothing stamped it, so a task **ticked off in
+    Obsidian was trashed on the basis of a year-old edit date** — on the first
+    housekeeping run, every time. Two halves now: the purge requires a real
+    stamp (the fallback is gone from both call sites that had drifted apart),
+    and `reconcileTaskFolders` stamps `done && completed == nil` on the way in,
+    so such a task ages **from when Insert first saw it**. The cost is one file
+    written per externally-ticked task on the first load after this.
+    `deduped` likewise broke an `updated` tie by directory order and trashed the
+    loser with a log line, so a Finder duplicate could lose the copy carrying
+    the new writing; it now trashes only an **encode-equal** true duplicate and
+    otherwise keeps both by re-iding the loser. And an id-less file minted a
+    **fresh id per load**, so a reload mid-debounce made `updateNote`'s
+    `firstIndex` miss and dropped the edit in silence — identity is now derived
+    (SHA-256 over `url.lastPathComponent`, truncated and stamped v4-shaped) with
+    **no `id:` written back into the vault**, the maintainer's call. Its
+    consequence is inherent and worth knowing: **renaming such a file in
+    Obsidian changes its id**, and two id-less files sharing a filename across
+    `Tasks/` and `Tasks/Done/` derive the same id, which routes them into
+    `deduped` as the duplicate pair they are.
+  - **Typed text reverting**, which is where the ~90 lines of editing session
+    duplicated across the two panels finally cost something. `TasksPanel`
+    included `done` in its any-field-differs test but re-seeded the **whole**
+    draft, so ticking a task from the menu bar while typing in it reverted the
+    notes — and `scheduleSave()` then re-armed on the reverted text and wrote
+    it. `NotesPanel` had the same class of bug with no `isEditing` guard at all.
+    Both now drive one `CardEditingSession`, and the reseed rule is **one
+    definition**: skipped entirely while editing, and otherwise merged
+    **field-wise** — take upstream's value for a field only where the draft
+    still holds the value last seeded — so an upstream `done` flip can never
+    rewrite a body. The trade is stated rather than worked around: while a card
+    is open, an upstream change to a field that card also owns is dropped and
+    the draft's older value goes back on the next save. Typed text is
+    unrecoverable; a tick is repeatable.
+  - **IME breakage on every accented character.** `MarkdownEdits.apply` — the
+    single write path every key and bar button funnels through — had **no**
+    `hasMarkedText()` guard, and nor did any caller, so Return on a dead key
+    inside a list item rewrote the storage across the marked range and swallowed
+    the commit. This is the same state that produced the 0.17.1 `String index is
+    out of bounds` trap. One guard at the top of `apply` covers Return, Tab,
+    ⇧Tab, ⌘B/I/U/K and every FormattingBar button at once, **and a seventh entry
+    point inherits it** — which is the whole reason it belongs there and not at
+    the call sites. `updateNSView`'s existing guard also sat *below* `view.font`,
+    `applyTabStops` and `highlightConfig`, so a settings change mid-composition
+    flattened every styled run and recorded the config as applied; it is hoisted
+    above all three.
+  Two things this pass **measured**, both of which cost a wrong first attempt:
+  - **`NSTextView` does not implement `cancelOperation:`.** It is an optional
+    key-binding action, so `super.cancelOperation(sender)` raises
+    `NSInvalidArgumentException` for an unrecognized selector — it took a test
+    process down. So Esc-while-marked cannot "defer to `super`" the way the
+    obvious symmetry suggests: the override **discards the composition**
+    instead, which is the behaviour deferring was after. `complete(_:)` *is* a
+    real `NSTextView` method and does defer. Don't re-unify the two.
+  - **`"\r\n"` is a single grapheme cluster**, so a `Set<Character>` holding
+    `"\r"` and `"\n"` matches **neither half** of a Windows line ending — the
+    first cut of the frontmatter escaper left the most likely paste on earth
+    unescaped while appearing to fix the bug. `Frontmatter.quote`/`unquote` walk
+    `unicodeScalars`, and escape in **one** left-to-right pass, because
+    sequential `replacingOccurrences` calls decode `\\n` — an escaped backslash
+    then a literal `n` — as a newline. The old two-pass chain was only
+    accidentally correct with two escapes.
+  Four rules the pass leaves, each replacing several spellings of one thing:
+  - **`MarkdownResponder.markdownBody(in:)` is the only first-responder
+    predicate.** There were four, and the one in `ProjectTagging` guarded on
+    `!isFieldEditor` alone — which the **read-only preview satisfies**, so the
+    `@project` monitor stood down for a text view that is not a body. "The first
+    responder is the truth" was already this app's conclusion in four places;
+    now it is one function, and a non-editable preview is rejected.
+  - **`CardTextMetrics.current(for:)` is the only place font, typeface, scale
+    and leading are derived**, at all four sites. Two consequences that were
+    live defects: `Mono` never received `CardTextSize.scale`, so at Text size 22
+    the body was 22pt and the card's timestamp still ~10pt — it takes the scale
+    at the two sites **on a card** and stays unscaled for the band and the
+    Settings stepper, which is `Card.chrome(_:)`'s line drawn from the other
+    side; and ⋯ → Copy built its `Config` without `scale:`/`lineHeight:`, so the
+    RTF flavour on the pasteboard was a render of settings the reader doesn't
+    have while the plain flavour beside it was right.
+  - **Code has two sizes and they are not the same rule.** *Inline* code sits on
+    a line of prose and is sized off the base; a **fenced** block is
+    `.callout × scale` in both renderers, and the editor sized it off the base
+    too — so a note card with a fenced block **changed height on every open and
+    close**, with the sizing proxy agreeing with the editor so nothing caught
+    it. `MarkdownHighlight.Style` carries a `fenced` flag and both renderers and
+    the editor read one `MarkdownText.codeFont(scale:)`. The heading gap was the
+    same fault one level up — both renderers put 2pt above an h1/h2 and the
+    editor's styles *and* its sizing segments put none, so three `##` made a
+    note 6pt taller in view mode — and `MarkdownText.headingGap(level)` is now
+    where the 2 is written down.
+  - **`reloadAll` drains the disk queue off the main actor.** `flushDiskWrites()`
+    is `diskQueue.sync {}` and was `reloadAll`'s first statement on the main
+    actor, so a stalled iCloud rename blocked the window — the exact stall the
+    queue was added to remove. `reloadAll` is `async` and suspends on the drain;
+    `init` and `setRoot` keep a **blocking** one, deliberately, because
+    `seedIfFirstRun` reads the index on the next line and `setRoot` is called
+    from Settings and must stay synchronous. `applicationWillTerminate` keeps
+    the synchronous drain because it *must* block. The queue is still serial, so
+    `persistNote`'s write-then-unlink ordering is untouched, and nothing decodes
+    before the drain resumes.
+  Smaller behaviour changes that are visible and shouldn't surprise anyone:
+  **search is now diacritic-insensitive** as well as case-insensitive (it stopped
+  lowercasing every title and body per keystroke, and folds from both sides, so
+  "navegacion" finds "navegación" — a gain, and it matters most on the layout
+  this codebase keeps meeting); a **link in a body is filtered by scheme** on
+  render *and* on click, so `[Report](file:///Applications/Calculator.app)` in a
+  synced note no longer launches an app on one click, and a rejected destination
+  renders as plain text; `export` **allowlists** the portable attributes instead
+  of denylisting the renderer's private ones, since the old shape leaked any
+  attribute the renderer later gained into pasted RTF and that only ever shows up
+  in another application; a click **below** a body ending in an empty checklist
+  item opens the card instead of flipping that checkbox and saving; **Return on
+  `- [ ]`** continues the checklist, because `lineMarker` required a space after
+  `]` where `checkboxMarker` accepts the end of the line; a **drag in the
+  projects sidebar can no longer fall through to the end of `Projects.md`** when
+  a row above the pointer has never been laid out (an unmeasured row is now
+  *unknown* rather than "not above", and `rowFrames` is pruned when a row leaves
+  the list); the **due popover no longer paints today as chosen on an undated
+  task** while telling you there is nothing to clear — `MonthCalendar` takes an
+  optional selection plus the month to open on, because no single `Date` can say
+  "this month, nothing chosen"; and the preset pills read `clock.today`, so an
+  open popover doesn't go stale past midnight.
+  One thing to keep in mind if you go looking for the rest: `MarkdownText`'s
+  block renderer **still survives as the hidden height proxy**, and the highlight
+  pass is **still whole-document**. Both were left deliberately — the pass
+  removed the per-keystroke allocations and font matches (the `find` scanner
+  compares UTF-16 in place and `font(for:)` is memoised) and shares the
+  constants so the two renderers can't drift, but neither structural rewrite was
+  folded into a defect-fix pass.
 
 - **The August 2026 theme system** is the current word on the app's colour, and
   it *reverses* three parts of the July refresh below. Read this bullet before

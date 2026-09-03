@@ -53,7 +53,11 @@ struct CardDatesFooter: View {
             // that spec that was about the face; the rest was about a format
             // this app had already solved (see `dayPart(of:now:)` and
             // `CardDateCompactionTests`).
-            .font(Mono.font(.caption2))
+            // `card`, not `font`: the footer sits on a card, so it follows the
+            // reading size as well as the face. `Card.chrome(_:)` is the line —
+            // the band's count and the Settings stepper are the chrome side of
+            // it and stay at the system's size.
+            .font(Mono.card(.caption2))
             // The theme's metadata colour, not `.tertiary`: a timestamp is
             // metadata, and the refresh's floor for text under 14px is 4.5:1
             // against the card it's painted on (CLAUDE.md decision 5) — tertiary

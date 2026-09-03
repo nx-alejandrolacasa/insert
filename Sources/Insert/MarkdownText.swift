@@ -13,12 +13,6 @@ struct MarkdownText: View {
     /// `NSFont.TextStyle` rather than a `Font` because the spacing below is
     /// measured off the very same font.
     var textStyle: NSFont.TextStyle = .body
-    /// Set by a card's view mode so a `- [ ]` checkbox takes a click of its own —
-    /// flip that source line, don't open the editor. `nil` (the teasers, the
-    /// hidden measuring proxies) leaves the mark plain text. The parameter is the
-    /// item's `ListItem.line`, ready for `MarkdownParser.toggleCheckbox(_:atLine:)`.
-    var onToggleCheckbox: ((Int) -> Void)? = nil
-
     private var nsFont: NSFont { Card.nsFont(textStyle) }
     private var font: Font { Font(nsFont) }
 
@@ -67,7 +61,7 @@ struct MarkdownText: View {
             let heading = headingFont(level)
             Self.inline(text, in: heading)
                 .font(Font(heading))
-                .padding(.top, level <= 2 ? 2 : 0)
+                .padding(.top, Self.headingGap(level))
         case .paragraph(let text):
             Self.inline(text, in: nsFont)
                 .font(font)
@@ -84,7 +78,8 @@ struct MarkdownText: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: Self.markerGap) {
                         if let checked = item.checked {
-                            checkboxMark(checked, line: item.line)
+                            checkboxGlyph(checked)
+                                .accessibilityLabel(checked ? "Done" : "Not done")
                         } else if let number = numbers[idx] {
                             Text("\(number).")
                                 .font(font)
@@ -121,13 +116,9 @@ struct MarkdownText: View {
             }
         case .code(let text):
             Text(text)
-                // Monospaced, never the card face — but still the reading size,
-                // so a fenced block grows with the prose around it. `.callout`
-                // spelled as a size because the scale has to reach it, and the
-                // preview's own code font is the same expression.
-                .font(.system(size: NSFont.preferredFont(forTextStyle: .callout).pointSize
-                                * CardTextSize.scale(SettingsStore.shared.cardFontSize),
-                              design: .monospaced))
+                .font(Font(Self.codeFont(
+                    scale: CardTextSize.scale(SettingsStore.shared.cardFontSize)
+                )))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.06)))
@@ -137,13 +128,18 @@ struct MarkdownText: View {
     }
 
     /// The gap between a list marker and its item.
-    private static let markerGap: CGFloat = listInset
+    nonisolated static let markerGap: CGFloat = listInset
 
     /// A list steps in from the body's left edge by the marker gap, first level
     /// included, so a dense list reads as a block set off from the prose rather
     /// than as more of it. The editor indents its list paragraphs by the same
-    /// amount (`MarkdownHighlight.apply`). `nonisolated`, with `listGap`, because
-    /// the highlighter's pure half reads them off the main actor.
+    /// amount (`MarkdownHighlight.apply`).
+    ///
+    /// It and the three list numbers around it are `nonisolated` **internal**
+    /// because a list is laid out in three places — this stack, the view-mode
+    /// preview's paragraph styles and the editor's — and two of them read the
+    /// numbers off the main actor. They were private, so `MarkdownRichText`
+    /// re-declared them as literals while naming these as the originals.
     nonisolated static let listInset: CGFloat = 8
 
     /// Half a line between items. They sit on consecutive source lines with
@@ -201,49 +197,118 @@ struct MarkdownText: View {
         naturalLine(font).rounded() + lineSpacing(font, lineHeight: lineHeight)
     }
 
+    /// A **fenced block**'s face: monospaced, never the card face — but still
+    /// the reading size, so a block grows with the prose around it. `.callout`
+    /// rather than the body, and spelled as a size because the reading scale has
+    /// to reach it.
+    ///
+    /// One definition for all three layouts, because the editor had its own: it
+    /// sized a fenced span off the card's **base** style, which on a note card
+    /// is `.body`, so a card with a fenced block changed height on every open
+    /// and close — and the sizing proxy agreed with the editor, so nothing
+    /// caught it. Inline code is a different rule and stays the context's own
+    /// size (`MarkdownHighlight.font(for:)`), since it sits on a line of prose.
+    nonisolated static func codeFont(scale: CGFloat) -> NSFont {
+        .monospacedSystemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize * scale,
+            weight: .regular
+        )
+    }
+
+    /// The base paragraph style the two AppKit layouts of a card's Markdown
+    /// start from — the editor's storage and the view-mode preview's render —
+    /// carrying the reading leading and **nothing else**. Each layers its own
+    /// extras onto a `mutableCopy()`: the tab step in the editor, the wrap mode
+    /// and the block spacing in the preview.
+    ///
+    /// The leading is a `lineSpacing`, never a `lineHeightMultiple`, and this is
+    /// the shape that fact takes at a call site: `lineSpacing(_:lineHeight:)` is
+    /// the one definition (see there for why the multiple can't be used at all),
+    /// and one factory is what keeps the four places a card's text is laid out
+    /// on one rhythm. Two hand-rolled styles for one rule is how the editor's
+    /// came to have tab stops and no `lineBreakMode` and the preview's the
+    /// reverse.
+    nonisolated static func paragraphStyle(base font: NSFont,
+                                           lineHeight: Double) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing(font, lineHeight: lineHeight)
+        return style
+    }
+
+    /// One line of a source: its text, and where it sits in UTF-16.
+    ///
+    /// Both halves come off one pass because the readers want different ones —
+    /// the parser reads the text, the highlighter attributes `NSRange`s over the
+    /// same lines — and walking twice is how four splitters for one format came
+    /// to exist.
+    struct Line: Equatable {
+        /// The line without its newline.
+        var text: Substring
+        /// The offset of the line's first UTF-16 unit in the string it was split
+        /// from.
+        var start: Int
+        /// One past its last, the newline excluded — so `start == end` is an
+        /// empty line.
+        var end: Int
+
+        var range: NSRange { NSRange(location: start, length: end - start) }
+    }
+
+    /// Splits a source on **LF alone**, exactly as `components(separatedBy:)`
+    /// does it: a trailing newline opens one more, empty, line, and an empty
+    /// source is one empty line. A `\r` stays on the line it ends — a caller
+    /// wanting CRLF normalised does it on the way in, which is what
+    /// `MarkdownParser` does and what the editor's passes deliberately don't,
+    /// since their offsets have to address the storage as it stands.
+    ///
+    /// Walked over the **unicode scalars**, not the characters: `\r\n` is a
+    /// single `Character`, so a character-wise walk leaves a CRLF source as one
+    /// long line (measured — `"a\r\nb".contains("\n")` is `false`).
+    nonisolated static func lines(of text: String) -> [Line] {
+        var lines: [Line] = []
+        let scalars = text.unicodeScalars
+        var lineStart = scalars.startIndex
+        var startOffset = 0
+        var offset = 0
+        var i = scalars.startIndex
+        while i < scalars.endIndex {
+            let scalar = scalars[i]
+            let next = scalars.index(after: i)
+            if scalar == "\n" {
+                lines.append(Line(text: Substring(scalars[lineStart..<i]),
+                                  start: startOffset, end: offset))
+                offset += 1
+                lineStart = next
+                startOffset = offset
+            } else {
+                offset += UTF16.width(scalar)
+            }
+            i = next
+        }
+        lines.append(
+            Line(text: Substring(scalars[lineStart...]), start: startOffset, end: offset)
+        )
+        return lines
+    }
+
     /// One level of nesting. It is the marker column — the dot plus its gap — so
     /// a child's bullet lands under the first character of its parent's text,
     /// which is where the eye already expects the sub-list to start. A count of
     /// the source's own spaces would be no use: the same nesting can be written
     /// with two spaces or four, and both mean one level.
-    private static let listIndent: CGFloat = bulletDiameter + markerGap
-
-    private static let bulletDiameter: CGFloat = 5
+    nonisolated static let listIndent: CGFloat = bulletDiameter + markerGap
 
     /// A bullet list's marker, drawn rather than typed. `Text("•")` is what this
     /// was, and that glyph measures **2.6pt** across at body size — a speck
     /// beside 13pt text, and the font is no lever on it: at 20pt the dot is still
     /// under 4pt, by which point the taller line has loosened the whole list. A
-    /// circle's size is ours to pick, so it's 5pt.
-    ///
-    /// A shape has no baseline, so the row's `.firstTextBaseline` alignment would
-    /// fall back to the dot's bottom edge and hang it below the text; the guide
-    /// is declared here instead, putting the dot's centre on the body font's
-    /// x-height — where the glyph's own centre sat, and read off the font so it
-    /// tracks the text rather than pinning a number.
-    /// A `- [ ]` item's marker. With a toggle handler the mark is a button, so a
-    /// click in view mode flips the box instead of opening the editor — a child
-    /// button takes the click before the card's own tap gesture, the same
-    /// precedence the expand chevron already rides. `.plain`, so the button is
-    /// its label and the row's `.firstTextBaseline` still reads the glyph's own
-    /// baseline. The hit shape is inset outward a step: the glyph is ~13pt, and
-    /// the 8pt `markerGap` beside it leaves that much slack before the item text.
-    @ViewBuilder
-    private func checkboxMark(_ checked: Bool, line: Int) -> some View {
-        if let toggle = onToggleCheckbox {
-            Button {
-                toggle(line)
-            } label: {
-                checkboxGlyph(checked)
-                    .contentShape(Rectangle().inset(by: -4))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(checked ? "Done" : "Not done")
-        } else {
-            checkboxGlyph(checked)
-                .accessibilityLabel(checked ? "Done" : "Not done")
-        }
-    }
+    /// circle's size is ours to pick, so it's 5pt. A shape has no baseline, so
+    /// the row's `.firstTextBaseline` alignment would fall back to the dot's
+    /// bottom edge and hang it below the text; the guide is declared in
+    /// `bulletDot`, putting the dot's centre on the body font's x-height —
+    /// where the glyph's own centre sat, and read off the font so it tracks the
+    /// text rather than pinning a number.
+    nonisolated static let bulletDiameter: CGFloat = 5
 
     /// The task row's own glyph pair at the body size, so a ticked line in a
     /// note speaks the same language as a done task. Rendered as a `Text`
@@ -336,15 +401,25 @@ struct MarkdownText: View {
     /// emphasis itself is not enough: a design with no italic face falls back to
     /// the upright one and the emphasis vanishes. SF Rounded is exactly that case
     /// and it is the app's default face, so `> *Author*` under a quote drew as
-    /// plain text. `Card.italic(_:)` answers with a real italic where one exists
-    /// and a synthesised oblique where none does.
+    /// plain text.
     ///
-    /// Bold-italic takes the bold face *then* slants it, so `***both***` keeps its
-    /// weight. **Code** spans are left alone — a run that is both `code` and
-    /// emphasised would otherwise lose its monospacing, which matters more than its
-    /// slant. The ranges are collected before anything is written, since the
-    /// string can't be mutated while its own `runs` are being walked.
-    private static func italicised(_ attributed: AttributedString, in font: NSFont) -> AttributedString {
+    /// The face comes from `MarkdownHighlight.font(for:base:typeface:)` — the
+    /// same resolver the editor styles the same run through, so `**bold**` reads
+    /// the same open and closed. It carries both of the traps: the bold trait is
+    /// **added** to the base's own traits rather than set on its own (setting it
+    /// replaces the set and drops a bold base's weight, which is how
+    /// `***both***` once came out neither), and the slant is `Card.italic` — a
+    /// real italic face where one exists, a shear through the font matrix at the
+    /// face's own `italicAngle` where none does.
+    ///
+    /// **Code** spans are left alone — a run that is both `code` and emphasised
+    /// would otherwise lose its monospacing, which matters more than its slant.
+    /// The ranges are collected before anything is written, since the string
+    /// can't be mutated while its own `runs` are being walked.
+    ///
+    /// Internal rather than private so `MarkdownParserTests` can pin the case
+    /// that used to come out neither bold nor slanted.
+    static func italicised(_ attributed: AttributedString, in font: NSFont) -> AttributedString {
         let italicRuns = attributed.runs.compactMap {
             run -> (Range<AttributedString.Index>, InlinePresentationIntent)? in
             guard let intent = run.inlinePresentationIntent,
@@ -356,22 +431,18 @@ struct MarkdownText: View {
 
         var out = attributed
         for (range, intent) in italicRuns {
-            // `***both***` has to be weighted *before* it's slanted, and by us:
-            // leaving the bold to SwiftUI meant it re-resolved the font and dropped
-            // the synthesised oblique, so bold-italic came out bold and upright. The
-            // trait is added to the card font's own descriptor rather than replacing
-            // it, which keeps the design and the one-storey `a`, and it lands on the
-            // same face SwiftUI's own bold would (`.SFNSRounded-Semibold`), so a
-            // `**bold**` run beside it matches.
-            let base = intent.contains(.stronglyEmphasized)
-                ? NSFont(
-                    descriptor: font.fontDescriptor.withSymbolicTraits(
-                        font.fontDescriptor.symbolicTraits.union(.bold)
-                    ),
-                    size: font.pointSize
-                ) ?? font
-                : font
-            out[range].font = Font(Card.italic(base))
+            // Weighted *before* it is slanted, and by us: leaving the bold to
+            // SwiftUI meant it re-resolved the font and dropped the synthesised
+            // oblique, so bold-italic came out bold and upright. `typeface`
+            // reaches only `font(for:)`'s heading branch, which an inline run
+            // never names — the face travels in `base`.
+            out[range].font = Font(MarkdownHighlight.font(
+                for: MarkdownHighlight.Style(
+                    bold: intent.contains(.stronglyEmphasized), italic: true
+                ),
+                base: font,
+                typeface: .standard
+            ))
             // **Both emphasis bits have to be given up along with it.** Left in
             // place, SwiftUI resolves the emphasis itself *on top* of the font just
             // set — and resolving either one goes through the symbolic traits, which
@@ -414,6 +485,16 @@ struct MarkdownText: View {
         case 3: Card.nsFont(.headline, weight: .semibold, typeface: typeface, scale: scale)
         default: Card.nsFont(.subheadline, weight: .semibold, typeface: typeface, scale: scale)
         }
+    }
+
+    /// The air above a heading, and which levels get it: the two that open a
+    /// section, nothing for the ones that only label a paragraph. Read as the
+    /// rule rather than the number, because all three layouts have to agree on
+    /// both halves — this stack pads, the preview and the editor set
+    /// `paragraphSpacingBefore`, and a note with three `##` was 6pt taller in
+    /// view mode while they each wrote the number down separately.
+    nonisolated static func headingGap(_ level: Int) -> CGFloat {
+        level <= 2 ? 2 : 0
     }
 }
 
@@ -460,7 +541,9 @@ enum MarkdownParser {
 
     private static func parseUncached(_ text: String) -> [Block] {
         var blocks: [Block] = []
-        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        let lines = MarkdownText
+            .lines(of: text.replacingOccurrences(of: "\r\n", with: "\n"))
+            .map(\.text)
         var i = 0
         var paragraph: [String] = []
 
@@ -480,7 +563,7 @@ enum MarkdownParser {
             // Fenced code block.
             if line.hasPrefix("```") {
                 flushParagraph()
-                var code: [String] = []
+                var code: [Substring] = []
                 i += 1
                 while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                     code.append(lines[i]); i += 1
@@ -609,7 +692,7 @@ enum MarkdownParser {
     }
 
     /// The width of a line's leading whitespace, a tab counting as four columns.
-    private static func indentColumns(_ line: String) -> Int {
+    private static func indentColumns(_ line: Substring) -> Int {
         var columns = 0
         for ch in line {
             if ch == "\t" { columns += 4 } else if ch == " " { columns += 1 } else { break }
@@ -665,16 +748,19 @@ enum MarkdownParser {
     /// wrong line. Unchecking a custom state (`- [-]`) writes back `[ ]` and
     /// re-checking writes `[x]`, which is what a click does in Obsidian too.
     static func toggleCheckbox(_ text: String, atLine index: Int) -> String? {
-        var lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var lines = MarkdownText
+            .lines(of: text.replacingOccurrences(of: "\r\n", with: "\n"))
+            .map { String($0.text) }
         guard lines.indices.contains(index) else { return nil }
-        let raw = lines[index]
-        guard let marker = listMarker(raw.trimmingCharacters(in: .whitespaces)),
+        // The indent is dropped and counted by one predicate, so the marker read
+        // here and the index written back can't disagree: trimming a set that
+        // includes U+00A0 while counting only ASCII wrote `-  x]` over `- [x]`.
+        var chars = Array(lines[index])
+        let indent = chars.prefix { $0.isWhitespace }.count
+        guard let marker = listMarker(String(chars[indent...])),
               let checked = marker.checked else { return nil }
-        // The state character sits three past the first non-whitespace character:
-        // indent, then `- [`, then the state.
-        var chars = Array(raw)
-        let state = chars.prefix { $0 == " " || $0 == "\t" }.count + 3
-        chars[state] = checked ? " " : "x"
+        // The state character sits three past the indent: `- [`, then the state.
+        chars[indent + 3] = checked ? " " : "x"
         lines[index] = String(chars)
         return lines.joined(separator: "\n")
     }
@@ -742,14 +828,14 @@ struct CollapsibleMarkdown: View {
     /// The chevron's two spoken/help names, in the card's own words.
     let expandLabel: String
     let collapseLabel: String
-    /// Forwarded to the full render, so a visible checkbox takes its click in
-    /// view mode. Not to the teaser (one line, marker already dropped) nor the
-    /// hidden measuring proxy, which hit-tests nothing.
     /// A plain click on the full render — the card's "open for editing". The
     /// render is a text view, which takes the mouse for selecting, so the card's
     /// own tap gesture never sees a click that lands on the text; the view
     /// reports it here instead. The teaser is SwiftUI and needs nothing.
     var onTap: (() -> Void)? = nil
+    /// Forwarded to the full render, so a visible checkbox takes its click in
+    /// view mode. Not to the teaser (one line, marker already dropped) nor the
+    /// hidden measuring proxy, which hit-tests nothing.
     var onToggleCheckbox: ((Int) -> Void)? = nil
 
     /// The body laid out unbounded — what expanding would show.

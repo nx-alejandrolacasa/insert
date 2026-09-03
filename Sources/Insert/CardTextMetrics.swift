@@ -94,6 +94,85 @@ enum CardLineHeight {
     }
 }
 
+// MARK: - The whole set, resolved once
+
+/// Everything a card's text is laid out from, resolved together: the face, the
+/// size, the leading, and the two spellings of the font.
+///
+/// It exists because four sites derived the same five values independently —
+/// each panel's hidden sizing proxy, the editor's highlight config and the
+/// view-mode preview's render config — and one of them getting a term wrong
+/// shows up as the card **changing shape** on the flip between reading and
+/// editing, which is the invariant the whole file is about. The sizing proxies
+/// also resolved `Card.nsFont` twice apiece, once for the base font and once to
+/// measure the leading off.
+///
+/// **Both spellings of the font are returned, and both are needed.** The
+/// SwiftUI `Font` is what draws; the `NSFont` is what `MarkdownText` measures
+/// `blankLine` from and what the proxies lay their text out in. Handing back
+/// only the `Font` would leave every card's height computed in a face it no
+/// longer draws (`Card`'s own warning, met here).
+///
+/// The leading comes through `MarkdownText.lineSpacing(_:lineHeight:)` rather
+/// than being computed here, so there stays exactly **one** definition of the
+/// rule — and it is a `lineSpacing`, never a `lineHeightMultiple`, for the
+/// reason stated there: SwiftUI has no counterpart for the multiple, so the four
+/// places a card's text is laid out could not be held to one rhythm through it.
+///
+/// `lineHeight` — the reader's multiple, unresolved — comes along because the
+/// preview's `Config` takes the multiple and derives the spacing itself, in
+/// AppKit terms, off its own base font.
+struct CardTextMetrics {
+    /// The style the body reads at: `.body` on a note card, `.callout` on a
+    /// task's notes.
+    let textStyle: NSFont.TextStyle
+    let typeface: Typeface
+    /// What `Card` multiplies every preferred size by — `CardTextSize.scale`,
+    /// exactly 1 at the default.
+    let scale: CGFloat
+    /// The reader's line-height multiple, as chosen.
+    let lineHeight: Double
+    /// The base font, AppKit's — the one the proxies measure in.
+    let nsFont: NSFont
+    /// The same face, SwiftUI's.
+    let font: Font
+    /// The extra space between two lines the multiple asks for, in points:
+    /// zero at 1.0, one whole line again at 2.0.
+    let lineSpacing: CGFloat
+
+    /// Resolved from the store the caller already has in hand.
+    ///
+    /// `@MainActor`, and meant to be called from **inside a view update** —
+    /// that is what makes the two `@Observable` reads register as dependencies,
+    /// so changing either setting re-renders every card with nothing to thread
+    /// through and nothing to re-apply. It is the `Card` pattern, and calling
+    /// this anywhere else gets a snapshot that nothing will refresh.
+    @MainActor
+    static func current(for textStyle: NSFont.TextStyle, settings: SettingsStore) -> CardTextMetrics {
+        let typeface = settings.typeface
+        let scale = CardTextSize.scale(settings.cardFontSize)
+        let lineHeight = settings.cardLineHeight
+        let nsFont = Card.nsFont(textStyle, typeface: typeface, scale: scale)
+        return CardTextMetrics(
+            textStyle: textStyle,
+            typeface: typeface,
+            scale: scale,
+            lineHeight: lineHeight,
+            nsFont: nsFont,
+            font: Font(nsFont),
+            lineSpacing: MarkdownText.lineSpacing(nsFont, lineHeight: lineHeight)
+        )
+    }
+
+    /// For the two `NSViewRepresentable`s, which have no store injected and read
+    /// the shared one the way `Card.nsFont(_:)` does. Still inside a view
+    /// update, so it registers the same way.
+    @MainActor
+    static func current(for textStyle: NSFont.TextStyle) -> CardTextMetrics {
+        current(for: textStyle, settings: SettingsStore.shared)
+    }
+}
+
 // MARK: - The stepper
 
 /// The `−  value  +` control the two settings above are driven by: one pill,
@@ -116,15 +195,20 @@ enum CardLineHeight {
 /// Accessibility is a real `Stepper`'s: the whole pill is one adjustable
 /// element, so VoiceOver reads "Font size, 13" and the arrow keys work on it,
 /// rather than announcing three unrelated children.
-struct ValueStepper: View {
+struct ValueStepper<Value: Comparable>: View {
+    /// The value itself, and the range it may be moved within — which is all the
+    /// enablement below needs, so a setting's bounds are named once at the call
+    /// site rather than once per end per stepper. Generic over `Comparable`
+    /// because the two settings are an `Int` and a `Double` and nothing here
+    /// does arithmetic on either: stepping is the caller's closures.
+    let value: Value
+    let bounds: ClosedRange<Value>
     /// What the value reads as — already formatted, since only the caller knows
     /// whether it is a count or a multiple.
-    let value: String
+    let text: String
     /// The widest value the caller can show, for the pinned column. Formatted
-    /// the same way as `value`.
+    /// the same way as `text`.
     let widest: String
-    var canDecrease = true
-    var canIncrease = true
     /// What each glyph does, said in words — the two buttons are a `−` and a
     /// `+`, which name themselves to nobody using VoiceOver.
     let decreaseLabel: String
@@ -132,13 +216,16 @@ struct ValueStepper: View {
     let onDecrease: () -> Void
     let onIncrease: () -> Void
 
-    private static let height: CGFloat = 26
+    var canDecrease: Bool { value > bounds.lowerBound }
+    var canIncrease: Bool { value < bounds.upperBound }
+
+    private static var height: CGFloat { 26 }
 
     var body: some View {
         HStack(spacing: 0) {
             button("minus", enabled: canDecrease, label: decreaseLabel, action: onDecrease)
 
-            Text(value)
+            Text(text)
                 .font(Mono.font(.callout, weight: .medium))
                 .foregroundStyle(.primary)
                 // Pinned to the widest value rather than sized to this one, so
@@ -156,7 +243,7 @@ struct ValueStepper: View {
         // One adjustable element, not three views: the two buttons are how a
         // pointer reaches the value, and a keyboard reaches it through this.
         .accessibilityElement(children: .ignore)
-        .accessibilityValue(value)
+        .accessibilityValue(text)
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: if canIncrease { onIncrease() }
