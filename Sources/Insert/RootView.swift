@@ -26,6 +26,21 @@ struct RootView: View {
     /// `notesSplit` when the drag ends.
     @State private var liveSplit: Double?
 
+    /// The detail area's current width, and the width it last had with the
+    /// sidebar open and still. Hiding the sidebar hands the width it frees to
+    /// **notes alone** — see `referenceWidth(in:)`.
+    @State private var detailWidth: CGFloat = 0
+    @State private var openDetailWidth: CGFloat?
+
+    /// True while the sidebar's column is mid-slide, and its **only** job is to
+    /// keep a width measured mid-slide from being pinned: the frames of a slide
+    /// are on their way somewhere, and the pin has to be a width the columns
+    /// settled at. It is deliberately not consulted by `referenceWidth(in:)`,
+    /// which cannot afford to — the flag is set from `onChange`, a beat after
+    /// `sidebarVisible` itself flips.
+    @State private var sidebarSliding = false
+    @State private var sidebarSettle: Task<Void, Never>?
+
     /// The detail toolbar's "show sidebar" button, tracked as presence *and*
     /// opacity rather than straight off `appState.sidebarVisible` — see
     /// `syncShowButton`. Both start closed because the sidebar starts open and
@@ -161,6 +176,7 @@ struct RootView: View {
         // own divider, which never goes through our toggle.
         .onChange(of: appState.sidebarVisible) { _, visible in
             syncShowButton(sidebarVisible: visible)
+            holdReferenceWidth()
         }
     }
 
@@ -173,21 +189,42 @@ struct RootView: View {
         // between them is still draggable — a hover-revealed handle floats over
         // it.
         GeometryReader { geo in
-            let notesWidth = notesWidth(in: geo.size.width)
+            let tasksWidth = tasksWidth(in: geo.size.width)
             HStack(spacing: 0) {
+                // **Notes is the elastic column**, and which of the two carries
+                // the fixed width is not cosmetic. Through the sidebar's slide
+                // the tasks width is a constant, so a fixed frame here has
+                // nothing to interpolate and the animating container width all
+                // lands in notes. The other way round, `.frame(width:)` on notes
+                // animated *itself* toward a target the container width was
+                // moving at the same time — two curves for one movement, and the
+                // frame lagged: the tasks column came out reduced on open and
+                // grew back over the slide.
                 NotesPanel()
-                    .frame(width: notesWidth)
-                TasksPanel()
                     .frame(maxWidth: .infinity)
+                TasksPanel()
+                    .frame(width: tasksWidth)
             }
-            .overlay(alignment: .leading) {
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                guard width > 0, abs(width - detailWidth) > 0.5 else { return }
+                detailWidth = width
+                // Only a width the columns have settled at is worth pinning: the
+                // frames of a slide are on their way somewhere, and pinning one
+                // of those is the vibration all over again.
+                if appState.sidebarVisible, !sidebarSliding { openDetailWidth = width }
+            }
+            .overlay(alignment: .trailing) {
                 ColumnDivider(
                     fraction: $notesSplit,
                     liveFraction: $liveSplit,
-                    notesWidth: notesWidth,
-                    totalWidth: geo.size.width
+                    tasksWidth: tasksWidth,
+                    totalWidth: geo.size.width,
+                    referenceWidth: referenceWidth(in: geo.size.width)
                 )
-                .offset(x: notesWidth - ColumnDivider.hitWidth / 2)
+                // Measured in from the trailing edge for the frame's reason
+                // above: off the tasks width, the offset is a constant through
+                // the slide as well.
+                .offset(x: -(tasksWidth - ColumnDivider.hitWidth / 2))
             }
         }
         // The theme's **page ground** (see `AppTheme`), and it is painted here —
@@ -210,13 +247,35 @@ struct RootView: View {
         .background(settings.theme.windowFill.ignoresSafeArea())
     }
 
-    /// The notes column's width for the stored split, with both columns held
+    /// The tasks column's width for the stored split, with both columns held
     /// to a generous minimum so neither can be dragged into a sliver. In a
     /// window too narrow to honour both minimums, fall back to an even split.
-    private func notesWidth(in total: CGFloat) -> CGFloat {
+    ///
+    /// The split sizes **this** column and notes takes whatever is left: with
+    /// the sidebar hidden the two columns share a wider detail area, and the
+    /// width it freed belongs to the column the writing is in. So a collapse
+    /// grows notes and leaves tasks exactly where it was.
+    private func tasksWidth(in total: CGFloat) -> CGFloat {
         let floor = Metrics.minPanelWidth
         guard total > floor * 2 else { return total / 2 }
-        return max(floor, min(total - floor, total * (liveSplit ?? notesSplit)))
+        let tasks = referenceWidth(in: total) * (1 - (liveSplit ?? notesSplit))
+        return max(floor, min(total - floor, tasks))
+    }
+
+    /// The width the split is a share of: the detail area with the sidebar open.
+    /// The **narrower** of the pinned width and the current one, and neither
+    /// `sidebarVisible` nor `sidebarSliding` is consulted — a detail area wider
+    /// than the pin is one the sidebar has vacated, whichever of the two flags
+    /// happens to say so yet, and one narrower than the pin is a window that has
+    /// shrunk since, which can't hand tasks more than there is.
+    ///
+    /// Reading the flags is what put the glitch in the *reopen*: `sidebarVisible`
+    /// flips before `onChange` has set `sidebarSliding`, so two layout passes ran
+    /// with the split read against the still-collapsed width — 587pt where the
+    /// tasks column was 496 — and that wrong value landed inside the slide's own
+    /// animated transaction, which then animated the correction back over 250ms.
+    private func referenceWidth(in total: CGFloat) -> CGFloat {
+        min(openDetailWidth ?? total, total)
     }
 
     /// Bridges the app's simple `sidebarVisible` flag to the split view's
@@ -344,6 +403,23 @@ struct RootView: View {
         }
     }
 
+    /// Holds the reference width still until the column has stopped moving, then
+    /// takes the settled width as the new pin — which is what keeps a window
+    /// resized while the sidebar was away from collapsing against a stale one.
+    /// The wait is the slide's own length plus a frame of grace, because the
+    /// flag clearing before the last frame lands is the jump it exists to
+    /// prevent; with Reduce Motion there is no slide, so it is the grace alone.
+    private func holdReferenceWidth() {
+        sidebarSettle?.cancel()
+        sidebarSliding = true
+        sidebarSettle = Task { @MainActor in
+            try? await Task.sleep(for: slideDuration + .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            sidebarSliding = false
+            if appState.sidebarVisible, detailWidth > 0 { openDetailWidth = detailWidth }
+        }
+    }
+
     // The plan asks for ⌘ + the key left of the number row (§ / º / ` depending
     // on layout). Matching by *physical* key code covers every keyboard:
     // ANSI grave = 50, ISO section = 10.
@@ -403,14 +479,20 @@ private struct ColumnDivider: View {
     /// lay out from, so the stored value is written once per drag instead of
     /// once per pointer event.
     @Binding var liveFraction: Double?
-    /// The notes column's *rendered* width — the clamped value, which is what
-    /// a drag starts from, not whatever stale fraction is on disk.
-    let notesWidth: CGFloat
+    /// The tasks column's *rendered* width — the clamped value, which is what
+    /// a drag starts from, not whatever stale fraction is on disk. Tasks rather
+    /// than notes because that is the column the split sizes.
+    let tasksWidth: CGFloat
     let totalWidth: CGFloat
+    /// The width `fraction` is a share of — the detail area with the sidebar
+    /// open, and so equal to `totalWidth` whenever it is. They differ only while
+    /// the sidebar is collapsed, where a drag has to be written down as the
+    /// tasks width it chose rather than as a share of the wider area.
+    let referenceWidth: CGFloat
 
     @State private var hovering = false
     @State private var dragging = false
-    /// `notesWidth` captured when the drag began, so each move is absolute.
+    /// `tasksWidth` captured when the drag began, so each move is absolute.
     @State private var dragBase: CGFloat?
 
     var body: some View {
@@ -442,11 +524,17 @@ private struct ColumnDivider: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         dragging = true
-                        if dragBase == nil { dragBase = notesWidth }
-                        let proposed = (dragBase ?? notesWidth) + value.translation.width
+                        if dragBase == nil { dragBase = tasksWidth }
+                        // Leftwards widens tasks, so the translation subtracts.
+                        let proposed = (dragBase ?? tasksWidth) - value.translation.width
                         let floor = Metrics.minPanelWidth
-                        let clamped = max(floor, min(totalWidth - floor, proposed))
-                        liveFraction = clamped / totalWidth
+                        // The drag can only choose a tasks width the split can
+                        // hold, since that is what is stored: while the sidebar
+                        // is collapsed the ceiling is the reference width rather
+                        // than the wider detail area the columns are sharing.
+                        let ceiling = min(totalWidth - floor, referenceWidth - floor)
+                        let clamped = max(floor, min(ceiling, proposed))
+                        liveFraction = min(1, max(0, 1 - clamped / max(referenceWidth, 1)))
                     }
                     .onEnded { _ in
                         if let liveFraction { fraction = liveFraction }
@@ -458,7 +546,7 @@ private struct ColumnDivider: View {
             // Dragging is pointer-only; give assistive tech a real control.
             .accessibilityElement()
             .accessibilityLabel("Resize columns")
-            .accessibilityValue("Notes \(Int((notesWidth / max(totalWidth, 1)) * 100)) percent")
+            .accessibilityValue("Notes \(Int(((totalWidth - tasksWidth) / max(totalWidth, 1)) * 100)) percent")
             .accessibilityAdjustableAction { direction in
                 let floor = Metrics.minPanelWidth / max(totalWidth, 1)
                 switch direction {

@@ -631,7 +631,38 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   looked like it did nothing.
 - **Layout** — the projects sidebar is collapsible (toolbar button or ⌘ + the
   leftmost key of the number row: ANSI grave, keyCode 50, or ISO section,
-  keyCode 10). With it hidden, notes and tasks split the window 50/50.
+  keyCode 10). **With it hidden, the width it frees goes to notes alone** — the
+  tasks column keeps the width it had, because the point of collapsing the
+  sidebar is more room for the writing, and a proportional split moved the tasks
+  column out from under the pointer to widen a list nobody asked to widen. So
+  what `notesTasksSplit` really sizes is the *tasks* column — it is notes' share
+  of the detail width **with the sidebar open** (`referenceWidth(in:)`, pinned by
+  the last width measured while it was), and notes takes whatever is left. Two
+  consequences: a window resized while the sidebar is collapsed also grows notes
+  only, and a divider dragged while it is collapsed is stored as the tasks width
+  it chose, so reopening restores that arrangement rather than re-splitting it.
+  The drag's notes-side floor rises to suit while collapsed, since a tasks column
+  wider than the reference width is not a value the split can hold.
+  **The reference width is held still for the whole slide, in both directions,
+  and reopening is why.** Closing needed nothing: `sidebarVisible` flips first,
+  so the pin takes over on the same frame the column starts moving. Reopening
+  animates the detail area *down* from its collapsed width, so reading the split
+  against the frame being drawn widened the tasks column the instant the flag
+  flipped and shrank it back over the slide — reported as the tasks width
+  "vibrating". `sidebarSliding` pins the reference for the slide's length plus a
+  frame of grace (`holdReferenceWidth()`), and the settled width becomes the new
+  pin when it clears, which is what stops a window resized while the sidebar was
+  away from collapsing against a stale one.
+  **The tasks column is the one with the fixed frame, and that is what removed
+  the last of the glitch.** With `.frame(width:)` on *notes* and tasks elastic,
+  the notes frame animated **itself** toward a target the animating container
+  width was moving at the same time — two curves for one movement — and it
+  lagged: on open the tasks column came out reduced and grew back over the
+  slide, even though its computed width was constant throughout. So notes takes
+  `maxWidth: .infinity`, tasks takes the width, and the divider is measured **in
+  from the trailing edge**: through the slide both of those are constants, with
+  nothing left to interpolate, and the container's animating width all lands in
+  notes.
   Its width comes from `Metrics.{min,ideal,max}SidebarWidth` — 200pt on open, which
   is where a project name and its `X notes · Y tasks` subtitle both fit and nothing
   more, since the rest belongs to notes and tasks. But **the `min:` you pass
