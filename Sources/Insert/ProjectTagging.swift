@@ -80,14 +80,17 @@ struct ProjectMentionField: View {
             .font(font)
             .foregroundStyle(color)
             .focused($focused)
-            .background(
-                // Measure the field so the dropdown sits right beneath it
-                // regardless of dynamic type.
-                GeometryReader { proxy in
-                    Color.clear.preference(key: FieldHeightKey.self, value: proxy.size.height)
-                }
-            )
-            .onPreferenceChange(FieldHeightKey.self) { fieldHeight = $0 }
+            // Measure the field so the dropdown sits right beneath it
+            // regardless of dynamic type.
+            //
+            // `onGeometryChange`, not a `GeometryReader` writing a preference:
+            // a preference propagates **up the whole tree** on every layout
+            // pass, where this only ever travels one hop into the `@State`
+            // beside it, and the value is wanted by this view alone. It is also
+            // the spelling every other measurement in the app already uses.
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                fieldHeight = $0
+            }
             .onChange(of: text) {
                 // Any edit re-opens a dismissed dropdown and resets the
                 // highlight to the top match.
@@ -311,14 +314,6 @@ struct ProjectMentionField: View {
     }
 }
 
-/// Measures the text field so its dropdown can be offset to just below it.
-private struct FieldHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 // MARK: - Chips
 
 /// A removable project chip: the project's colour **dot** and its name on
@@ -415,11 +410,17 @@ struct AddProjectMenu: View {
             if available.isEmpty {
                 Text("No other projects")
             } else {
+                // Through `MenuIcons`, never `Label(_, systemImage:)`, and this
+                // menu is why the rule matters most: it is on show in **view
+                // mode** on every *unassigned* card rather than only inside an
+                // open one, and it carries one item per project rather than a
+                // fixed three — so on a library with nothing assigned it is the
+                // app's largest per-update symbol cost.
                 ForEach(available) { project in
                     Button {
                         onAdd(project.id)
                     } label: {
-                        Label(project.name, systemImage: project.symbol)
+                        MenuIcons.label(project.name, project.symbol)
                     }
                 }
             }

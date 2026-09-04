@@ -32,7 +32,7 @@ enum CardTextSize {
     /// written down, so a system that ships a different body size still has
     /// "the size the cards have always been" as its starting point.
     static var system: Int {
-        Int(NSFont.preferredFont(forTextStyle: .body).pointSize.rounded())
+        Int(SystemFonts.preferred(.body).pointSize.rounded())
     }
 
     static func clamped(_ size: Int) -> Int {
@@ -43,7 +43,7 @@ enum CardTextSize {
     /// system's own size, so an install that never touches the setting resolves
     /// the very fonts it did before — the same `NSFont`, not a rounded copy.
     static func scale(_ size: Int) -> CGFloat {
-        let body = NSFont.preferredFont(forTextStyle: .body).pointSize
+        let body = SystemFonts.preferred(.body).pointSize
         guard body > 0 else { return 1 }
         return CGFloat(clamped(size)) / body
     }

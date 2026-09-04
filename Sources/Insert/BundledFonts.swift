@@ -341,7 +341,7 @@ enum Mono {
             return Card.nsFont(style, weight: weight, typeface: typeface, scale: scale)
         }
         return resolved(
-            size: NSFont.preferredFont(forTextStyle: style).pointSize * scale, weight: weight)
+            size: SystemFonts.preferred(style).pointSize * scale, weight: weight)
     }
 
     static func font(

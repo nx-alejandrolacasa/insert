@@ -92,6 +92,12 @@ struct NotesPanel: View {
             .onReceive(NotificationCenter.default.publisher(for: .newNote)) { _ in
                 createNote(proxy: proxy)
             }
+            // A card's Duplicate posts this: the copy is already made, and only
+            // the panel holds a `ScrollViewProxy` to reach it with.
+            .onReceive(NotificationCenter.default.publisher(for: .revealNote)) { note in
+                guard let id = note.object as? UUID else { return }
+                reveal(id, proxy: proxy)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // One choke point for every route into edit mode — a tap on a card, ⌘N,
@@ -182,15 +188,22 @@ struct NotesPanel: View {
             projectIDs: appState.selectedProjectID.map { [$0] } ?? []
         )
         newlyCreatedID = note.id
-        // Open the new note straight into edit mode so the type pills and the
-        // Markdown editor are ready immediately.
-        appState.selectedNoteID = note.id
+        reveal(note.id, proxy: proxy)
+    }
+
+    /// Opens a note for editing and scrolls it into view. Shared by ⌘N and by a
+    /// card's Duplicate, so a note that has just come into existence is reached
+    /// the same way however it got there.
+    private func reveal(_ id: UUID, proxy: ScrollViewProxy) {
+        // Straight into edit mode so the type dropdown and the Markdown editor
+        // are ready immediately.
+        appState.selectedNoteID = id
         // Let the list rebuild before scrolling so the target row exists.
         Task {
             try? await Task.sleep(for: .milliseconds(60))
             // Reduce Motion means jump straight there rather than scroll.
             withAnimation(motionReduced ? nil : .easeInOut(duration: 0.25)) {
-                proxy.scrollTo(note.id, anchor: .top)
+                proxy.scrollTo(id, anchor: .top)
             }
         }
     }
@@ -276,7 +289,10 @@ private struct NoteCardView: View {
     private var motionReduced: Bool { reduceMotion || settings.appReduceMotion }
 
     var body: some View {
-        tappableIsland
+        // Counted only while the layout probe is switched on; a `let Bool`
+        // check otherwise. See `LayoutProbe`.
+        LayoutProbe.body("note")
+        return tappableIsland
         // Adopt an upstream change — an external Obsidian edit, or our own save
         // bumping `updated` — without clobbering what is being typed. The rule
         // and the two defects it replaces are on `CardEditingSession`.
@@ -445,7 +461,7 @@ private struct NoteCardView: View {
                 // box so the two share a trailing axis — and a borderless `Menu`
                 // sizes itself, so it's measured rather than assumed. Same as
                 // the task row.
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { actionsSize = $0 }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { LayoutProbe.count(.geo, "noteActions"); actionsSize = $0 }
         }
         // Floored like the task card's title row, and needed for the same
         // reason since the symbols went: the 26pt symbol well used to set this
@@ -674,6 +690,7 @@ private struct NoteCardView: View {
                 .padding(.horizontal, 5)
                 .hidden()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    LayoutProbe.count(.geo, "noteBodyH")
                     measuredBodyHeight = $0
                 }
 
@@ -710,24 +727,44 @@ private struct NoteCardView: View {
     }
 
     /// The "⋯" actions menu. Offers Edit in view mode and Delete everywhere.
+    ///
+    /// **The items' icons go through `MenuIcons`, never
+    /// `Label(_, systemImage:)`, and that is a performance rule rather than a
+    /// style one.** A SwiftUI `Menu` on macOS is an `NSPopUpButton`, and AppKit
+    /// rebuilds *every* `NSMenuItem` on *every* graph update — the menu does not
+    /// have to be open. Handed a symbol *name*, that rebuild resolves the name's
+    /// accessibility description, which is an **uncached** `CFBundle`
+    /// localized-string-table load (`AXSwiftUIDescriptionForSymbolName` →
+    /// `_copyStringTable` → binary-plist filtering → ICU locale parsing), plus an
+    /// `NSImage` lookup — per item, per card, per update. Measured in a `sample`
+    /// of a 3.4s freeze on an 18-note library: **868 of 3130 samples in the
+    /// frozen transaction, ~28%**. A pre-resolved `NSImage` carries no name for
+    /// SwiftUI to describe, so the icons stay and the lookup doesn't. See
+    /// `MenuIcons`, including that this is reasoned from the trace and not yet
+    /// measured in a running app.
     private var actionsMenu: some View {
         Menu {
             if !isEditing {
-                Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
+                Button { enterEdit() } label: { MenuIcons.label("Edit", "pencil") }
             }
             // The writing, not the file: title as a heading, then the body, with
             // the frontmatter left behind (`MarkdownFiles.copyText`). No ⌘C on
             // it — a menu item's shortcut is live for as long as the item's view
             // is, so every card on screen would claim ⌘C at once and take it off
             // the text selection in whichever card is open.
-            let copyText = MarkdownFiles.copyText(session.draft)
-            // Resolved here rather than in the action, so the reading settings
-            // are read inside the view update like every other consumer's.
-            let metrics = metrics
+            // Only what the *item* needs is built here — whether there is
+            // anything to copy. The text itself and the reading settings are
+            // resolved in the action: a menu's content builder runs on every
+            // graph update, not on every open, so anything expensive in it is
+            // paid per card per update forever. `metrics` reads `@Observable`
+            // state either way, so the card still re-renders when it changes.
+            let hasCopy = !MarkdownFiles.copyText(session.draft).isEmpty
             Button {
                 // Two flavours: the Markdown as plain text, and the same writing
                 // rendered as rich text (`MarkdownRichText`, what the preview
                 // draws) for whatever pastes formatting.
+                let copyText = MarkdownFiles.copyText(session.draft)
+                let metrics = metrics
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(copyText, forType: .string)
@@ -746,9 +783,22 @@ private struct NoteCardView: View {
                 if let rtf = export.rtf { pasteboard.setData(rtf, forType: .rtf) }
                 if let html = export.html { pasteboard.setData(html, forType: .html) }
             } label: {
-                Label("Copy", systemImage: "doc.on.doc")
+                MenuIcons.label("Copy", "doc.on.doc")
             }
-            .disabled(copyText.isEmpty)
+            .disabled(!hasCopy)
+            // A second note with the same writing, opened for editing and
+            // scrolled to — `.revealNote`, because only `NotesPanel` holds a
+            // `ScrollViewProxy`. The open card is persisted first so the copy
+            // carries what is on screen rather than what was last saved: the
+            // save debounce is ~0.4s, and duplicating mid-sentence must not lose
+            // the sentence.
+            Button {
+                if isEditing { session.persistNow(persistence) }
+                guard let copy = library.duplicateNote(id: session.draft.id) else { return }
+                NotificationCenter.default.post(name: .revealNote, object: copy.id)
+            } label: {
+                MenuIcons.label("Duplicate", "plus.square.on.square")
+            }
             Button(role: .destructive) {
                 if isEditing { session.persistNow(persistence) }
                 session.deleting = true
@@ -759,7 +809,7 @@ private struct NoteCardView: View {
                     }
                 }
             } label: {
-                Label("Delete", systemImage: "trash")
+                MenuIcons.label("Delete", "trash")
             }
         } label: {
             Image(systemName: "ellipsis")

@@ -106,6 +106,10 @@ Sources/Insert/
                               predicate, replacing four spellings of it
   MemoCache.swift             locked memo for immutable derived values (resolved
                               fonts, parsed Markdown, relative-day labels)
+  MenuIcons.swift             a menu item's icon as a pre-resolved NSImage, so no
+                              symbol *name* reaches SwiftUI per update
+  LayoutProbe.swift           off-by-default main-thread stall detector: is a
+                              freeze one big pass, or an invalidation loop?
   DateSections.swift          overdue/today/upNext buckets for the menu bar
   TaskReminder.swift          the once-a-day "N tasks for today" notification
   DayClock.swift              today, as observable state, so date labels age
@@ -370,6 +374,106 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   constants so the two renderers can't drift, but neither structural rewrite was
   folded into a defect-fix pass.
 
+- **A `Menu`'s items are rebuilt on every graph update, so an icon on one is an
+  `NSImage`, never a symbol name.** A freeze was reported and sampled (`sample Insert 5`): the main
+  thread was busy for the whole 3.4s window inside **one** SwiftUI transaction,
+  every other thread idle — and the library behind it was **18 notes and 16
+  tasks**, so this was never about volume. The largest identified block, **868
+  of the transaction's 3130 samples (~28%)**, was
+  `AppKitPopUpAdaptor.PlatformView.updateNSView` in two branches, one per card
+  kind. A SwiftUI `Menu` on macOS is an `NSPopUpButton`, and AppKit rebuilds
+  **every `NSMenuItem` on every update whether or not the menu is open** — so
+  the ⋯ menu on every card in both columns was rebuilding its items constantly.
+  What made that expensive was `Label(_, systemImage:)` specifically: handed a
+  symbol **name**, each item's rebuild resolved that name's *accessibility
+  description*, which is an **uncached `CFBundle` localized-string-table load**
+  (`AXSwiftUIDescriptionForSymbolName` → `_copyStringTable` → binary-plist
+  filtering → ICU locale subtag parsing; 624 samples), plus an `NSImage` lookup
+  per item (108).
+  **The icons were removed first and then put back**, and the round trip is the
+  useful part. Removing them fixed the cost and was accepted on sight, then
+  queried the moment it was seen in the window — the ⋯ menu without its glyphs
+  reads as broken, not as quiet. What the trace actually indicts is the *name*:
+  the expensive lookup is keyed on it, so an `NSImage` resolved once and passed
+  as `Image(nsImage:)` has nothing for SwiftUI to describe. `MenuIcons` is that
+  one place — a `MemoCache` of template images and a `label(_:_:)` helper — and
+  the rule it leaves is **an icon on a menu item is an `NSImage`, never a symbol
+  name**, with a `Text`-only fallback when the system hasn't got the symbol.
+  `AddProjectMenu` goes through it too, and needs it most: it is on show in
+  **view mode** on every *unassigned* card rather than only inside an open one,
+  and carries one item per project rather than a fixed three. **Not yet measured
+  in a running app** — that the `NSImage` route skips the lookup follows from
+  the trace and no more; `LayoutProbe` is what would settle it, and a bare
+  `Text` item is the fallback if it doesn't.
+  Two smaller things came out of the same trace. `centredOnTextCap`'s closure
+  called `NSFont.preferredFont(forTextStyle:)` **inside the alignment guide**,
+  which runs per alignment query per control per card, and it is not the cheap
+  lookup it reads as — 127 samples (~4%) bottoming out in
+  `typefaceInfoForKnownFontDescriptor:` → `NSConcreteMapTable objectForKey:` →
+  `TDescriptor::Hash`/`CreateMatchingDescriptor`. The cap height is a constant
+  of the style, so `TextCapHeights` memoises it. And `ProjectMentionField`
+  measured its own height through a `GeometryReader` writing a `PreferenceKey`,
+  where a preference propagates **up the whole tree** on every layout pass for a
+  value one view wants — it is `onGeometryChange` now, the spelling every other
+  measurement in the app already uses.
+  **Fable 5.1 was asked for a second opinion on the trace, and found three
+  things this pass had got wrong.** Recorded because each is a *class* of
+  mistake, not a one-off. (i) The symbol rule was applied to the ⋯ menus and
+  **not** to `AddProjectMenu`, on the stated reasoning that it "only exists
+  inside an open card" — which is **false**: it is on show in view mode on every
+  *unassigned* card (`NotesPanel`, `TasksPanel`), and it carries one item per
+  project rather than a fixed three, so it was the larger of the two costs. Half
+  the fix had been left behind. (ii) The `preferredFont` finding was fixed at the
+  **coldest** of its call sites. The alignment guide was 127 samples; the same
+  uncached call opens `Card.nsFont(_:weight:typeface:scale:)` *before* its memo
+  and sits inside `CardTextSize.scale`, both reached many times per card per
+  render. `SystemFonts.preferred(_:)` now memoises it everywhere — safe forever,
+  because macOS has no Dynamic Type. (iii) The claim that swapping `LazyVStack`
+  for `VStack` would save ~27% was **arithmetic on inclusive sample counts**:
+  placing a lazy item means laying the card out, and the card is where the time
+  goes, so those samples move to `VStackLayout.placeSubviews` rather than
+  disappearing. The lazy container's own overhead is the much smaller exclusive
+  share. The swap is also not free — a `VStack` builds all 34 cards instead of
+  the visible ~10, and `.onDisappear { settle() }`, which is how a scrolled-out
+  card flushes a pending save, would never fire. **It is not the fix, and the
+  reason is measurement, not taste.**
+  (i) was fixed twice over: `AddProjectMenu` now routes through `MenuIcons` like
+  everything else, so it keeps its project symbols *and* the cost.
+  Two more of its findings were taken and are worth keeping as rules: a `Menu`'s
+  **content builder runs per update**, so anything expensive in one is paid per
+  card forever — the note card's Copy item built its whole `copyText` there and
+  now builds it in the action; and `explicitAlignment` is charged for *every*
+  child of a baseline-aligned stack, not just the one carrying a custom guide,
+  so the lever on that ~800 is fewer baseline-aligned containers rather than a
+  faster guide.
+
+  **What is *not* settled, and don't write it down as if it were:** the
+  remaining ~60% of that transaction is lazy-stack re-layout
+  (`GeometryReaderLayout.placeSubviews` 512, `LazySubviewPlacements` 315,
+  `ScrollViewUtilities.contentFrame` 307, `LazyLayoutViewCache.updateItemPhases`
+  211, the last of which writes attribute values *during* the update and
+  re-dirties the graph). A 3.4s snapshot cannot say whether that is one enormous
+  pass or a **runaway invalidation loop**, and the stack looks identical either
+  way. `LayoutProbe` exists to answer exactly that and nothing else: it times
+  each main run-loop turn, counts the work done within it, and appends a line to
+  `/tmp/insert-layout.log` for any turn over 250ms. **Counting card bodies alone
+  cannot answer it, which is what the first cut did** — Fable 5.1 named the
+  hole: a loop through `CollapsibleMarkdown`'s four measured `@State`s
+  re-evaluates *its* body and not the card's, and a purely geometric re-run
+  evaluates **no** body at all. So the counters straddle the three layers a
+  repeat can hide in — view bodies, the `onGeometryChange` writes that are the
+  candidate feedback edges, and `MarkdownPreview`'s text measurement. Against N
+  cards on screen: at or near N is one pass, a small multiple is the 2–3 passes
+  first layout normally takes, unbounded is the loop. A **watchdog** on a
+  background queue reports a turn that is still running after 2s, because the
+  line is otherwise written when a turn *ends* and a freeze that gets
+  force-quit would leave nothing at all; every line carries process uptime,
+  since 34 records cannot explain a 1.1GB footprint and a per-transaction cost
+  that grows with uptime would be a different bug wearing this one's clothes. It is **off unless switched on** — `defaults write
+  com.alejandrolacasa.insert layoutProbe -bool YES`, or the `.dev` bundle id, or
+  `INSERT_LAYOUT_PROBE=1` — and switchable in the *release* build on purpose,
+  because that is the build the freeze happened in and a dev-only probe would
+  have missed it.
 - **The August 2026 theme system** is the current word on the app's colour, and
   it *reverses* three parts of the July refresh below. Read this bullet before
   that one. Two things had gone wrong with the refresh: the highlighter stroke
@@ -954,6 +1058,25 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   anything drawing a symbol in a well must size the glyph to the widest symbol
   it can be asked to hold, the reason `chipHeight` is pinned to its tallest
   case.
+  **Duplicate makes a second note, and the field that matters is the one it
+  doesn't copy.** `Library.duplicateNote(id:)` takes the title, body, type,
+  symbol and every project assignment, and gives the copy a fresh `id`,
+  `created`/`updated` and — the load-bearing one — **no `fileURL`**: carrying
+  the source's would make `persistNote` *rename* the original instead of
+  writing a new file, so a duplicate would eat its own source. Pinned by
+  `StorageLayoutTests` on both files existing, not just the new one. The title
+  gains `" copy"` and an **untitled note stays untitled**, the same line
+  `copyText` draws — "Untitled" is a label for a card with no name, not a name
+  to write on someone's behalf. The open card is persisted first, because the
+  save debounce is ~0.4s and duplicating mid-sentence must not lose the
+  sentence. Because the copy keeps the original's type and projects and its
+  title still contains the original's, it survives whatever filter or search was
+  letting the source through — so unlike a new note it needs nothing cleared.
+  It is reached through `.revealNote`, which carries the id: the card has no
+  `ScrollViewProxy` and `NotesPanel` does, and `reveal(_:proxy:)` is the same
+  open-and-scroll ⌘N uses. **Tasks have no Duplicate** — their ⋯ menu is
+  deliberately the narrower one, Edit and Delete, and has no Copy either.
+
   **The ⋯ menu copies the writing, not the file.** "Copy" puts
   `MarkdownFiles.copyText(_:)` on the pasteboard — the title as an `#` heading, a
   blank line, then the body — deliberately *not* `encode(_:)`, whose frontmatter

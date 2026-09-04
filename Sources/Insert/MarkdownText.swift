@@ -210,7 +210,7 @@ struct MarkdownText: View {
     /// size (`MarkdownHighlight.font(for:)`), since it sits on a line of prose.
     nonisolated static func codeFont(scale: CGFloat) -> NSFont {
         .monospacedSystemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize * scale,
+            ofSize: SystemFonts.preferred(.callout).pointSize * scale,
             weight: .regular
         )
     }
@@ -904,6 +904,13 @@ struct CollapsibleMarkdown: View {
     }
 
     var body: some View {
+        // A loop through this view's four measured `@State`s re-evaluates *this*
+        // body and not the card's, so the card counter alone would miss it.
+        LayoutProbe.body("collapsible")
+        return body_
+    }
+
+    private var body_: some View {
         // Baseline, not `.top`: the chevron is a caption glyph in a measured
         // box, and top-aligning the boxes sat it below the line of text it
         // belongs to — `centredOnTextCap()` puts its centre on the first line's
@@ -963,6 +970,7 @@ struct CollapsibleMarkdown: View {
             .padding(.horizontal, 5)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                LayoutProbe.count(.geo, "clampHeight")
                 fullHeight = $0
             }
             .frame(
@@ -993,13 +1001,13 @@ struct CollapsibleMarkdown: View {
             .tint(MarkdownText.linkColour)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserWidth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { LayoutProbe.count(.geo, "teaserW"); teaserWidth = $0 }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { teaserBoxWidth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { LayoutProbe.count(.geo, "teaserBoxW"); teaserBoxWidth = $0 }
             .clipped()
             .mask(teaserFade)
             .padding(.horizontal, 5)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { teaserHeight = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { LayoutProbe.count(.geo, "teaserH"); teaserHeight = $0 }
             .background(alignment: .topLeading) {
                 // What expanding would actually show, laid out unbounded and
                 // hidden — the clamp measures its own render, but the teaser is
@@ -1008,6 +1016,7 @@ struct CollapsibleMarkdown: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        LayoutProbe.count(.geo, "teaserFull")
                         fullHeight = $0
                     }
             }

@@ -152,6 +152,41 @@ final class StorageLayoutTests: XCTestCase {
         check("old file gone", fm.fileExists(atPath: oldURL.path), false)
         check("still no file lost", mdCount(notes), 400)
 
+        print("\n— duplicating a note writes a second file and keeps the first —")
+        // The failure this guards is a *move*: a copy carrying the source's
+        // `fileURL` would have `persistNote` rename the original rather than
+        // write a new file, and the user would watch a duplicate eat its own
+        // source. So the check is on both files existing, not just the new one.
+        var source = library.notes[2]
+        source.title = "Duplicate me"
+        source.body = "the writing that has to come across"
+        library.updateNote(source)
+        library.flushDiskWrites()
+        source = library.notes.first { $0.id == source.id }!
+        let copy = library.duplicateNote(id: source.id)
+        library.flushDiskWrites()
+        check("a copy came back", copy != nil, true)
+        check("with a new id", copy?.id != source.id, true)
+        check("source file still there", fm.fileExists(atPath: source.fileURL!.path), true)
+        check("copy has its own file", copy?.fileURL != nil && copy!.fileURL != source.fileURL, true)
+        check("copy is on disk", fm.fileExists(atPath: copy!.fileURL!.path), true)
+        check("one more note on disk", mdCount(notes), 401)
+        check("title suffixed", copy?.title, "Duplicate me copy")
+        check("body carried across", copy?.body, source.body)
+        check("type carried across", copy?.typeID, source.typeID)
+        check("projects carried across", copy?.projectIDs, source.projectIDs)
+        check("in the index", library.notes.contains { $0.id == copy!.id }, true)
+
+        print("\n— an untitled note stays untitled when duplicated —")
+        // "Untitled" is a label for a card with no name, not a name — so there
+        // is no "Untitled copy" to write on the user's behalf.
+        let untitled = library.addNote()
+        let untitledCopy = library.duplicateNote(id: untitled.id)
+        library.flushDiskWrites()
+        check("no name invented", untitledCopy?.title, "")
+        check("duplicating a note that is gone is nil",
+              library.duplicateNote(id: UUID()) == nil, true)
+
         print("\n— toggling done moves the file —")
         let pending = library.tasks.first { !$0.done }!
         library.toggleTask(id: pending.id)
@@ -250,7 +285,12 @@ final class StorageLayoutTests: XCTestCase {
             }
             .filter { $0.projectIDs.contains(projectB) }
         check("nor does any file", onDiskStillAssigned.count, 0)
-        check("the notes themselves are kept", library.notes.count, 400)
+        // 400 from the fixture plus the three the duplication steps above added
+        // (a copy, an untitled note and its copy) — this is one sequence over one
+        // fixture, so a step that creates notes moves every count after it. What
+        // the check is really asserting is that deleting a *project* deletes no
+        // notes.
+        check("the notes themselves are kept", library.notes.count, 403)
 
         print("\n\(failures.isEmpty ? "ALL PASS" : "FAILURES: \(failures)")")
         XCTAssertEqual(failures, [])

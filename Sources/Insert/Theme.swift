@@ -464,7 +464,7 @@ enum Card {
         typeface: Typeface,
         scale: CGFloat = 1
     ) -> NSFont {
-        let base = NSFont.preferredFont(forTextStyle: style)
+        let base = SystemFonts.preferred(style)
         return nsFont(size: base.pointSize * scale, weight: weight, typeface: typeface, base: base)
     }
 
@@ -713,8 +713,41 @@ extension View {
     /// from that font.
     func centredOnTextCap(_ style: NSFont.TextStyle = .body) -> some View {
         alignmentGuide(.firstTextBaseline) { d in
-            d.height / 2 + NSFont.preferredFont(forTextStyle: style).capHeight / 2
+            d.height / 2 + SystemFonts.capHeight(style) / 2
         }
+    }
+}
+
+/// `NSFont.preferredFont(forTextStyle:)`, derived once per style.
+///
+/// **It is not the cheap lookup it reads as.** A `sample` of a 3.4s freeze
+/// bottomed out in `+[NSFont fontWithDescriptor:size:]` →
+/// `+[__NSFontTypefaceInfo typefaceInfoForKnownFontDescriptor:]` →
+/// `NSConcreteMapTable objectForKey:` → `TDescriptor::Hash` →
+/// `CreateMatchingDescriptor` — a CoreText descriptor match, per call.
+///
+/// Every call site is on the render path and several are per *card* per render:
+/// `Card.nsFont(_:weight:typeface:scale:)` opens with one, `CardTextSize.scale`
+/// makes another, and `centredOnTextCap`'s alignment guide made a third **per
+/// alignment query**. The first cut of this fix memoised only the guide, which
+/// was the coldest of the three (127 samples, ~4%) — Fable 5.1, asked for a
+/// second opinion on the trace, pointed out the hot ones were left uncached.
+///
+/// Safe to hold forever: macOS has no Dynamic Type, so a text style's preferred
+/// font is a process constant. That is exactly the assumption to revisit if
+/// that ever changes.
+enum SystemFonts {
+    private static let fonts = MemoCache<String, NSFont>(limit: 32)
+
+    static func preferred(_ style: NSFont.TextStyle) -> NSFont {
+        fonts.value(for: style.rawValue) { NSFont.preferredFont(forTextStyle: style) }
+    }
+
+    /// The cap height a control is centred on. Deliberately **not** scaled by
+    /// `CardTextSize`: this centres a control on the *chrome* line beside it,
+    /// which `Card.chrome(_:)` keeps unscaled for its own reason.
+    static func capHeight(_ style: NSFont.TextStyle) -> CGFloat {
+        preferred(style).capHeight
     }
 }
 

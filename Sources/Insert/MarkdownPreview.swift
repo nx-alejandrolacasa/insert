@@ -118,6 +118,9 @@ struct MarkdownPreview: NSViewRepresentable {
     /// never depended on, and which a test can't build.
     @MainActor
     static func size(for proposal: ProposedViewSize, of nsView: MarkdownPreviewView) -> CGSize? {
+        // A purely geometric re-run evaluates no view body at all, so this is
+        // the only counter that sees one. See `LayoutProbe`.
+        LayoutProbe.count(.measure, "preview")
         guard let key = nsView.key else { return nil }
         // A finite width is a real wrap — and **zero** is how the minimum width
         // is asked for, so the *width* answered there stays zero rather than

@@ -375,7 +375,10 @@ private struct TaskCardView: View {
     }
 
     var body: some View {
-        tappableCard
+        // Counted only while the layout probe is switched on; a `let Bool`
+        // check otherwise. See `LayoutProbe`.
+        LayoutProbe.body("task")
+        return tappableCard
         // Adopt an upstream change — a tick from the menu bar, an external
         // Obsidian edit, or our own save bumping `updated` — without clobbering
         // what is being typed. Field-wise, and skipped outright while editing:
@@ -511,7 +514,7 @@ private struct TaskCardView: View {
                 // The chevron below wears this control's box, and a borderless
                 // `Menu` sizes itself — so it's measured rather than assumed (see
                 // `bodySection`).
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { actionsSize = $0 }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { LayoutProbe.count(.geo, "taskActions"); actionsSize = $0 }
         }
         // Floored so the row is the same height whether or not Done is in it —
         // otherwise the title and the body both drop as a card opens. See
@@ -881,6 +884,7 @@ private struct TaskCardView: View {
             .fixedSize(horizontal: false, vertical: true)
             .hidden()
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                LayoutProbe.count(.geo, "taskBodyH")
                 measuredBodyHeight = $0
             }
     }
@@ -893,10 +897,15 @@ private struct TaskCardView: View {
 
     // MARK: Trailing controls
 
+    /// Icons through `MenuIcons`, never `Label(_, systemImage:)` — see the note
+    /// card's `actionsMenu` for the measurement. A `Menu`'s items are rebuilt on
+    /// every graph update whether or not it is open, and a symbol *name* on one
+    /// costs an uncached localized-string lookup each time; the menus together
+    /// were ~28% of a 3.4s freeze.
     private var actionsMenu: some View {
         Menu {
             if !isEditing {
-                Button { enterEdit() } label: { Label("Edit", systemImage: "pencil") }
+                Button { enterEdit() } label: { MenuIcons.label("Edit", "pencil") }
             }
             Button(role: .destructive) {
                 if isEditing { session.persistNow(persistence) }
@@ -908,7 +917,7 @@ private struct TaskCardView: View {
                     }
                 }
             } label: {
-                Label("Delete", systemImage: "trash")
+                MenuIcons.label("Delete", "trash")
             }
         } label: {
             Image(systemName: "ellipsis")

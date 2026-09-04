@@ -96,5 +96,9 @@ extension Notification.Name {
     static let newNote = Notification.Name("insert.newNote")
     static let newTask = Notification.Name("insert.newTask")
     static let newProject = Notification.Name("insert.newProject")
+    /// Carries a note's `UUID` as its `object`: "this note exists now — scroll
+    /// to it and open it". Posted by a card's Duplicate, which has no
+    /// `ScrollViewProxy` of its own; only `NotesPanel` does.
+    static let revealNote = Notification.Name("insert.revealNote")
     static let toggleSidebar = Notification.Name("insert.toggleSidebar")
 }

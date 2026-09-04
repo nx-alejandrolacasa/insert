@@ -62,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in ThemedAppIcon.apply(SettingsStore.shared.theme) }
         }
         MarkdownReturn.install()
+        // A no-op unless the `layoutProbe` default is set — see `LayoutProbe`.
+        LayoutProbe.start()
         TaskReminder.shared.start()
         DayClock.shared.start()
         Self.runHousekeeping()

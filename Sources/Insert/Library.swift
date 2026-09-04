@@ -775,6 +775,41 @@ final class Library {
         return note
     }
 
+    /// Copies a note into a new one and returns it, or `nil` if the id is gone.
+    ///
+    /// A fresh `id`, a fresh `created`/`updated` and **no `fileURL`**, so
+    /// `persistNote` writes a new file rather than renaming the original's — the
+    /// one field that would make this a move instead of a copy. Everything the
+    /// user wrote comes across: title, body, type, symbol and every project
+    /// assignment.
+    ///
+    /// The title gains a `" copy"` suffix, the platform's own spelling, and an
+    /// **untitled note stays untitled** — `displayTitle`'s "Untitled" is a label
+    /// for a card with no name, not a name, so "Untitled copy" would be writing
+    /// one on the user's behalf. The same line `MarkdownFiles.copyText` draws.
+    /// Nothing collides either way: a filename is `<slug>-<id>.md` and the ids
+    /// differ.
+    ///
+    /// Because the copy keeps the original's type and projects, and its title
+    /// still contains the original's, it survives whatever type filter, project
+    /// selection or search was letting the original through — so unlike
+    /// `addNote` this needs nothing cleared to stay visible.
+    @discardableResult
+    func duplicateNote(id: UUID) -> Note? {
+        guard let source = notes.first(where: { $0.id == id }) else { return nil }
+        let trimmed = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var copy = Note(
+            title: trimmed.isEmpty ? source.title : "\(source.title) copy",
+            symbol: source.symbol,
+            typeID: source.typeID,
+            projectIDs: source.projectIDs,
+            body: source.body
+        )
+        persistNote(&copy)
+        notes.append(copy)
+        return copy
+    }
+
     func updateNote(_ note: Note) {
         guard let idx = notes.firstIndex(where: { $0.id == note.id }) else { return }
         var updated = note
