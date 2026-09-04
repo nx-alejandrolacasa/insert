@@ -401,7 +401,18 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   name**, with a `Text`-only fallback when the system hasn't got the symbol.
   `AddProjectMenu` goes through it too, and needs it most: it is on show in
   **view mode** on every *unassigned* card rather than only inside an open one,
-  and carries one item per project rather than a fixed three. **Not yet measured
+  and carries one item per project rather than a fixed three.
+  **A menu with icons also has to set its `tint`, and that is the half putting
+  them back exposed.** A template `NSImage` on a menu item resolves against the
+  environment's tint, as does a `.borderlessButton` menu's own label — and the
+  app-wide tint is `theme.primary`, which several themes make deliberately
+  *pale*: Nuevo Tokyo's is `#B4CECE`, so the ⋯ and every icon under it came out
+  a mint wash on white paper. The `foregroundStyle` already on the ⋯ glyph did
+  not save it, which is the finding: the tint wins. All three icon-bearing menus
+  carry `.tint(theme.metaText)`, which is the value the ⋯ was specified in all
+  along (timestamps, chip names, the resting due badge and the ⋯ menu), solved
+  to 4.5:1 on every theme's card and so past the 4:1 an interactive glyph
+  answers to. **Not yet measured
   in a running app** — that the `NSImage` route skips the lookup follows from
   the trace and no more; `LayoutProbe` is what would settle it, and a bare
   `Text` item is the fallback if it doesn't.

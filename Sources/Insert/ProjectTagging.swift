@@ -403,6 +403,7 @@ struct AddProjectMenu: View {
     let onAdd: (UUID) -> Void
 
     @Environment(Library.self) private var library
+    @Environment(SettingsStore.self) private var settings
 
     var body: some View {
         let available = library.projects.filter { !assigned.contains($0.id) }
@@ -459,6 +460,10 @@ struct AddProjectMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+        // The project symbols on the items are template images, so they take the
+        // environment's tint — app-wide `theme.primary`, which several themes
+        // make deliberately pale. See the note card's `actionsMenu`.
+        .tint(settings.theme.metaText)
         .help("Add to a project")
         .accessibilityLabel("Add to a project")
     }

@@ -826,6 +826,16 @@ private struct NoteCardView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // **The tint, not just the label's `foregroundStyle`.** A template
+        // `NSImage` on a menu item and a `.borderlessButton` menu's own label
+        // both resolve against the environment's tint, which is app-wide
+        // `theme.primary` — and an accent is free to be *pale*: Nuevo Tokyo's is
+        // `#B4CECE`, so the ⋯ and every icon under it came out a mint wash on
+        // white. `metaText` is the value this control was always specified in
+        // (CLAUDE.md: timestamps, chip names, the resting due badge and the ⋯
+        // menu), solved to 4.5:1 on every theme's card — comfortably past the
+        // 4:1 an interactive glyph answers to.
+        .tint(settings.theme.metaText)
         .help("Note actions")
         .accessibilityLabel("Note actions")
     }
