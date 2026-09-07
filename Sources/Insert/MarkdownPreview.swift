@@ -15,7 +15,7 @@ import SwiftUI
 ///
 /// What the card around it relies on: the view answers `sizeThatFits` with its
 /// laid-out height at the proposed width, so `CollapsibleMarkdown`'s clamp,
-/// fade and chevron measurement work unchanged; a **click that isn't a drag**
+/// fade and fold measurement work unchanged; a **click that isn't a drag**
 /// is reported through `onTap` (the text view consumes the mouse, so the card's
 /// own tap gesture never sees it), except on a link, whose destination the view
 /// checks and opens itself, and on a checkbox, which flips its line; and the

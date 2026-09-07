@@ -253,7 +253,7 @@ enum DoneTaskRetention: String, CaseIterable, Identifiable {
     }
 }
 
-/// How much of a card's body shows before it is folded behind a chevron — a
+/// How much of a card's body shows before it is folded behind a fold label — a
 /// preview of so many *rendered* lines, or everything, with no collapsing at
 /// all. Notes and tasks each pick their own (Settings → Notes / Tasks); the
 /// folding itself lives in `CollapsibleMarkdown`.

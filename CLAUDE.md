@@ -690,7 +690,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
      unchanged and is exactly what `AppTheme.primary` is; adding a sixth theme
      is the decision this used to be about.)*
   5. **The contrast floor is three rules, not one.** Text under 14px ≥4.5:1;
-     interactive glyphs (the ⋯ menu, the chevrons) ≥4:1; and both verified
+     interactive glyphs (the ⋯ menu) ≥4:1; and both verified
      against the surface actually painted behind them — a tint or a card face,
      **not** a nominal white. That third rule is the one that gets forgotten,
      and it's why `Semantic.overdue` and `Stone.metaText` are each solved
@@ -1102,8 +1102,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   open. Pinned by `StorageLayoutTests`.
   **A body can read collapsed — "Preview lines", notes and tasks each their own**
   (Settings → Notes / Tasks): show everything, or a preview of 1 / 3 / 5 / 10
-  rendered lines with a chevron beside the body's *first* line to reveal the
-  rest. Notes default to everything, so an untouched install keeps showing whole
+  rendered lines with a **fold label** — the word `MORE`, or `LESS` once
+  expanded, beside the ⋯ in the card's corner — to reveal the rest. Notes default to everything, so an untouched install keeps showing whole
   notes (an install that had the earlier "Collapse long notes" toggle on is
   seeded to 10 — that toggle was ten lines or nothing); tasks default to 1 line,
   the teaser those rows have always shown. View mode only — the editor always
@@ -1112,13 +1112,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   so folding it back to a preview the moment editing ends takes away the text
   someone was just reading, on the same frame the card is already resizing — it
   reads as the note shrinking away from them. Expanding is a state the reader can
-  undo with the chevron; collapsing is one they have to. It rides the existing
+  undo with the fold label; collapsing is one they have to. It rides the existing
   `onChange(of: isEditing)`, so every route out of edit mode is covered, and the
   two value-scoped animations mean the card resizes once rather than twice. One
   consequence in `CollapsibleMarkdown`: a card that has only ever been expanded
   has never laid its one-line teaser out, so `collapsible` falls back to one line
   of the card face rather than comparing against an unmeasured zero, which would
-  call every body collapsible and hang a chevron on a note with nothing to fold.
+  call every body collapsible and hang a `more` on a note with nothing to fold.
   Tasks are deliberately unchanged — their preview is one line by default, and
   leaving every edited row expanded would rewrite the column's rhythm.
   All of it is **one shared view**, `CollapsibleMarkdown`
@@ -1130,11 +1130,11 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   cross-fade). **Several lines** clamp the full render to that many line heights
   *of the card face* — not a count of source lines; the body is a stack of
   blocks no `lineLimit` fits, and a serif or monospaced card should fold at its
-  own rhythm — fading to nothing over the last of them. Whether the chevron
+  own rhythm — fading to nothing over the last of them. Whether the label
   appears is measured off the **render** (the parser joins hard-wrapped lines,
   so a long source can render short), with **half a line of tolerance** on the
   clamp: a body of exactly the preview height drifts a fraction of a point per
-  line against `n ×` an unrounded line height, and must not earn a chevron that
+  line against `n ×` an unrounded line height, and must not earn a label that
   reveals nothing. Two of the cards' own lessons are load-bearing in there. The
   clamped body is **one view** collapsed and expanded — `fixedSize` vertically
   so the clamp can't squeeze its blocks into ellipses, with only the
@@ -1142,11 +1142,34 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   identities and would kill the height animation, which each card value-scopes
   to `expanded` beside the one scoped to `isEditing`; the masks are applied in
   *both* states (expanded they are opaque everywhere, a no-op) for the same
-  one-identity reason. And the chevron rides the body's **first** line wearing
-  the ⋯ menu's measured box: a control under the fold travels with the card's
-  height — collapsing an expanded note had it floating down through the
-  contraction with its `.replace` turn still playing — where on the first line
-  it holds still, flush on the ⋯'s own trailing axis.
+  one-identity reason. **The fold control is a word, and it sits beside the
+  ⋯** (September 2026, `FoldLabel`) — in the title row, the word then the menu,
+  so the card's corner is its one control strip. It is `MORE` / `LESS` in
+  `TypeCapsLabel`'s own construction (`Mono`, 10.5pt semibold, tracked,
+  `theme.metaText`) so the card keeps one small-caps voice, and the two words
+  are the **same width** in the mono face, so the row never shifts on the flip.
+  It is the third placement, and each was judged on screen. The first was a
+  chevron on the body's first line, in the ⋯ menu's measured box, reported as
+  "uninspired and out of place": two grey glyphs stacked in the corner, the
+  second reading as a control of the menu's kind when its job is the opposite —
+  the ⋯ hides actions meant to be reached for deliberately, the fold is
+  something a reader does constantly. The second put the word **at the fold**,
+  where the fade says "there is more" — the end of the teaser line, the
+  bottom-trailing corner of a clamped body, a line under an expanded one — and
+  the maintainer pointed at the corner instead: on a real card the word sat
+  over faded text and directly above the timestamp, a second row of metadata
+  under a card that already has one, and `LESS` spent a line on every expanded
+  card. Beside the ⋯ a word and a glyph read as two different kinds of control,
+  which is what the stacked chevron never managed, and the body carries nothing
+  for it. That last part is the structural gain: `CollapsibleMarkdown` only
+  *reports* whether the body folds (`foldable`, a binding the card owns, reset
+  when the body leaves the tree so an emptied note doesn't keep a stale `MORE`)
+  and draws no control, so there is no slot in the teaser line and no padding
+  under the render — the teaser's held-open slot from the freeze pass and the
+  bottom padding of the second placement are both gone rather than solved. The
+  label shows only when the body really folds and only in view mode. The
+  `chevronBox` plumbing (both cards measuring their ⋯ menu into `actionsSize`)
+  went with the chevron.
 - **Tasks** — a new task inherits the selected project, or stays unassigned. A
   task can be assigned to several projects. Typing `@` opens a project
   autocomplete; Tab picks the first match; the `@word` is *not* kept in the
@@ -1163,12 +1186,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   double-click is deliberately hard to trigger, so it can't be the only route).
   **A task's notes are Markdown, exactly as a note's body is** — including the
   collapsed one-line teaser, which used to print the *source*. So `**Ship it**` read
-  as asterisks, and since the expand chevron only appears when there is more than
+  as asterisks, and since the fold label only appears when there is more than
   one line to reveal, a short body had no route to ever being seen rendered.
   `MarkdownParser.lead(_:)` takes the first line and drops its *block* marker (a
   heading reads as its words, a bullet as its item) while leaving the inline markers
   for `MarkdownText.inline(_:in:)` to draw — the same two steps the expanded view
-  takes per block. The chevron is now measured off the **render** rather than the
+  takes per block. The label is now measured off the **render** rather than the
   source, because that is what it promises: the parser joins hard-wrapped lines into
   one paragraph, so a two-line source can render as one line and used to earn a
   chevron that revealed nothing. Pinned by `MarkdownParserTests`.
@@ -1734,10 +1757,10 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   twice. And both branches of the expanded/collapsed conditional take
   `.transition(.identity)`, because they are the same first line with and without the
   rest of the body under it — a cross-fade showed those words twice at half opacity
-  while the row was still resizing. The chevron itself turns over with
-  `.contentTransition(.symbolEffect(.replace))`: one symbol in two directions is what
-  `.replace` is for, and with Reduce Motion the whole thing drops to no animation, so
-  the glyph cuts rather than turning.
+  while the row was still resizing. (The control was a chevron turning over with
+  `.contentTransition(.symbolEffect(.replace))` until September 2026; it is the
+  `MORE` / `LESS` word now — see the notes bullet — and a word has nothing to
+  turn.)
 - **Focus on entry is deferred by a turn, and has to be.** The click that opens a
   card is also the update that creates the editor, so `focusForEntry()` writing
   `@FocusState` straight from `onChange(of: isEditing)` named a field SwiftUI had
@@ -2176,13 +2199,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the first thing to look at if the hand still doesn't show.
   `sizeThatFits`
   answers the laid-out height at the proposed width from TextKit 2's usage
-  bounds, which is what lets the clamp, the fade and the chevron measurement
+  bounds, which is what lets the clamp, the fade and the fold measurement
   work unchanged; `lineFragmentPadding` is 0 and the caller's 5pt padding is
   the editor's inset. Two things about that measurement are load-bearing, and
   the first shipped broken. **The render has to be told to fill its row** —
   `MarkdownText`'s own body carried a `frame(maxWidth: .infinity)` and swapping
   in a representable lost it, so the body wrapped at its natural width, about
-  half the card, and the chevron (which the `HStack` puts *after* the content)
+  half the card, and the then-chevron (which the `HStack` puts *after* the content)
   came with it instead of sitting on the trailing edge: one missing modifier,
   two symptoms. And the measuring happens on an **offscreen** text view, not the
   one on screen, because SwiftUI asks at several widths per pass and each ask
@@ -2221,16 +2244,15 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   declares where its own centre sits relative to that baseline, off the font's cap
   height. The guide reads the *measured* height, so a control that brings its own
   chrome (a borderless `Menu`) needs no allowance made for it.
-  The task row's **expand chevron wears the ⋯ menu's box**, measured off it rather
-  than written down (`actionsSize`), and both dimensions earn their place. The
-  *width* is what puts the two on one vertical axis: they are flush to the same
-  trailing edge, so equal widths is all it takes, and the chevron's 28pt against a
-  borderless `Menu`'s own 20pt had it sitting 4pt to the menu's left. The *height*
-  is the subtler half — a 28pt box centred on a 15pt line sticks out above it, and
-  because the row is baseline-aligned that raised the row's top and pushed the
-  preview text **below** the editor's first line, trading one misalignment for its
-  mirror image. At the menu's 14pt the box sits inside the line box and pushes
-  nothing.
+  The fold control used to be a chevron that **wore the ⋯ menu's box**, measured
+  off it (`actionsSize`), to sit on the menu's axis without lifting the
+  baseline-aligned row; it is a word in the title row now, a `Text` with a
+  baseline of its own beside the menu (see the notes bullet), so there is no box
+  to match and the measurement is gone. What
+  generalises from it: a control taller than the line it sits beside raises a
+  baseline-aligned row's top, so a glyph in a padded target must be held to the
+  line box's height — the 28pt chevron box pushed the preview text below the
+  editor's first line until it took the menu's 14pt.
   **A card's title row is floored at `Metrics.cardTitleRowHeight`** (26pt) in *both*
   modes, because **Done** exists in only one of them. The capsule is 26pt at
   `.actionCapsule`/`.controlSize(.small)` against a 16pt title line, and the row is
@@ -2341,13 +2363,17 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
     menu-bar extra, every popover. Now gated to toolbar windows, Settings excluded
     by name, and the found split view remembered weakly per window
     (validated by `cached.window === window`, so a torn-down one is re-found).
-  - **`CollapsibleMarkdown` holds the chevron's slot open** whenever the body can
-    fold, invisible when unearned, because the structural `if showsChevron` fed
-    back into its own condition: the chevron narrows the content, the content
-    wraps taller, and the height is what `collapsible` is measured from — a body
-    within a chevron's width of the preview cap had **no fixed point** and
-    re-laid-out (and re-parsed) in a loop. The cost is the slot's width on every
-    collapsed first line, on the axis the ⋯ menu already owns.
+  - **`CollapsibleMarkdown` carries no control of its own, because one inside
+    the body fed back into its own condition.** When the fold control was a
+    chevron at the end of the teaser line, the structural `if showsChevron`
+    narrowed the content, the content wrapped taller, and the height is what
+    `collapsible` is measured from — a body within the slot's width of the
+    preview cap had **no fixed point** and re-laid-out (and re-parsed) in a
+    loop. The fix then was to hold the slot open, visible or not. The fold
+    label now lives in the card's title row (see the notes bullet) and the body
+    only reports `foldable`, so the slot is gone; the rule to keep is that
+    nothing whose presence depends on the body's measured height may take
+    width or height inside the body.
 - **Compare paths, never `URL`s.** Use `Library.key(_:)`. A URL built by appending
   to a folder and one handed back by `FileManager` can name the very same file and
   still compare unequal. Not fussiness — it bit twice: it had a load re-decode notes

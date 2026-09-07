@@ -20,9 +20,7 @@ final class CollapsibleLayoutTests: XCTestCase {
             textStyle: .callout,
             previewLines: 1,
             expanded: .constant(false),
-            chevronBox: CGSize(width: 20, height: 14),
-            expandLabel: "Expand",
-            collapseLabel: "Collapse"
+            foldable: .constant(false)
         )
         let renderer = ImageRenderer(content: view)
         renderer.proposedSize = ProposedViewSize(width: 200, height: nil)

@@ -294,7 +294,7 @@ struct TasksPanel: View {
 /// A single task rendered as a Liquid Glass row with two modes, mirroring
 /// `NoteCardView`:
 ///
-/// - **View mode**: the title and a one-line body preview, with a chevron to
+/// - **View mode**: the title and a one-line body preview, with a fold label to
 ///   unfold the full (rendered) notes in place. The whole row is a tap target
 ///   that opens it for editing.
 /// - **Edit mode** (the task is selected via `AppState.selectedTaskID`): the
@@ -328,11 +328,10 @@ private struct TaskCardView: View {
     /// card. See `CardEditingSession`.
     @State private var session: CardEditingSession<TaskItem>
     @State private var expanded = false
+    /// Whether the notes fold — reported by `CollapsibleMarkdown`, drawn as the
+    /// `FoldLabel` beside the ⋯.
+    @State private var foldable = false
     @State private var showDuePopover = false
-    /// The ⋯ menu's box, which the expand chevron takes as its own so the two line
-    /// up. Seeded with what a borderless `Menu` was measured at, so the first layout
-    /// is already right and nothing slides when the real value lands.
-    @State private var actionsSize = CGSize(width: 20, height: 14)
     /// Height of the notes editor's sizing proxy, so it grows with its content.
     @State private var measuredBodyHeight: CGFloat = 28
 
@@ -510,11 +509,16 @@ private struct TaskCardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            // The fold beside the menu — the note card's arrangement. View
+            // mode only; the editor shows everything.
+            if foldable && !isEditing {
+                FoldLabel(
+                    expanded: $expanded,
+                    expandLabel: "Expand notes",
+                    collapseLabel: "Collapse notes")
+            }
+
             actionsMenu
-                // The chevron below wears this control's box, and a borderless
-                // `Menu` sizes itself — so it's measured rather than assumed (see
-                // `bodySection`).
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { LayoutProbe.count(.geo, "taskActions"); actionsSize = $0 }
         }
         // Floored so the row is the same height whether or not Done is in it —
         // otherwise the title and the body both drop as a card opens. See
@@ -783,7 +787,7 @@ private struct TaskCardView: View {
 
     /// The notes in view mode — folded to the "Preview lines" choice
     /// (Settings → Tasks), one line by default: the teaser these rows have
-    /// always shown. The folding, the fades and the chevron all live in
+    /// always shown. The folding and the fades live in
     /// `CollapsibleMarkdown`, one view shared with the note card. `.callout`,
     /// matching this card's editor — the note card's is `.body`, and a preview
     /// that changes size on the way into edit mode is the thing `textStyle`
@@ -796,9 +800,7 @@ private struct TaskCardView: View {
                 textStyle: .callout,
                 previewLines: settings.taskPreviewLines.lines,
                 expanded: $expanded,
-                chevronBox: actionsSize,
-                expandLabel: "Expand notes",
-                collapseLabel: "Collapse notes",
+                foldable: $foldable,
                 onTap: { enterEdit() },
                 onToggleCheckbox: { toggleCheckbox(at: $0) }
             )

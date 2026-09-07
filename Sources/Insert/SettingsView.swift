@@ -559,7 +559,7 @@ private struct TasksSettingsTab: View {
                     }
                 }
             } footer: {
-                Text("How much of a task's notes shows before it's folded: so many lines, fading out at the cut, with a chevron to reveal the rest. Editing a task always shows all of it.")
+                Text("How much of a task's notes shows before it's folded: so many lines, fading out at the cut, with MORE beside the task's ⋯ to reveal the rest. Editing a task always shows all of it.")
             }
 
             Section {
@@ -641,7 +641,7 @@ private struct NotesSettingsTab: View {
                     }
                 }
             } footer: {
-                Text("How much of a note shows before it's folded: so many lines, fading out at the cut, with a chevron to reveal the rest. Editing a note always shows all of it.")
+                Text("How much of a note shows before it's folded: so many lines, fading out at the cut, with MORE beside the note's ⋯ to reveal the rest. Editing a note always shows all of it.")
             }
 
             Section {

@@ -173,7 +173,7 @@ final class SettingsStore {
     }
 
     /// How much of a note shows before it's folded — a preview of so many
-    /// rendered lines with a chevron to reveal the rest, or everything.
+    /// rendered lines with a fold label to reveal the rest, or everything.
     /// Everything by default, so an install that never opens Settings keeps
     /// showing whole notes. View mode only; the editor always shows everything.
     var notePreviewLines: PreviewLines {

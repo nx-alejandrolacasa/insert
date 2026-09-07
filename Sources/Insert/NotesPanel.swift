@@ -250,10 +250,9 @@ private struct NoteCardView: View {
     /// here rather than by `CollapsibleMarkdown` so the card's height animation
     /// can be value-scoped to it.
     @State private var expanded = false
-    /// The ⋯ menu's box, which the expand chevron takes as its own so the two sit
-    /// flush on one trailing axis — the task row's arrangement, seeded with the
-    /// same measured value so the first layout is already right.
-    @State private var actionsSize = CGSize(width: 20, height: 14)
+    /// Whether the body folds — reported by `CollapsibleMarkdown`, drawn as the
+    /// `FoldLabel` beside the ⋯.
+    @State private var foldable = false
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
 
@@ -316,7 +315,7 @@ private struct NoteCardView: View {
                 // someone was just reading — and it happens on the same frame
                 // the card is already resizing, so it reads as the note
                 // shrinking away from them. Expanding is a state the reader can
-                // undo with the chevron; collapsing is one they have to.
+                // undo with the fold label; collapsing is one they have to.
                 expanded = true
                 finishEditing()
             }
@@ -456,12 +455,16 @@ private struct NoteCardView: View {
                     .controlSize(.small)
             }
 
+            // The fold beside the menu: the corner is the card's one control
+            // strip. Only in view mode — the editor shows everything.
+            if foldable && !isEditing {
+                FoldLabel(
+                    expanded: $expanded,
+                    expandLabel: "Show the whole note",
+                    collapseLabel: "Collapse note")
+            }
+
             actionsMenu
-                // The expand chevron under a collapsed body wears this control's
-                // box so the two share a trailing axis — and a borderless `Menu`
-                // sizes itself, so it's measured rather than assumed. Same as
-                // the task row.
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { LayoutProbe.count(.geo, "noteActions"); actionsSize = $0 }
         }
         // Floored like the task card's title row, and needed for the same
         // reason since the symbols went: the 26pt symbol well used to set this
@@ -620,7 +623,7 @@ private struct NoteCardView: View {
 
     /// Rendered Markdown shown when the note isn't being edited — folded to the
     /// "Preview lines" choice (Settings → Notes) when the body runs past it.
-    /// The folding, the fades and the chevron all live in `CollapsibleMarkdown`,
+    /// The folding and the fades live in `CollapsibleMarkdown`,
     /// one view shared with the task row; the editor always shows everything.
     @ViewBuilder
     private var bodyView: some View {
@@ -636,9 +639,7 @@ private struct NoteCardView: View {
                 markdown: session.draft.body,
                 previewLines: settings.notePreviewLines.lines,
                 expanded: $expanded,
-                chevronBox: actionsSize,
-                expandLabel: "Show the whole note",
-                collapseLabel: "Collapse note",
+                foldable: $foldable,
                 onTap: { enterEdit() },
                 onToggleCheckbox: { toggleCheckbox(at: $0) }
             )

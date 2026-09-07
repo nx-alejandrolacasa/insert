@@ -637,7 +637,7 @@ enum MarkdownParser {
     /// its words, a bullet as its item, a quote as its line. Inline markers are
     /// deliberately **left in place** for the renderer, which is the whole point —
     /// the row used to print the raw source, so a body of `**Ship it**` read as
-    /// asterisks and a one-line note never earned the expand chevron that would
+    /// asterisks and a one-line note never earned the fold label that would
     /// have rendered it.
     ///
     /// A rule contributes nothing and is skipped rather than ending the search; it
@@ -781,11 +781,13 @@ enum MarkdownParser {
 // MARK: - Collapsible body
 
 /// A card body that can read collapsed: `MarkdownText` folded to a preview of
-/// `previewLines` rendered lines, with a chevron beside the first line to reveal
-/// the rest. One implementation for both cards — notes at `.body`, tasks at
-/// `.callout` — driven by each kind's "Preview lines" setting; `nil` lines means
-/// no collapsing and the body simply renders in full. View mode only by
-/// construction: the cards only show this when they aren't editing.
+/// `previewLines` rendered lines, with the rest behind a **fold label** — the
+/// word `MORE`, or `LESS` once expanded — that the owning card draws in its
+/// title row beside the ⋯ (`FoldLabel`). One implementation for both cards —
+/// notes at `.body`, tasks at `.callout` — driven by each kind's "Preview lines"
+/// setting; `nil` lines means no collapsing and the body simply renders in full.
+/// View mode only by construction: the cards only show this when they aren't
+/// editing.
 ///
 /// Two collapsed shapes, because one line is not just a smaller ten:
 ///
@@ -803,19 +805,15 @@ enum MarkdownParser {
 ///   both states for the same reason (expanded it is opaque everywhere, a
 ///   no-op).
 ///
-/// Whether the chevron appears is measured off the **render**, never the source
-/// — the parser joins hard-wrapped lines, so a long source can render short and
-/// used to earn a chevron that revealed nothing.
-///
-/// The chevron rides the body's **first** line, and the position is
-/// load-bearing: a control under the fold travels with the card's height, so
-/// collapsing an expanded body had it floating down through the contraction with
-/// its `.replace` turn still playing. It wears the ⋯ menu's measured box
-/// (`chevronBox`), both dimensions doing work: equal widths flush to one
-/// trailing edge is what puts the two on one vertical axis, and at the menu's
-/// own height the box sits inside the line box — taller, it pushed a
-/// baseline-aligned row's top up and the preview text below the editor's first
-/// line.
+/// Whether the body folds is measured off the **render**, never the source —
+/// the parser joins hard-wrapped lines, so a long source can render short and
+/// used to earn a control that revealed nothing — and reported to the card
+/// through `foldable`, which is what decides whether its `FoldLabel` is drawn.
+/// The control itself lives **outside** this view, so nothing here takes width
+/// or height for it: a slot inside the body fed back into its own condition (a
+/// control narrows the line, the line wraps taller, and the height is what
+/// `collapsible` reads), and a label under the body spent a line on every
+/// expanded card.
 struct CollapsibleMarkdown: View {
     let markdown: String
     var textStyle: NSFont.TextStyle = .body
@@ -823,11 +821,10 @@ struct CollapsibleMarkdown: View {
     let previewLines: Int?
     /// Owned by the card, whose height animation is value-scoped to it.
     @Binding var expanded: Bool
-    /// The ⋯ menu's box, measured by the card (a borderless `Menu` sizes itself).
-    let chevronBox: CGSize
-    /// The chevron's two spoken/help names, in the card's own words.
-    let expandLabel: String
-    let collapseLabel: String
+    /// Written by this view: whether the body folds at all, so the card knows
+    /// to draw its `FoldLabel`. `false` once the body leaves the tree, so a
+    /// card that just emptied its body doesn't keep a stale `MORE`.
+    @Binding var foldable: Bool
     /// A plain click on the full render — the card's "open for editing". The
     /// render is a text view, which takes the mouse for selecting, so the card's
     /// own tap gesture never sees a click that lands on the text; the view
@@ -843,7 +840,7 @@ struct CollapsibleMarkdown: View {
     /// The one-line teaser's rendered height. Compared against `fullHeight`
     /// rather than one line height of the card face, because the body's first
     /// block can be taller than a body line (a heading), and that alone mustn't
-    /// earn a chevron.
+    /// earn a fold label.
     @State private var teaserHeight: CGFloat = 0
     /// The teaser at its natural single-line width, against the width the row
     /// actually gives it. Wider means the line is cut, which is the only case
@@ -872,11 +869,11 @@ struct CollapsibleMarkdown: View {
         CGFloat(lines) * lineHeight + CGFloat(max(lines - 1, 0)) * lineSpacing
     }
 
-    /// Long enough to fold. The teaser earns its chevron when the full render is
+    /// Long enough to fold. The teaser earns its label when the full render is
     /// taller than the one line on show; a clamp earns it when the render runs
     /// more than **half a line** past the cap — a body of exactly the preview
     /// height drifts a fraction of a point per line against `n ×` an unrounded
-    /// line height, and must not earn a chevron that reveals nothing.
+    /// line height, and must not earn a label that reveals nothing.
     private var collapsible: Bool {
         guard let lines = previewLines else { return false }
         // A card that has only ever been *expanded* — a note left open by the
@@ -890,10 +887,12 @@ struct CollapsibleMarkdown: View {
         return fullHeight > clampHeight(lines) + lineHeight / 2
     }
 
-    /// Shown when there's something hidden — or when we're expanded and it's
-    /// the way back.
-    private var showsChevron: Bool {
-        previewLines != nil && (expanded || collapsible)
+    /// Whether this body folds at all: something is hidden, or would be. When
+    /// expanded it is the way back — and only then, since collapsing a body the
+    /// clamp wouldn't reach changes nothing and a `LESS` for it would be a
+    /// control that does nothing.
+    private var folds: Bool {
+        previewLines != nil && collapsible
     }
 
     /// Whether the clamp is currently applied (several-lines mode only; the
@@ -911,30 +910,9 @@ struct CollapsibleMarkdown: View {
     }
 
     private var body_: some View {
-        // Baseline, not `.top`: the chevron is a caption glyph in a measured
-        // box, and top-aligning the boxes sat it below the line of text it
-        // belongs to — `centredOnTextCap()` puts its centre on the first line's
-        // cap height instead.
-        //
-        // The chevron's slot is held open whenever the body *can* fold, visible
-        // or not, so the content's width never depends on whether the chevron is
-        // showing. Structurally (`if showsChevron`) it fed back into its own
-        // condition: adding the chevron narrows the content, which wraps taller,
-        // which is what `collapsible` is measured from — and a body whose render
-        // sat within a chevron's width of the preview cap had no fixed point, so
-        // the chevron flickered in and out while the layout re-ran, re-parsing
-        // the card each cycle. The cost is the slot's width on every collapsed
-        // first line, chevron or not — a fade that starts a chevron earlier, on
-        // the axis the ⋯ menu already owns.
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            content
-            if previewLines != nil {
-                chevron
-                    .opacity(showsChevron ? 1 : 0)
-                    .allowsHitTesting(showsChevron)
-                    .accessibilityHidden(!showsChevron)
-            }
-        }
+        content
+            .onChange(of: folds, initial: true) { _, folds in foldable = folds }
+            .onDisappear { foldable = false }
     }
 
     /// `.transition(.identity)` on both branches of the teaser swap, and on the
@@ -1058,21 +1036,48 @@ struct CollapsibleMarkdown: View {
         )
     }
 
-    private var chevron: some View {
+}
+
+/// The card's fold control: the word `MORE`, or `LESS` once expanded, drawn by
+/// each card in its title row **beside the ⋯**, so the corner is the card's one
+/// control strip — the actions menu and the fold side by side, a glyph and a
+/// word. It wears `TypeCapsLabel`'s construction — the same size, weight,
+/// tracking and face — in the metadata colour the ⋯ and the timestamps wear, so
+/// the card keeps one small-caps voice. The two words are the same width in the
+/// mono face, so the row never shifts on the flip. The hit area is inset
+/// outwards rather than padded, so the word's box stays the size of the word
+/// and doesn't lift the row.
+///
+/// Third placement, each judged on screen. A chevron stacked *under* the ⋯ read
+/// as a second control of the menu's kind. The word *at the fold* — the end of
+/// the teaser line, the corner of the clamp, a line under an expanded body —
+/// was a footnote sitting on top of faded text and beside the timestamp, a
+/// second row of metadata under a card that already has one, and `LESS` cost
+/// every expanded card a line. Beside the ⋯ it costs the body nothing and takes
+/// nothing off it.
+struct FoldLabel: View {
+    @Binding var expanded: Bool
+    /// The spoken/help names, in the card's own words.
+    let expandLabel: String
+    let collapseLabel: String
+
+    /// `TypeCapsLabel.size`: between `.caption` and `.caption2`.
+    private static let size: CGFloat = 10.5
+
+    var body: some View {
+        let settings = SettingsStore.shared
         Button {
             expanded.toggle()
         } label: {
-            Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                // One symbol in two directions — `.replace` turns it over rather
-                // than cutting, and drops to a cut under Reduce Motion.
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: chevronBox.width, height: chevronBox.height)
-                .contentShape(Rectangle())
+            Text(expanded ? "LESS" : "MORE")
+                .font(Mono.card(size: Self.size, weight: .semibold))
+                .tracking(Self.size * 0.06 * CardTextSize.scale(settings.cardFontSize))
+                .foregroundStyle(settings.theme.metaText)
+                .lineLimit(1)
+                .fixedSize()
+                .contentShape(Rectangle().inset(by: -6))
         }
         .buttonStyle(.plain)
-        .centredOnTextCap(textStyle)
         .help(expanded ? collapseLabel : expandLabel)
         .accessibilityLabel(expanded ? collapseLabel : expandLabel)
     }
