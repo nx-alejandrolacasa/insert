@@ -407,9 +407,18 @@ private struct NoteCardView: View {
         if isEditing {
             bodyEditor.transition(.identity)
         } else {
-            bodyView.transition(.identity)
+            // The editor's frame is its proxy's height, and the text starts at
+            // the top of it, so all of the proxy's vertical padding lands under
+            // the last line. The preview repeats it, or the flip into editing
+            // pushes the meta row down by that much.
+            bodyView
+                .padding(.bottom, 2 * editorVerticalInset)
+                .transition(.identity)
         }
     }
+
+    /// The proxy's padding above and below the source, which sizes the editor.
+    private let editorVerticalInset: CGFloat = 8
 
     // MARK: Title row
 
@@ -688,7 +697,7 @@ private struct NoteCardView: View {
                 lineSpacing: metrics.lineSpacing
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
+                .padding(.vertical, editorVerticalInset)
                 .padding(.horizontal, 5)
                 .hidden()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {

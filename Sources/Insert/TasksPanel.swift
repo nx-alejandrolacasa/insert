@@ -780,9 +780,17 @@ private struct TaskCardView: View {
         if isEditing {
             bodyEditor.transition(.identity)
         } else {
-            bodySection.transition(.identity)
+            // The note card's rule: the editor's height is the proxy's, text at
+            // the top, so the proxy's vertical padding all sits under the last
+            // line and the preview repeats it.
+            bodySection
+                .padding(.bottom, hasBody ? 2 * editorVerticalInset : 0)
+                .transition(.identity)
         }
     }
+
+    /// The proxy's padding above and below the source, which sizes the editor.
+    private let editorVerticalInset: CGFloat = 6
 
     // MARK: Body — view mode
 
@@ -882,7 +890,7 @@ private struct TaskCardView: View {
             lineSpacing: metrics.lineSpacing
         )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
+            .padding(.vertical, editorVerticalInset)
             .padding(.horizontal, 5)
             .fixedSize(horizontal: false, vertical: true)
             .hidden()
