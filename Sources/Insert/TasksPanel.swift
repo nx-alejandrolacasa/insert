@@ -756,8 +756,9 @@ private struct TaskCardView: View {
             // real height arrived, and the text swapped in mid-way through.
             .background(alignment: .topLeading) { bodySizingProxy }
             // Matches the gap the body has *above* it, so the two read as one
-            // margin. See `titleRowSlack`.
-            .padding(.bottom, titleRowSlack)
+            // margin (see `titleRowSlack`), plus the room every card keeps
+            // between its body and the meta row.
+            .padding(.bottom, titleRowSlack + Metrics.cardBodyBottomGap)
     }
 
     /// The slack the floored title row carries below its title, which the body's gap

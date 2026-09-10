@@ -654,6 +654,10 @@ enum Metrics {
     /// same floor since its type glyph (a 26pt symbol well that used to set this
     /// height as a side effect) was removed with the type symbols.
     static let cardTitleRowHeight: CGFloat = 26
+    /// Extra room under a card's body before the meta row, on top of the stack's
+    /// own spacing. Applied in both modes, so the flip into editing doesn't
+    /// change the card's shape.
+    static let cardBodyBottomGap: CGFloat = 6
     /// The narrowest either the notes or the tasks column may be dragged —
     /// generous on purpose, so a stray drag can't leave a 90pt sliver where
     /// every card truncates to nothing.

@@ -341,6 +341,7 @@ private struct NoteCardView: View {
             // The chips row sits *under* the body: between title and body it cut
             // the note in half and pushed the text you're writing down the card.
             bodyArea
+                .padding(.bottom, Metrics.cardBodyBottomGap)
             if isEditing {
                 projectRow
             } else {
