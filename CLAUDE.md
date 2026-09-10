@@ -2076,7 +2076,11 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   view's current string has to assume they are foreign.
 - **A bar floats over a selection in a Markdown body** (`FormattingBar`,
   September 2026) — bold · italic · underline · strikethrough | bulleted ·
-  numbered list | link · inline code, in three groups, the Confluence shape. It
+  numbered list · divider | link · inline code, in three groups, the Confluence shape.
+  The divider is the one button that styles nothing: it writes `---` on its own
+  line **below** the line the selection ends on, a blank line either side so
+  Obsidian reads a rule rather than a setext heading, and leaves the caret on the
+  empty line after it (`MarkdownFormatting.insertDivider`, pure and pinned). It
   exists for the selection made with the *mouse*, which is the moment a key
   shortcut is furthest from the hand; the keys still work and the tooltips name
   them. It wears the `@project` dropdown's construction — glass or the theme's

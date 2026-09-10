@@ -1,17 +1,17 @@
 import AppKit
 import SwiftUI
 
-/// What the editor can do to a selection — the eight buttons on the bar, and
+/// What the editor can do to a selection — the nine buttons on the bar, and
 /// the five of them that also have a key.
 enum FormattingAction: CaseIterable {
     case bold, italic, underline, strikethrough
-    case bulletList, numberedList
+    case bulletList, numberedList, divider
     case link, code
 
     /// The bar's groups, drawn with a hairline between them.
     static let groups: [[FormattingAction]] = [
         [.bold, .italic, .underline, .strikethrough],
-        [.bulletList, .numberedList],
+        [.bulletList, .numberedList, .divider],
         [.link, .code],
     ]
 
@@ -23,6 +23,7 @@ enum FormattingAction: CaseIterable {
         case .strikethrough: "strikethrough"
         case .bulletList: "list.bullet"
         case .numberedList: "list.number"
+        case .divider: "minus"
         case .link: "link"
         case .code: "chevron.left.forwardslash.chevron.right"
         }
@@ -36,13 +37,14 @@ enum FormattingAction: CaseIterable {
         case .strikethrough: "Strikethrough"
         case .bulletList: "Bulleted list"
         case .numberedList: "Numbered list"
+        case .divider: "Divider"
         case .link: "Link"
         case .code: "Inline code"
         }
     }
 
-    /// The key that does the same, for the tooltip. The two list actions and
-    /// inline code have none — the bar is their only route.
+    /// The key that does the same, for the tooltip. The two list actions, the
+    /// divider and inline code have none — the bar is their only route.
     var shortcut: String? {
         switch self {
         case .bold: "⌘B"
@@ -50,7 +52,7 @@ enum FormattingAction: CaseIterable {
         case .underline: "⌘U"
         case .strikethrough: "⇧⌘X"
         case .link: "⌘K"
-        case .bulletList, .numberedList, .code: nil
+        case .bulletList, .numberedList, .divider, .code: nil
         }
     }
 }
@@ -64,7 +66,7 @@ enum FormattingAction: CaseIterable {
 /// Transparency), a hairline, no shadow. Its buttons are lone glyphs and keep
 /// a soft radius rather than a pill, for the reason the toolbar's do — a glyph
 /// rounded into a pill reads as a switch. Hover and press are the washes
-/// `FlatButtonStyle` uses, without its fill: eight chips in a row would be
+/// `FlatButtonStyle` uses, without its fill: nine chips in a row would be
 /// louder than the words under them.
 ///
 /// The edit itself is made by the text view (`MarkdownTextView.perform`), so it

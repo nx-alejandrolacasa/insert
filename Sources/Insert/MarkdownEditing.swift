@@ -670,11 +670,22 @@ final class MarkdownTextView: NSTextView {
         case .link: insertLinkAroundSelection()
         case .bulletList: toggleListAroundSelection(ordered: false)
         case .numberedList: toggleListAroundSelection(ordered: true)
+        case .divider: insertDividerAtSelection()
         }
         if let window, window.firstResponder !== self { window.makeFirstResponder(self) }
         // A bar button's action lands on the mouse-up that pressed it, when the
         // button may still count as down, so the bar is placed again a turn later.
         Task { @MainActor [weak self] in self?.publishSelectionAnchor() }
+    }
+
+    private func insertDividerAtSelection() {
+        let selected = selectedRange()
+        guard let lo = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+              let hi = MarkdownEdits.characterOffset(
+                  in: string, utf16Offset: selected.location + selected.length
+              )
+        else { return }
+        _ = MarkdownEdits.apply(MarkdownFormatting.insertDivider(string, selection: lo..<hi), to: self)
     }
 
     private func toggleListAroundSelection(ordered: Bool) {
@@ -1203,6 +1214,44 @@ enum MarkdownFormatting {
         if trimmed.lowercased().hasPrefix("www."), trimmed.count > "www.".count { return true }
         guard let scheme = URL(string: trimmed)?.scheme else { return false }
         return ["http", "https", "mailto", "ftp"].contains(scheme.lowercased())
+    }
+
+    // MARK: Dividers
+
+    /// The bar's divider button: a `---` on a line of its own **below the line
+    /// the selection ends on**, with the caret on the empty line after it, ready
+    /// for whatever comes next. The bar only ever shows over a selection, and a
+    /// divider is not a style — it takes nothing away and replaces nothing, it
+    /// divides *after* what was selected. A blank line is kept on each side:
+    /// the parser here reads `---` under text as a rule, but CommonMark and
+    /// Obsidian read it as a setext heading, and these files are opened there
+    /// too. Blank lines already around the insertion point are absorbed rather
+    /// than stacked, so a caret on an empty line gives it to the rule.
+    static func insertDivider(_ text: String, selection: Range<Int>) -> Change {
+        let chars = Array(text)
+        let lo = max(0, min(selection.lowerBound, chars.count))
+        var at = max(lo, min(selection.upperBound, chars.count))
+        // A selection that ends just past a newline hasn't reached the next line.
+        if at > lo, chars[at - 1] == "\n" { at -= 1 }
+        var lineStart = at
+        while lineStart > 0, chars[lineStart - 1] != "\n" { lineStart -= 1 }
+        var lineEnd = at
+        while lineEnd < chars.count, chars[lineEnd] != "\n" { lineEnd += 1 }
+        let lineIsBlank = chars[lineStart..<lineEnd].allSatisfy(\.isWhitespace)
+
+        var before = chars[..<(lineIsBlank ? lineStart : lineEnd)]
+        while let last = before.last, last.isWhitespace { before = before.dropLast() }
+        var after = chars[lineEnd...]
+        while let blank = after.firstIndex(of: "\n"), after[..<blank].allSatisfy(\.isWhitespace) {
+            after = after[(blank + 1)...]
+        }
+
+        var out = Array(before)
+        if !out.isEmpty { out += "\n\n" }
+        out += "---\n"
+        let caret = out.count
+        if !after.isEmpty { out += "\n" + after }
+        return Change(text: String(out), selection: caret..<caret)
     }
 
     // MARK: Lists and quotes

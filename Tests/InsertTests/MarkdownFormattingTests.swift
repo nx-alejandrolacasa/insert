@@ -2,7 +2,7 @@ import XCTest
 @testable import Insert
 
 /// Pins the selection-wrapping behind the formatting shortcuts
-/// (⌘B/⌘I/⌘U/⇧⌘X, and ⌘K for links).
+/// (⌘B/⌘I/⌘U/⇧⌘X, ⌘K for links, and the bar's list and divider buttons).
 /// This code rewrites the user's Markdown around an arbitrary selection, so the
 /// interesting cases are the ones that would corrupt text: delimiters landing on
 /// whitespace (which un-parses them), unwrapping from either side of the
@@ -263,6 +263,56 @@ final class MarkdownFormattingTests: XCTestCase {
 
     func testMultilineSelectionMakesNoLink() {
         XCTAssertNil(MarkdownFormatting.insertLink("a b\nc d", selection: 2..<5))
+    }
+
+    // MARK: Dividers from the bar
+
+    /// Inserts a divider with the selection written into the text as `⟦`…`⟧`,
+    /// and gives the result back with the caret as `‸`.
+    private func divider(_ marked: String) -> String {
+        let lo = marked.distance(from: marked.startIndex, to: marked.firstIndex(of: "⟦")!)
+        var text = marked.replacingOccurrences(of: "⟦", with: "")
+        let hi = text.distance(from: text.startIndex, to: text.firstIndex(of: "⟧")!)
+        text = text.replacingOccurrences(of: "⟧", with: "")
+        let change = MarkdownFormatting.insertDivider(text, selection: lo..<hi)
+        XCTAssertTrue(change.selection.isEmpty, "a divider leaves a caret, not a selection")
+        var out = Array(change.text)
+        out.insert("‸", at: change.selection.lowerBound)
+        return String(out)
+    }
+
+    func testDividerGoesBelowTheSelectedLine() {
+        XCTAssertEqual(divider("one\ntw⟦o\nthr⟧ee\nfour"), "one\ntwo\nthree\n\n---\n‸\nfour")
+    }
+
+    func testDividerAtTheEndOfTheDocument() {
+        XCTAssertEqual(divider("hel⟦⟧lo"), "hello\n\n---\n‸")
+    }
+
+    func testDividerInAnEmptyDocument() {
+        XCTAssertEqual(divider("⟦⟧"), "---\n‸")
+    }
+
+    func testCaretOnABlankLineGivesItToTheDivider() {
+        XCTAssertEqual(divider("hello\n⟦⟧\nworld"), "hello\n\n---\n‸\nworld")
+    }
+
+    func testBlankLinesAroundAreAbsorbedNotStacked() {
+        XCTAssertEqual(divider("hello\n\n\n⟦⟧\n  \n\nworld"), "hello\n\n---\n‸\nworld")
+    }
+
+    func testSelectionEndingAfterANewlineDividesAboveTheNextLine() {
+        XCTAssertEqual(divider("⟦one\n⟧two"), "one\n\n---\n‸\ntwo")
+    }
+
+    func testDividerUnderAnExistingDividerMakesASecond() {
+        XCTAssertEqual(divider("text\n\n---\n⟦⟧"), "text\n\n---\n\n---\n‸")
+    }
+
+    func testDividerRendersAsARule() {
+        let out = divider("intro⟦⟧\nnext")
+        let blocks = MarkdownParser.parse(String(out.replacingOccurrences(of: "‸", with: "")))
+        XCTAssertTrue(blocks.contains { if case .rule = $0 { return true } else { return false } })
     }
 
     // MARK: Continuing a list on Return
