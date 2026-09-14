@@ -31,12 +31,15 @@ final class CommandPalette {
     private(set) var isOpen = false
 
     static let width: CGFloat = 560
+    /// Transparent room around the card for its shadow to fall into; the panel
+    /// is this much larger than the card on every side.
+    static let shadowMargin: CGFloat = 36
 
     private init() {
         host = NSHostingView(rootView: AnyView(EmptyView()))
         host.sizingOptions = []
         panel = PalettePanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: Self.width + Self.shadowMargin * 2, height: 60),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -48,8 +51,10 @@ final class CommandPalette {
         // window over the content rather than a surface *of* the window, which
         // is the line "no shadows anywhere" draws — that rule is about the
         // window's own flat surfaces, and this is the same lifted object a menu
-        // is. The system's own window shadow, not a `.shadow(…)` of ours.
-        panel.hasShadow = true
+        // is. The system's window shadow was tried first and read as too
+        // heavy, and it can't be tuned, so the view draws a softer one inside
+        // a transparent margin (`shadowMargin`) and the panel casts none.
+        panel.hasShadow = false
         panel.animationBehavior = .none
         panel.contentView = host
     }
@@ -102,14 +107,19 @@ final class CommandPalette {
 
     /// Centred on the window, its top a little way under the titlebar — where a
     /// palette is expected, and clear of the traffic lights.
+    /// `height` is the whole hosted view's, margin included, so the card's top
+    /// edge lands `topInset` under the title bar.
     private func place(in window: NSWindow, height: CGFloat) {
         let content = window.convertToScreen(window.contentLayoutRect)
-        let top = content.maxY - Self.topInset
-        let x = (content.midX - Self.width / 2).rounded()
-        panel.setFrame(NSRect(x: x, y: top - height, width: Self.width, height: height), display: true)
+        let width = Self.width + Self.shadowMargin * 2
+        let top = content.maxY - Self.topInset + Self.shadowMargin
+        let x = (content.midX - width / 2).rounded()
+        panel.setFrame(NSRect(x: x, y: top - height, width: width, height: height), display: true)
     }
 
-    private static let topInset: CGFloat = 48
+    /// Clear of the bands and the first row of cards, so the palette reads as
+    /// floating over the columns rather than lining up with a card's top edge.
+    private static let topInset: CGFloat = 112
 
     /// The content reports its natural height; the panel follows, top edge held.
     private func fit(to size: CGSize) {
@@ -404,6 +414,11 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.primary.opacity(0.18), lineWidth: 1)
         }
+        // Softer than the system's window shadow, which was the first cut and
+        // read as heavy: a wide, low-alpha fall that lifts the card without
+        // darkening the cards under it.
+        .shadow(color: .black.opacity(0.16), radius: 22, y: 10)
+        .padding(CommandPalette.shadowMargin)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
         .onAppear { focused = true }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -463,10 +478,13 @@ struct CommandPaletteView: View {
                     // worth learning from this list, so it reads at full
                     // strength on its own small ground.
                     Text(shortcut)
-                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .font(.system(size: 12, design: .monospaced).weight(.semibold))
+                        // The modifier glyphs and the letter set tight in the
+                        // mono face; a little tracking lets each read as a key.
+                        .tracking(1.5)
                         .foregroundStyle(.primary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
                         .background {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(.primary.opacity(0.08))

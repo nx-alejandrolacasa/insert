@@ -997,7 +997,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   It is a **key child
   `NSPanel`** for `FormattingBarPanel`'s reason — the card previews and titles
   are platform views and would draw over an overlay — on the theme's **card
-  face**, opaque, with a 1pt edge and the system's window shadow (see the
+  face**, opaque, with a 1pt edge and its own soft shadow (see the
   shadows bullet for why it is the one exception; glass over two columns of
   cards read as washed into them), centred under the title bar and resized from the
   content's own measured height with its top edge held. A local `NSEvent`
@@ -2850,9 +2850,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   wears when it goes inactive and every glass surface settles down, which is the
   look it's tuned for. The palette is a *transient window over* the content,
   the same lifted object a menu is, and without a shadow it read as "diluted"
-  into the cards it floats over (September 2026, by request) — so it carries the
-  **system's window shadow** (`hasShadow`, not a `.shadow(…)` of ours), an opaque
-  card face rather than glass, a 1pt edge at 18%, and keycap shortcuts. The
+  into the cards it floats over (September 2026, by request) — so it carries a
+  shadow: the system's window shadow first, judged too heavy and not tunable,
+  so now a soft `.shadow(…)` of its own (16% black, radius 22, 10pt down) drawn
+  inside a transparent 36pt margin the panel is oversized by, plus an opaque
+  card face rather than glass, a 1pt edge at 18%, and keycap shortcuts. It is
+  the one `.shadow(…)` in Insert's own code. The
   rule below is about the window's own surfaces and is unchanged by it. Separation is a **hairline** (`Stone.line`) plus, on glass,
   the material's own refraction — that's what `.island()` swapped its shadow for and
   what the `@project` dropdown and the column-divider handle now use too. There is
@@ -2895,8 +2898,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   breaking; and it **skips the content view**, which is load-bearing — the projects
   sidebar is glass and is meant to stay glass. Only the titlebar band is touched.
   Otherwise anything the *system* draws — popover and menu shadows, the glass
-  controls' own lighting — is untouched; `.shadow(…)` appears nowhere in Insert's
-  own code.
+  controls' own lighting — is untouched; `.shadow(…)` appears once in Insert's
+  own code, on the command palette's card (see the top of this bullet).
 - **Icon** — minimal stacked cards on a sage-teal → steel blue gradient
   (#88AAB5 → #7290A7, the middle stops of the six-stop gradient Nuevo Tokyo is
   sourced from) with a slate-blue check badge (#7FA3D1 → #35507F). Keep it soft and modern; palette and proportions
