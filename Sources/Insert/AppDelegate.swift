@@ -1,27 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The flat capsule that stands in for the search field's glass platter — the same
-/// `Stone.control` fill and `Stone.line` hairline as `FlatButtonStyle`, so the
-/// toolbar's field and the window's flat buttons read as one material, which is
-/// what they were meant to do as glass.
-///
-/// Drawn in `draw(_:)` rather than set as a `layer.backgroundColor` so the colours
-/// resolve against the *current* appearance every time: a `CGColor` is a resolved
-/// shade and would need re-setting on every Light/Dark switch.
-private final class FlatToolbarCapsule: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let radius = bounds.height / 2
-        let capsule = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25),
-                                  xRadius: radius, yRadius: radius)
-        NSColor(Stone.control).setFill()
-        capsule.fill()
-        NSColor(Stone.line).setStroke()
-        capsule.lineWidth = 0.5
-        capsule.stroke()
-    }
-}
-
 /// Classic AppKit application delegate. Keeps the app a regular (Dock-visible)
 /// app, applies the saved appearance and starts the storage housekeeping.
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -83,18 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Library.shared.flushDiskWrites()
     }
 
-    /// Where the toolbar's glass is flattened and the focused editor is told
-    /// whether to check spelling, once per update cycle.
+    /// Where the split view is policed and the focused editor is told whether to
+    /// check spelling, once per update cycle.
     ///
-    /// It has to be *repeated*, not done once at launch: AppKit rebuilds the platter
-    /// behind a toolbar item as the item changes — the search field expanding,
-    /// taking and losing focus — and on an appearance change or a second window.
+    /// It has to be *repeated*, not done once at launch: AppKit resets the split
+    /// view item as columns collapse and on a second window. (The toolbar's glass
+    /// was flattened and its title re-fonted here too, until the toolbar went in
+    /// September 2026.)
     ///
     /// `applicationDidUpdate` fires after each event, so this is on the hot path.
-    /// It's kept cheap by walking only the titlebar for the glass and the title (a
-    /// few dozen views, and the content view is skipped outright), by stopping the
-    /// sidebar walk at the first split view — which sits just inside the content
-    /// view — and by touching nothing already flat, already fonted or already
+    /// It's kept cheap by stopping the sidebar walk at the first split view — which
+    /// sits just inside the content view — and by touching nothing already
     /// constrained.
     ///
     /// Spell checking rides the same tick for a related reason: focus moves
@@ -102,199 +80,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// with no notification to hang it on — see `SpellChecking`, which reads the
     /// first responder and writes only what's about to change.
     func applicationDidUpdate(_ notification: Notification) {
-        Self.flattenToolbarGlass()
-        Self.restyleWindowTitle()
         Self.configureSplitViews()
         SpellChecking.applyToFocusedEditors()
     }
 
-    /// The windows the three window passes in `applicationDidUpdate` may restyle:
-    /// **the app's own, and no other.** One answer for all three, so a fourth pass
-    /// can't get the predicate wrong — which is what had happened.
-    /// `flattenToolbarGlass()` gated on the toolbar alone and so walked the
-    /// Settings titlebar that its two siblings skip by name.
+    /// The windows `applicationDidUpdate` may reach into: **the app's own, and no
+    /// other.** One predicate, so a second pass can't get it wrong — which is what
+    /// had happened when the toolbar pass gated on the toolbar alone.
     ///
-    /// A toolbar is what separates a window with chrome from the chromeless ones —
-    /// the menu-bar extra's window, every popover — which have no titlebar worth
-    /// walking and no column split view to police, and which `splitView(in:)`
-    /// would otherwise visit in full before answering nil, per event. Settings has
-    /// a toolbar and is excluded anyway, because none of the three has business
-    /// there: its title is a pane name, which is chrome rather than content; its
-    /// form is not the column split view; and its titlebar is the system's, so
-    /// whatever is drawn in it is not ours to flatten.
+    /// A title bar is what separates the document window from the chromeless ones —
+    /// the menu-bar extra's window, every popover, the command palette — which have
+    /// no column split view to police and which `splitView(in:)` would otherwise
+    /// visit in full before answering nil, per event. It used to be the toolbar,
+    /// and the main window has none since September 2026. Settings is titled and
+    /// is excluded by name, since its form is not the column split view.
     @MainActor
     private static var restylableWindows: [NSWindow] {
         NSApp.windows.filter {
-            $0.toolbar != nil && !SettingsWindowController.shared.owns($0)
+            $0.styleMask.contains(.titled) && !SettingsWindowController.shared.owns($0)
         }
-    }
-
-    /// Draws the toolbar's title — the selected project's name — in the chosen
-    /// card face, so the three column headings and the window's own title agree.
-    ///
-    /// It has to happen out here because that title is **not ours to style**:
-    /// `RootView` supplies it as a `String` through `.navigationTitle`, and AppKit
-    /// draws it in the titlebar. There is no SwiftUI modifier for its font, and the
-    /// obvious workarounds are both worse — hiding it and adding a `Text` in a
-    /// toolbar item costs the window its real title (menus, Window menu, Mission
-    /// Control, and the `titleVisibility` trap `RootView.WindowProbe` documents),
-    /// while interpolating the name into a toolbar item alongside gives two titles.
-    /// Re-fonting the field AppKit already made keeps the title a title.
-    ///
-    /// It rides `applicationDidUpdate` for the same reason `flattenToolbarGlass()`
-    /// does: AppKit rebuilds the titlebar as the toolbar lays out, the search field
-    /// expands and the title changes with the selection, and there is no
-    /// notification for any of it. Kept cheap the same way too — the content view
-    /// is skipped, so this walks a few dozen views, and it assigns nothing that is
-    /// already right.
-    ///
-    /// Three things keep it from touching what it shouldn't. **Search fields are
-    /// excluded** (`NSSearchField` is an `NSTextField` subclass, so it would
-    /// otherwise match, and the search field is meant to stay the system's — the
-    /// same exclusion `SpellChecking` makes for the same reason). **The Settings
-    /// window is excluded** by `restylableWindows`, since its toolbar has a pane
-    /// name of its own that is chrome, not content. And **only the size is
-    /// preserved, never set**: the weight is read off the font AppKit chose and
-    /// handed back, so this changes the face and nothing else. If no field
-    /// matches, nothing happens and the title keeps the system font — benign,
-    /// like the glass coming back.
-    ///
-    /// Nothing here is contractual, and that is the trade `flattenToolbarGlass()`
-    /// already makes: it matches on `NSTextField`, which is at least the class a
-    /// label is, and assumes no depth. If a macOS release draws the title some
-    /// other way, the title simply stays on the system font.
-    @MainActor
-    private static func restyleWindowTitle() {
-        let face = SettingsStore.shared.typeface
-        for window in restylableWindows {
-            guard let frame = window.contentView?.superview else { continue }
-            restyleTitles(in: frame, skipping: window.contentView, typeface: face)
-        }
-    }
-
-    @MainActor
-    private static func restyleTitles(
-        in view: NSView,
-        skipping content: NSView?,
-        typeface: Typeface
-    ) {
-        if view === content { return }
-        if let field = view as? NSTextField, !(field is NSSearchField) {
-            apply(typeface, to: field)
-        }
-        for subview in view.subviews {
-            restyleTitles(in: subview, skipping: content, typeface: typeface)
-        }
-    }
-
-    /// Swaps one label's family, keeping its size and weight.
-    ///
-    /// Idempotent by **comparing the resolved font to the one already set**, not by
-    /// remembering what has been done: the fields are AppKit's and get rebuilt, so
-    /// there is nothing durable to mark. Assigning on every tick would re-invalidate
-    /// the titlebar sixty times a second, so the comparison is what makes riding
-    /// `applicationDidUpdate` affordable.
-    ///
-    /// It settles after one pass for every option. Under a *system design* the
-    /// second pass resolves the design from the face it just set and gets the same
-    /// font back; under **Standard** it resolves to the plain system font, which is
-    /// what is already there, so the title is left alone — meaning Standard's one
-    /// stylistic difference from the chrome (the one-storey `a`) doesn't reach the
-    /// title. That is the right trade rather than a gap: the alternative is
-    /// assigning a same-named font forever to change one glyph in one short string.
-    @MainActor
-    private static func apply(_ typeface: Typeface, to field: NSTextField) {
-        guard let current = field.font else { return }
-        // The weight AppKit picked, read back off the descriptor rather than
-        // guessed: the window title is not the plain system weight, and resolving
-        // it as regular would make the title lighter as well as differently faced.
-        let traits = current.fontDescriptor.object(forKey: .traits)
-            as? [NSFontDescriptor.TraitKey: Any]
-        let weight = (traits?[.weight] as? CGFloat).map(NSFont.Weight.init(rawValue:))
-        let resolved = Card.nsFont(
-            size: current.pointSize, weight: weight, typeface: typeface, base: current)
-        if resolved.fontName != current.fontName {
-            field.font = resolved
-        }
-    }
-
-    /// Replaces the Liquid Glass platter behind the toolbar's search field with a
-    /// flat capsule, because the glass draws an elevation the window has nowhere
-    /// else (see the shadows note in CLAUDE.md).
-    ///
-    /// **This was the first of the three places in the app that reach past the
-    /// public API** — the others being `restyleWindowTitle()` above and
-    /// `SidebarVibrancy`, both of which borrow the reasoning below — and
-    /// what's worth knowing is *why it has to*. `NSGlassEffectView` is public in
-    /// macOS 26 and offers `cornerRadius`, `tintColor` and a `style` — and nothing
-    /// about elevation. The shadow isn't a `CALayer` shadow either: dumping the whole
-    /// titlebar's view *and* layer tree turned up no `shadowOpacity` anywhere in it
-    /// (the only shadowed layers in the app belong to the menu-bar extra's window),
-    /// so it's painted inside the glass renderer and there is nothing to switch off.
-    /// An earlier pass that zeroed every layer shadow in the titlebar therefore did
-    /// exactly nothing, which is how this got here.
-    ///
-    /// What makes it tractable is that the glass is a **platter behind the field, not
-    /// the field's background**: `NSToolbarPlatterView` holds the
-    /// `NSGlassEffectView`, while the field itself lives in a separate
-    /// `NSSearchToolbarItemView` under its own item viewer. So the platter can be
-    /// hidden and a flat capsule put in its place without touching the field, which
-    /// stays the system's — and keeps ⌘F, Escape-to-clear and the search item's
-    /// collapse behaviour that a hand-built `TextField` would have cost.
-    ///
-    /// The trade: **nothing here is contractual.** It matches on `NSGlassEffectView`,
-    /// which is at least public, and assumes no depth — but if a macOS release stops
-    /// putting a glass view behind the field, or renders the platter some other way,
-    /// the capsule simply doesn't get installed. That failure is visible and benign:
-    /// the glass, and its shadow, come back. Nothing crashes and nothing is lost.
-    ///
-    /// **The content view is skipped**, which is load-bearing rather than an
-    /// optimisation: the projects sidebar is Liquid Glass too, and it's meant to stay
-    /// glass. Only the titlebar band is touched — and only in the app's own window,
-    /// since `restylableWindows` keeps this off the Settings titlebar the same way
-    /// it keeps its two siblings off it.
-    @MainActor
-    private static func flattenToolbarGlass() {
-        for window in restylableWindows {
-            // The frame view owns both the titlebar container and the content view;
-            // start there and skip the latter.
-            guard let frame = window.contentView?.superview else { continue }
-            flattenGlass(in: frame, skipping: window.contentView)
-        }
-    }
-
-    @MainActor
-    private static func flattenGlass(in view: NSView, skipping content: NSView?) {
-        if view === content { return }
-        if let glass = view as? NSGlassEffectView {
-            replace(glass)
-            // Its subviews are the platter's own content holder, never the field's,
-            // so there's nothing below this worth walking.
-            return
-        }
-        for subview in view.subviews { flattenGlass(in: subview, skipping: content) }
-    }
-
-    /// Hides one glass platter and puts a `FlatToolbarCapsule` in its place, once.
-    ///
-    /// The capsule is a sibling rather than a subview of the glass: a hidden view
-    /// doesn't draw its children either, so anything parented to the platter would
-    /// go with it.
-    @MainActor
-    private static func replace(_ glass: NSGlassEffectView) {
-        guard let host = glass.superview else { return }
-        if !glass.isHidden { glass.isHidden = true }
-
-        if let existing = host.subviews.first(where: { $0 is FlatToolbarCapsule }) {
-            // The platter is re-laid-out as the field resizes; follow it. (The
-            // autoresizing mask covers the common case, this covers the rest.)
-            if existing.frame != glass.frame { existing.frame = glass.frame }
-            return
-        }
-
-        let capsule = FlatToolbarCapsule(frame: glass.frame)
-        capsule.autoresizingMask = [.width, .height]
-        host.addSubview(capsule, positioned: .below, relativeTo: glass)
     }
 
     /// Set once this install's sidebar has been moved to the current default width,
@@ -429,9 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// right kind of one: they become layout constraints, so a drag *stops* at the
     /// bound instead of snapping back from past it.
     ///
-    /// It rides `applicationDidUpdate` for the reason `flattenToolbarGlass()` does —
-    /// so a second window, or a SwiftUI update that resets the item, is covered
-    /// without needing to know when either happens. Whether once would do was not
+    /// It rides `applicationDidUpdate` — AppKit gives no notification for any of
+    /// this — so a second window, or a SwiftUI update that resets the item, is
+    /// covered without needing to know when either happens. Whether once would do was not
     /// established. It's idempotent by comparison rather than by remembering, since
     /// assigning a thickness re-runs the split view's layout.
     @MainActor
@@ -517,15 +321,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// path is removed instead: `mouseExited:` arrives through an `NSTrackingArea`,
     /// and a view with none gets no enter or exit at all. **The cost is deliberate**
     /// — hovering the leading edge no longer slides the collapsed projects column
-    /// out. Insert has a toolbar button, a menu item and ⌘§ for that, and a crash on
+    /// out. Insert has a header glyph, a menu item and ⌘§ for that, and a crash on
     /// the third click of a common gesture is worth more than an affordance.
     ///
-    /// It rides `applicationDidUpdate` for `flattenToolbarGlass()`'s reason: AppKit
+    /// It rides `applicationDidUpdate` because AppKit posts nothing for it: it
     /// builds the interactions view as a column collapses and re-adds its tracking
     /// areas from `updateTrackingAreas`, so this is repeated rather than done once.
     /// And it asks the split view for the view rather than matching a private class
     /// name down the hierarchy, so an AppKit that no longer has one is a no-op —
-    /// the same trade the toolbar's glass makes.
+    /// the same trade every reach past the public API here makes.
     @MainActor
     private static func disableSidebarPeek(in split: NSSplitView) {
         guard split.responds(to: collapsedInteractionsView),

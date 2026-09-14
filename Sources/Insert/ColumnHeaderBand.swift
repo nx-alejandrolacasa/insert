@@ -24,7 +24,10 @@ import SwiftUI
 /// identity surface now, and Grotesk being the default is most of what a new
 /// install's character *is*. Everything else in the chrome — chips, pills, the
 /// due badge, panel content — is unchanged.
-struct ColumnHeaderBand<Filters: View>: View {
+struct ColumnHeaderBand<Leading: View, Filters: View>: View {
+    /// What sits before the heading: the notes column's "show projects" glyph
+    /// while the sidebar is away, nothing otherwise.
+    @ViewBuilder let leading: Leading
     let title: String
     /// The column's "new" glyph, right after the heading: what it creates, the
     /// tooltip (which names the shortcut) and the action.
@@ -34,12 +37,33 @@ struct ColumnHeaderBand<Filters: View>: View {
     @ViewBuilder let filters: Filters
 
     @Environment(SettingsStore.self) private var settings
+    @Environment(AppState.self) private var appState
+
+    /// Where the band starts and how tall its heading row is, both measured in
+    /// the window's coordinates, so the inset that centres the row on the
+    /// traffic lights' line is derived rather than converged — the lights'
+    /// centre is itself measured a beat after the first layout, and a
+    /// converged value had settled against the seed by then.
+    @State private var bandTop: CGFloat = 0
+    @State private var rowHeight: CGFloat = Metrics.headerButtonSize
+
+    private var topInset: CGFloat {
+        max(0, appState.trafficLightCenterY - bandTop - rowHeight / 2)
+    }
 
     var body: some View {
         let band = settings.theme.band
 
+        // **The heading row sits on the title-bar line** (September 2026). With
+        // the toolbar empty, the band under it began below a blank strip the
+        // toolbar's height; the columns now ignore the top safe area and the
+        // heading row takes the place the toolbar's items had — centred on the
+        // traffic lights, level with the sidebar's glyphs — with the filter row
+        // under it as before. The sidebar's "Projects" stays where it was: that
+        // row can't hold a title between the lights and its three glyphs.
         VStack(spacing: Metrics.bandRowGap) {
             HStack(spacing: 10) {
+                leading
                 Text(title)
                     // `.title2` (17pt), the size the loose heading already
                     // used — the plan's 19pt is indicative, and this app's ramp
@@ -71,13 +95,19 @@ struct ColumnHeaderBand<Filters: View>: View {
 
                 Spacer(minLength: 0)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if abs(height - rowHeight) > 0.5 { rowHeight = height }
+            }
 
             filters
         }
         .padding(.horizontal, Metrics.panelPadding)
-        .padding(.top, Metrics.bandTopPadding)
+        .padding(.top, topInset)
         .padding(.bottom, Metrics.bandBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+            if abs(top - bandTop) > 0.5 { bandTop = top }
+        }
         // EXPERIMENT (September 2026, at the maintainer's request): the band
         // paints the **page ground** instead of its own fill, so the header
         // melts into the column behind it in every theme. The band's fill and
@@ -92,5 +122,20 @@ struct ColumnHeaderBand<Filters: View>: View {
         // The band is chrome for the column under it; VoiceOver should reach
         // the heading and the "+", not a container named "band".
         .accessibilityElement(children: .contain)
+    }
+}
+
+extension ColumnHeaderBand where Leading == EmptyView {
+    init(
+        title: String,
+        addLabel: String,
+        addHelp: String,
+        addAction: @escaping () -> Void,
+        @ViewBuilder filters: () -> Filters
+    ) {
+        self.init(
+            leading: { EmptyView() },
+            title: title, addLabel: addLabel, addHelp: addHelp, addAction: addAction, filters: filters
+        )
     }
 }

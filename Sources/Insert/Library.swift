@@ -1055,8 +1055,8 @@ final class Library {
         return table
     }
 
-    /// Case- and diacritic-insensitive substring match — the one rule all three
-    /// columns and the toolbar field search by.
+    /// Case- and diacritic-insensitive substring match — the one rule the
+    /// column filters and the command palette search by.
     ///
     /// `range(of:options:)` compares in place, where the `lowercased()` this
     /// replaces built a fresh copy of every record's title *and* body on every
@@ -1079,7 +1079,7 @@ final class Library {
         forProject projectID: UUID?,
         sort: NoteSort,
         typeFilter: String?,
-        search: String,
+        search: String = "",
         pinned: NotePins = NotePins()
     ) -> [Note] {
         var result = notes
@@ -1111,7 +1111,7 @@ final class Library {
         forProject projectID: UUID?,
         filter: TaskFilter,
         dateFilter: TaskDateFilter? = nil,
-        search: String,
+        search: String = "",
         pinned: TaskPins = TaskPins(),
         now: Date = Date()
     ) -> [TaskItem] {

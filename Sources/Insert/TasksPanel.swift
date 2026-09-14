@@ -5,8 +5,7 @@ import SwiftUI
 /// rendered as editable Liquid Glass rows.
 ///
 /// State ownership mirrors `NotesPanel`:
-/// - The state/search filter lives on `AppState` so it survives project
-///   switches and stays in sync with the toolbar search field.
+/// - The state filter lives on `AppState` so it survives project switches.
 /// - Per-task draft/editing state lives inside `TaskCardView`, reset per
 ///   identity (`.id(task.id)`), so unrelated rows never share focus or
 ///   half-typed edits. Which task is *open* for editing lives on
@@ -41,7 +40,6 @@ struct TasksPanel: View {
             forProject: appState.selectedProjectID,
             filter: appState.taskFilter,
             dateFilter: appState.taskDateFilter,
-            search: appState.searchText,
             pinned: pins,
             now: clock.today
         )
@@ -87,6 +85,11 @@ struct TasksPanel: View {
             .onReceive(NotificationCenter.default.publisher(for: .newTask)) { _ in
                 createTask(proxy: proxy)
             }
+            // The command palette posts this with the filters already cleared.
+            .onReceive(NotificationCenter.default.publisher(for: .revealTask)) { task in
+                guard let id = task.object as? UUID else { return }
+                reveal(id, proxy: proxy)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // The list re-sorts when you change what it's showing, and only then — the
@@ -97,7 +100,6 @@ struct TasksPanel: View {
         .onChange(of: appState.selectedProjectID) { pins = TaskPins() }
         .onChange(of: appState.taskFilter) { pins = TaskPins() }
         .onChange(of: appState.taskDateFilter) { pins = TaskPins() }
-        .onChange(of: appState.searchText) { pins = TaskPins() }
     }
 
     /// Creates a task in the current project, then scrolls to and opens it —
@@ -108,17 +110,22 @@ struct TasksPanel: View {
         // starts pending and undated, so Done and every date window would.
         if appState.taskFilter == .done { appState.taskFilter = .all }
         appState.taskDateFilter = nil
-        appState.searchText = ""
 
         let task = library.addTask(
             projectIDs: appState.selectedProjectID.map { [$0] } ?? []
         )
-        appState.selectedTaskID = task.id
+        reveal(task.id, proxy: proxy)
+    }
+
+    /// Opens a task and scrolls it into view — ⌘T's second half, and the whole
+    /// of what the palette asks for.
+    private func reveal(_ id: UUID, proxy: ScrollViewProxy) {
+        appState.selectedTaskID = id
         // Let the list rebuild before scrolling so the target row exists.
         Task {
             try? await Task.sleep(for: .milliseconds(60))
             withAnimation(motionReduced ? nil : .easeInOut(duration: 0.25)) {
-                proxy.scrollTo(task.id, anchor: .top)
+                proxy.scrollTo(id, anchor: .top)
             }
         }
     }
@@ -250,8 +257,7 @@ struct TasksPanel: View {
             // A blank panel should say what to do next. Only on the unfiltered
             // list: "all clear" and "nothing completed yet" are answers, not
             // dead ends, so they don't need prompting.
-            if !appState.isSearching && appState.taskFilter == .all
-                && appState.taskDateFilter == nil {
+            if appState.taskFilter == .all && appState.taskDateFilter == nil {
                 Button {
                     NotificationCenter.default.post(name: .newTask, object: nil)
                 } label: {
@@ -265,7 +271,6 @@ struct TasksPanel: View {
     }
 
     private var emptyMessage: String {
-        if appState.isSearching { return "No tasks match your search" }
         // With a date pill lit the message names the whole combination, so an
         // empty list under Done + Today reads as that filter's answer rather
         // than as "no tasks".

@@ -73,8 +73,7 @@ struct ProjectsSidebar: View {
             // this `List`, which paints its own opaque background on top of it
             // and stops the material at the divider.
             .scrollContentBackground(.hidden)
-            // ↑/↓ walk the same list the rows show, so keyboard and mouse agree
-            // even while a search is filtering it.
+            // ↑/↓ walk the same list the rows show, so keyboard and mouse agree.
             .focusable()
             .focusEffectDisabled()
             .onMoveCommand { direction in
@@ -84,9 +83,8 @@ struct ProjectsSidebar: View {
                 default: break
                 }
             }
-            // A row taken out of the list — deleted, or filtered away by the
-            // search — reports nothing on its way out and would leave its last
-            // frame behind. `gap(at:)` reads frames as current, so a stale one is
+            // A row taken out of the list — deleted — reports nothing on its way
+            // out and would leave its last frame behind. `gap(at:)` reads frames as current, so a stale one is
             // worse than none: it would place the pointer against a rectangle the
             // row no longer occupies.
             .onChange(of: Set(visibleProjects.map(\.id))) { _, ids in
@@ -200,15 +198,14 @@ struct ProjectsSidebar: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title-bar line: ＋ and the collapse control at the sidebar's
+            // Title-bar line: search and the collapse control at the sidebar's
             // trailing edge, as in Safari — "hide" belongs to the sidebar it
-            // hides, while "show" waits in the detail toolbar. These can't be
-            // real toolbar items: declared on the sidebar column, SwiftUI lays
-            // them out in the *detail* region and keeps them there when the
-            // sidebar collapses, doubling up with the "show" button. So they're
-            // content, centred on the traffic lights' measured centre line — the
-            // same line AppKit puts the window title and search field on. The
-            // spacer's minimum keeps them clear of the lights at any width.
+            // hides, while "show" waits in the notes band. There is no toolbar
+            // for them to be items of (September 2026), so they're content,
+            // centred on the traffic lights' measured centre line. The spacer's
+            // minimum keeps them clear of the lights at any width. (The "+" sat
+            // here too until the bands put theirs beside the heading; it is
+            // beside "Projects" now, so the three columns read the same.)
             ZStack(alignment: .topLeading) {
                 // Where this band actually starts, in the window's own
                 // coordinates. It is *not* the top of the window: the sidebar is a
@@ -223,7 +220,7 @@ struct ProjectsSidebar: View {
 
                 HStack(spacing: 2) {
                     Spacer(minLength: Metrics.trafficLightInset)
-                    addButton
+                    searchButton
                     hideButton
                 }
                 .padding(.top, buttonRowInset)
@@ -237,14 +234,18 @@ struct ProjectsSidebar: View {
             // point or two. This is the only place the typeface setting reaches
             // the sidebar, and it is here for the alignment, not for the theme:
             // the sidebar is otherwise untouched.
-            Text("Projects")
-                .font(Card.chrome(.title2, weight: .bold))
-                .padding(.leading, Metrics.sidebarTextInset)
-                .padding(.top, Metrics.bandTopPadding)
-                // The same gap the notes/tasks bands leave between their heading
-                // and their filter rows, so the three columns breathe
-                // identically.
-                .padding(.bottom, Metrics.bandRowGap)
+            // The bands' own row: heading, then a bare "+" at the same 10pt.
+            HStack(spacing: 10) {
+                Text("Projects")
+                    .font(Card.chrome(.title2, weight: .bold))
+                addButton
+            }
+            .padding(.leading, Metrics.sidebarTextInset)
+            .padding(.top, Metrics.bandTopPadding)
+            // The same gap the notes/tasks bands leave between their heading
+            // and their filter rows, so the three columns breathe
+            // identically.
+            .padding(.bottom, Metrics.bandRowGap)
         }
         .padding(.trailing, Metrics.panelPadding)
     }
@@ -301,7 +302,7 @@ struct ProjectsSidebar: View {
         max(0, appState.trafficLightCenterY - bandTop - Metrics.headerButtonSize / 2)
     }
 
-    /// Collapses the sidebar. Same glyph and shortcut as the detail toolbar's
+    /// Collapses the sidebar. Same glyph and shortcut as the notes band's
     /// "show", so the pair reads as one control that moves with the sidebar —
     /// plain rather than a glass circle: it sits on the sidebar's own material,
     /// where a second surface would fight it.
@@ -313,16 +314,30 @@ struct ProjectsSidebar: View {
         } label: {
             Image(systemName: "sidebar.left")
         }
-        .buttonStyle(.headerGlyph)
+        .buttonStyle(.headerAddGlyph)
         .help("Hide projects (⌘§)")
         // `.help` becomes an accessibility *hint*, not a label — without this the
         // button is announced with no name at all.
         .accessibilityLabel("Hide projects")
     }
 
+    /// Opens the command palette — the app's search, since the toolbar field
+    /// went (September 2026). A glyph beside the other two, in the neutral role:
+    /// it creates nothing.
+    private var searchButton: some View {
+        Button {
+            CommandPalette.shared.toggle()
+        } label: {
+            Image(systemName: "magnifyingglass")
+        }
+        .buttonStyle(.headerAddGlyph)
+        .help("Search (⌘K)")
+        .accessibilityLabel("Search")
+    }
+
     /// Add. Matches `hideButton` beside it — two glyphs of one weight, the way
-    /// Safari pairs its own sidebar controls — and the toolbar's two "new"
-    /// glyphs at the other end of the same row (`HeaderGlyphButtonStyle`).
+    /// Safari pairs its own sidebar controls — and the bands' "new" glyphs
+    /// (`HeaderGlyphButtonStyle`).
     private var addButton: some View {
         Button {
             showingAdd = true
@@ -449,20 +464,15 @@ struct ProjectsSidebar: View {
     }
 
     /// Drags one project into another position. Nothing is written until the drag
-    /// ends, and nothing at all while searching, where the rows on screen are a
-    /// subset: "above this row" would jump the project over rows the search is
-    /// hiding, and the end of the list isn't visible to aim at.
+    /// ends.
     private func reorderGesture(_ project: Project) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { value in
-                guard !appState.isSearching else { return }
                 dragging = project.id
                 dropGap = gap(at: value.location.y, moving: project.id)
             }
             .onEnded { value in
-                let landing = appState.isSearching
-                    ? nil
-                    : gap(at: value.location.y, moving: project.id)
+                let landing = gap(at: value.location.y, moving: project.id)
                 dragging = nil
                 dropGap = nil
                 // Animated because this one *is* a move: the same rows in a new
@@ -563,16 +573,14 @@ struct ProjectsSidebar: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: appState.isSearching ? "magnifyingglass" : "square.stack.3d.up.slash")
+            Image(systemName: "square.stack.3d.up.slash")
                 .font(.largeTitle)
                 .foregroundStyle(.tertiary)
                 // Decorative — the two lines below carry the message.
                 .accessibilityHidden(true)
-            Text(appState.isSearching ? "No matching projects" : "No projects yet")
+            Text("No projects yet")
                 .font(.callout.weight(.medium))
-            Text(appState.isSearching
-                 ? "Try a different search."
-                 : "Create your first project with the ＋ button above.")
+            Text("Create your first project with the ＋ button above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -583,14 +591,8 @@ struct ProjectsSidebar: View {
 
     // MARK: - Derived data
 
-    /// Projects in their manual (drag-and-drop) order, narrowed to the live
-    /// search when active.
-    private var visibleProjects: [Project] {
-        let ordered = library.projects
-        guard appState.isSearching else { return ordered }
-        let query = appState.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return ordered.filter { $0.name.lowercased().contains(query) }
-    }
+    /// Projects in their manual (drag-and-drop) order.
+    private var visibleProjects: [Project] { library.projects }
 
     private var everythingSubtitle: LocalizedStringKey {
         countsLabel(notes: library.notes.count, tasks: library.tasks.count)
@@ -916,9 +918,9 @@ private struct ProjectEditorPopover: View {
 /// surface into the blur, which mostly reads as the material getting weaker and
 /// dirtier. The material's own translucency is the transparency now.
 ///
-/// This is the third of the three places in Insert that reach past the public API,
-/// and for the same kind of reason as the first
-/// (`AppDelegate.flattenToolbarGlass()`): the material belongs to
+/// This is one of the places in Insert that reach past the public API (the
+/// toolbar's glass was the first, until the toolbar went), and for the same kind
+/// of reason: the material belongs to
 /// `NavigationSplitView`'s sidebar column, which is AppKit's view and not ours,
 /// and SwiftUI exposes no way to reach the property. A zero-size probe in the
 /// sidebar's `.background` walks **up** to the enclosing effect view and sets one.

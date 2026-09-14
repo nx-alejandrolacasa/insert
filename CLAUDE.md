@@ -85,7 +85,10 @@ dmg.sh                        package build/Insert.app into a distributable DMG
 Sources/Insert/
   InsertApp.swift             @main App: WindowGroup + MenuBarExtra + Settings
   AppDelegate.swift           regular activation policy + task housekeeping
-  RootView.swift              3-column layout, toolbar, search, ⌘§ sidebar toggle
+  RootView.swift              3-column layout, ⌘K / ⌘§ key monitor, window probe
+  CommandPalette.swift        the command palette: ⌘K, the sidebar's magnifier and
+                              Edit → Search… open one key child panel that lists
+                              commands, projects, notes and tasks
   ProjectsSidebar.swift       left column: projects list, add/edit/delete/reorder,
                               SidebarVibrancy (see-through to the window)
   NotesPanel.swift            center: note islands, type pills, sort/filter, edit
@@ -749,9 +752,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   — hairlines 0.18→0.45, washes up a step, `metaText` most of the way to the
   label colour — because the solved fills alone barely moved and the switch
   looked like it did nothing.
-- **Layout** — the projects sidebar is collapsible (toolbar button or ⌘ + the
-  leftmost key of the number row: ANSI grave, keyCode 50, or ISO section,
-  keyCode 10). **With it hidden, the width it frees goes to notes alone** — the
+- **Layout** — the projects sidebar is collapsible (the header glyph — in the
+  sidebar to hide, in the notes band to show — or ⌘ + the leftmost key of the
+  number row: ANSI grave, keyCode 50, or ISO section, keyCode 10). **With it hidden, the width it frees goes to notes alone** — the
   tasks column keeps the width it had, because the point of collapsing the
   sidebar is more room for the writing, and a proportional split moved the tasks
   column out from under the pointer to widen a list nobody asked to widen. So
@@ -890,10 +893,11 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the action was never tied to the control. What the change costs, knowingly: the
   theme's `primary` loses its largest surface at rest, surviving on the rings,
   the checkbox, the caret, the active date pill and the tasks column's empty-state
-  prompt (`AccentButtonStyle`'s one remaining user). The toolbar's trailing side
-  is the search field alone.
-- **The toolbar's leading side is the show button and AppKit's own title, and
-  nothing else.** A project icon sat between them from an earlier design and was
+  prompt (`AccentButtonStyle`'s one remaining user). (The toolbar's trailing side
+  was the search field alone, until the toolbar went.)
+- **(Superseded — the toolbar is gone; see the palette bullet. Kept for the
+  spacing episode.) The toolbar's leading side was the show button and AppKit's
+  own title, and nothing else.** A project icon sat between them from an earlier design and was
   **removed**, along with every attempt to space it: the whole episode is kept
   because each attempt failed in a way that is worth not repeating.
   Spacing it as its own `ToolbarItem` needs a negative inset, and a negative inset
@@ -935,8 +939,88 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   into (the one-item arrangement above) rather than that view's root, which is the
   only reason the same degenerate value had been survivable before. At 0.01 the
   button is equally invisible — `opacity` is the same 0 — and the matrix inverts.
-- **Search** — the toolbar field filters all three columns at once (projects,
-  notes and tasks), not just the focused one.
+- **The toolbar is empty, and search is a command palette** (September 2026).
+  The toolbar holds one **fixed** `ToolbarSpacer` at `.primaryAction` and
+  `.toolbar(removing: .title)`, with
+  no `.navigationTitle` and its background hidden as before — so the title-bar
+  row is still there, transparent, with the traffic lights and the sidebar's
+  glyphs on it, and nothing else. **Hiding the toolbar outright was tried
+  first and failed on sight**: `.toolbarVisibility(.hidden, for:
+  .windowToolbar)` took the whole title-bar row away — the traffic lights
+  vanished and the sidebar pane dropped below an empty 48pt strip — and the
+  spacer exists to keep AppKit from doing the same to an item-less toolbar.
+  The mechanism was not instrumented; the screenshot is the finding. **The
+  columns then ignore the top safe area**, and `ColumnHeaderBand`'s heading row
+  centres itself on `trafficLightCenterY` (measured in window coordinates, the
+  sidebar glyph row's own trick), so "Notes +" and "Tasks +" sit on the
+  title-bar line level with the sidebar's glyphs and the filter row follows as
+  before — otherwise an empty toolbar left its full height blank above both
+  columns. Putting heading and filters on one row was tried and reversed by
+  request; the sidebar's "Projects" stays below its glyph row, since that row
+  can't hold a title between the lights and three glyphs.
+  **"Notes +" was dead while "Tasks +" worked, and the cause was measured, not
+  the title bar.** A dev-only probe dumped the title-bar view tree and a
+  `hitTest` sweep along the heading line to `/tmp/insert-titlebar.log`. Over
+  the notes column the click landed on an `NSClipView < HostingScrollView`,
+  and the scroll-view list named it: the notes **type filter's horizontal
+  `ScrollView`** — the first scroll view in the detail — whose platform view
+  measured **79pt tall from the window's top edge**, the whole band over a
+  one-row track, so it sat on the heading row and took the click. Neither
+  `fixedSize(horizontal: false, vertical: true)` nor
+  `scrollEdgeEffectStyle(.none, for: .top)` moved that frame by a point. The
+  tasks filter is a `ViewThatFits` that picks a plain `HStack` at any normal
+  width, which is why its `+` never failed; the notes filter now has the same
+  shape (`typeFilter`: the track alone while it fits, the scroller only when
+  the column is too narrow, leading-aligned since `ViewThatFits` centres a
+  narrower child). **Why the platform scroll view outgrows its layout was not
+  established**, and the narrow-column case inherits it. Three guesses made
+  before the probe — hiding `NSToolbarView`, `allowsFullHeightLayout` on the
+  detail's split item, a flexible→fixed spacer — changed nothing measurable
+  and were reverted; the flexible spacer was left as fixed because it is the
+  smaller item. The lesson is the one this file keeps relearning: **when the
+  app can't be launched from the agent shell, write the hit test to a file
+  before changing anything.** What the
+  toolbar used to hold went three ways: the
+  search field became `CommandPalette`; the "show projects" button sits at the
+  **leading end of the notes band** while the sidebar is collapsed
+  (`ColumnHeaderBand`'s `leading` slot, `NotesPanel.showSidebarButton`, the
+  sidebar's own hide glyph in the neutral header style, fading in the slide's
+  transaction); and the window title is gone from view, so
+  `restyleWindowTitle()`, `flattenToolbarGlass()` and `FlatToolbarCapsule` went
+  with it. `AppDelegate.restylableWindows` keys on `.titled` rather than on a
+  toolbar, which is the more honest predicate either way.
+  **The palette** opens on ⌘K anywhere but a Markdown body (the `RootView`
+  monitor's stand-down for "insert link" is unchanged), from the magnifier
+  beside the sidebar's hide glyph, and from Edit → Search…. (The sidebar's own
+  `+` left that title-bar row for a slot beside "Projects", so all three
+  headings carry their `+` the same way; the row holds search and hide alone.)
+  It is a **key child
+  `NSPanel`** for `FormattingBarPanel`'s reason — the card previews and titles
+  are platform views and would draw over an overlay — on the theme's **card
+  face**, opaque, with a 1pt edge and the system's window shadow (see the
+  shadows bullet for why it is the one exception; glass over two columns of
+  cards read as washed into them), centred under the title bar and resized from the
+  content's own measured height with its top edge held. A local `NSEvent`
+  monitor answers ↑/↓, Return and Esc for events aimed at the panel only; the
+  field editor would otherwise keep the arrows for the caret. Resigning key —
+  a click anywhere else — closes it. **With nothing typed it lists the
+  commands** (New Note / Task / Project, Show or Hide Projects, Settings…);
+  typing lists matching commands, then projects, notes and tasks from
+  `Library.search`, eight per kind. Return on a project selects it; on a note
+  or task it first clears whatever would hide it — another project, a type
+  filter, a state or date window that the record fails — then posts
+  `.revealNote` / `.revealTask` (the latter new, `TasksPanel.reveal`, which
+  `createTask` now shares). It closes *before* performing, so the reveal
+  focuses a card in the window that has the keyboard back.
+  **The columns no longer filter as you type.** `AppState.searchText` and
+  `isSearching` are gone, with the search-aware empty states, the pins' reset on
+  search and the sidebar's reorder-while-searching guard; `Library.notes(…,
+  search:)` / `tasks(…, search:)` keep the parameter (default `""`) because
+  `StorageLayoutTests` pins the matching rule through them and the palette's
+  `search(_:)` shares it. That is the trade, stated: a query used to narrow
+  three lists in place, and now it lists results in one place and takes you to
+  one. Not verified in a running app: that `@FocusState` lands in the freshly
+  key panel (`focusField()` is the AppKit fallback).
 - **Projects** — each row shows its emoji, name and a live `X notes · Y tasks`
   subtitle. **The order is the user's own**: rows are dragged into place, and
   `Projects.md`'s line order *is* that order, so there is no sort control and
@@ -2743,7 +2827,7 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the gradient — and gave it up with the gradients; a flat colour has nothing to
   refract. AppKit's own sidebar material is still there, and is the system's, not
   ours.) Those plus
-  the toolbar's search field are the window's glass surfaces, and they're meant
+  the command palette are the window's glass surfaces, and they're meant
   to read as the same material; don't give one of them a `Material` and call it
   close enough.
   **Primary buttons are colour pills again** (`AccentButtonStyle`), and that is
@@ -2761,9 +2845,15 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `.glassProminent` survives only on each popover's confirm
   button, which `.tint()` now paints in the theme's primary rather than system
   blue.
-- **No shadows, anywhere.** Not a gap: the window is deliberately flat, the look it
+- **No shadows, anywhere — with one exception, the command palette.** Not a
+  gap: the window is deliberately flat, the look it
   wears when it goes inactive and every glass surface settles down, which is the
-  look it's tuned for. Separation is a **hairline** (`Stone.line`) plus, on glass,
+  look it's tuned for. The palette is a *transient window over* the content,
+  the same lifted object a menu is, and without a shadow it read as "diluted"
+  into the cards it floats over (September 2026, by request) — so it carries the
+  **system's window shadow** (`hasShadow`, not a `.shadow(…)` of ours), an opaque
+  card face rather than glass, a 1pt edge at 18%, and keycap shortcuts. The
+  rule below is about the window's own surfaces and is unchanged by it. Separation is a **hairline** (`Stone.line`) plus, on glass,
   the material's own refraction — that's what `.island()` swapped its shadow for and
   what the `@project` dropdown and the column-divider handle now use too. There is
   no elevation scale to add a level to, and adding one lifted element would make it
@@ -2781,12 +2871,14 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   pads its label off `.controlSize`, `.toolbarGlyph` pins a square 28pt, because a
   padded lone glyph comes out an oval rather than the circle the toolbar rounds one
   to.
-  The toolbar's **search field stays the system's** (`.searchable(placement:
-  .toolbar)`) — a hand-built field costs ⌘F, Escape-to-clear and the search item's
-  collapse behaviour — so its glass is dealt with in AppKit instead, by
-  `AppDelegate.flattenToolbarGlass()`, the first of the four places in the app that
-  reach past the
-  public API. What's worth knowing:
+  **(Historical — the toolbar and its search field are gone; the palette is
+  the search. Kept because the finding about where the glass shadow lives is
+  worth not rediscovering.)** The toolbar's search field stayed the system's
+  (`.searchable(placement: .toolbar)`) — a hand-built field costs ⌘F,
+  Escape-to-clear and the search item's collapse behaviour — so its glass was
+  dealt with in AppKit instead, by `AppDelegate.flattenToolbarGlass()`, the
+  first of the places in the app that reached past the public API. What was
+  worth knowing:
   its shadow is **not a `CALayer` shadow**. Dumping the whole titlebar's view *and*
   layer tree found no `shadowOpacity` anywhere in it — the only shadowed layers in
   the app belong to the menu-bar extra — so it's painted inside the glass renderer,

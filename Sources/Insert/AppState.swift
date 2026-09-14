@@ -2,7 +2,7 @@ import Observation
 import SwiftUI
 
 /// Transient, window-level UI state shared across the three panels and the
-/// toolbar. Not persisted (except where it seeds from `SettingsStore`).
+/// command palette. Not persisted (except where it seeds from `SettingsStore`).
 @MainActor
 @Observable
 final class AppState {
@@ -19,12 +19,9 @@ final class AppState {
     /// `nil` means every task row is in its compact read-only shape.
     var selectedTaskID: UUID?
 
-    /// Whether the projects sidebar is visible (toggled from the toolbar or
-    /// the ⌘§ shortcut).
+    /// Whether the projects sidebar is visible (toggled from the header glyphs,
+    /// the palette or the ⌘§ shortcut).
     var sidebarVisible: Bool = true
-
-    /// Global search text — filters notes, projects and tasks at once.
-    var searchText: String = ""
 
     /// The one note type on show, or `nil` for all of them. Single-select like
     /// the tasks column's All / Pending / Done — the pill rows are the same
@@ -40,20 +37,16 @@ final class AppState {
 
     /// Measured height of the window's title-bar + toolbar region (see
     /// `WindowConfigurator`). The sidebar header matches it so its title lands
-    /// on exactly the same centre line as the traffic lights, instead of a
-    /// hard-coded guess that drifts with the toolbar style.
-    var titlebarHeight: CGFloat = 52
+    /// level with the columns' headings, instead of a hard-coded guess that
+    /// drifts with the toolbar style.
+    var titlebarHeight: CGFloat = Metrics.titlebarHeight
 
     /// Vertical centre of the traffic lights, measured down from the top of the
-    /// window's content view — the line AppKit also puts the window title and
-    /// toolbar controls on. The sidebar's own buttons align to *this* rather than
-    /// to the middle of `titlebarHeight`: with a unified toolbar the band is
-    /// taller than the lights' row, so centring in the band sits them too low.
+    /// window's content view — the line AppKit puts toolbar controls on. The
+    /// sidebar's own buttons align to *this* rather than to the middle of
+    /// `titlebarHeight`: with a unified toolbar the band is taller than the
+    /// lights' row, so centring in the band sits them too low.
     var trafficLightCenterY: CGFloat = 20
 
     private init() {}
-
-    var isSearching: Bool {
-        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
 }

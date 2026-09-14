@@ -39,7 +39,6 @@ struct NotesPanel: View {
             forProject: appState.selectedProjectID,
             sort: settings.noteSort,
             typeFilter: appState.noteTypeFilter,
-            search: appState.searchText,
             pinned: pins
         )
 
@@ -51,6 +50,7 @@ struct NotesPanel: View {
                 // notification the reader below listens for, so it focuses the
                 // new note exactly as ⌘N does.
                 ColumnHeaderBand(
+                    leading: { showSidebarButton },
                     title: "Notes",
                     addLabel: "New note",
                     addHelp: "New note (⌘N)",
@@ -110,8 +110,34 @@ struct NotesPanel: View {
         // its new place is invisible rather than a card jumping under your eye.
         .onChange(of: appState.selectedProjectID) { pins = NotePins() }
         .onChange(of: appState.noteTypeFilter) { pins = NotePins() }
-        .onChange(of: appState.searchText) { pins = NotePins() }
         .onChange(of: settings.noteSort) { pins = NotePins() }
+    }
+
+    // MARK: - Show sidebar
+
+    /// "Show projects", in the band while the sidebar is collapsed. It lived in
+    /// the toolbar until the toolbar went (September 2026); here it is the
+    /// sidebar's own hide glyph, moved to the column that took the width, and it
+    /// fades in the same transaction the column slides in.
+    @ViewBuilder
+    private var showSidebarButton: some View {
+        if !appState.sidebarVisible {
+            Button {
+                NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .buttonStyle(.headerAddGlyph)
+            .help("Show projects (⌘§)")
+            .accessibilityLabel("Show projects")
+            // With the sidebar away the traffic lights sit over this column's
+            // corner, so the row starts past them — the sidebar header's own
+            // inset, less the band's horizontal padding it already has, plus a
+            // little more breathing room than the glyph-beside-glyph sidebar row
+            // needs, since the heading follows.
+            .padding(.leading, Metrics.trafficLightInset - Metrics.panelPadding + 8)
+            .transition(.opacity)
+        }
     }
 
     // MARK: - Type filter
@@ -130,21 +156,42 @@ struct NotesPanel: View {
     /// theme value: the four types are the same four in every theme, and not `ink`
     /// either, which is the *text* value (see `Tint.accent` for the split).
     private func typeFilter(count: Int) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            SegmentedFilter<String?>(
-                segments: [SegmentedFilter.Segment(id: nil, label: "All")]
-                    + settings.noteTypes.map {
-                        SegmentedFilter.Segment(
-                            id: $0.id,
-                            label: $0.name,
-                            dot: $0.tint.accent)
-                    },
-                selection: appState.noteTypeFilter,
-                count: count,
-                onSelect: { appState.noteTypeFilter = $0 }
-            )
-            .padding(.vertical, 1)
+        // The track alone while it fits, and a sideways scroller only when the
+        // column is too narrow — the tasks column's arrangement. Measured with a
+        // dev-only hit-test probe (since removed; see CLAUDE.md): an always-on horizontal `ScrollView` here was the
+        // **first scroll view in the detail**, and its platform scroll view
+        // came out 79pt tall from the window's top edge — the whole band, over
+        // a one-row track — so it sat on the heading row and took every click
+        // meant for "Notes +". `fixedSize` and `scrollEdgeEffectStyle(.none)`
+        // changed nothing about that frame; the tasks column, whose
+        // `ViewThatFits` picks a plain `HStack` at this width, never had the
+        // problem. Why the platform view outgrows its layout was not
+        // established; it is logged rather than fixed, and the narrow case
+        // inherits it.
+        ViewThatFits(in: .horizontal) {
+            typeTrack(count: count)
+            ScrollView(.horizontal, showsIndicators: false) {
+                typeTrack(count: count)
+            }
         }
+        // `ViewThatFits` centres a child narrower than itself; the track leads.
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func typeTrack(count: Int) -> some View {
+        SegmentedFilter<String?>(
+            segments: [SegmentedFilter.Segment(id: nil, label: "All")]
+                + settings.noteTypes.map {
+                    SegmentedFilter.Segment(
+                        id: $0.id,
+                        label: $0.name,
+                        dot: $0.tint.accent)
+                },
+            selection: appState.noteTypeFilter,
+            count: count,
+            onSelect: { appState.noteTypeFilter = $0 }
+        )
+        .padding(.vertical, 1)
     }
 
     // MARK: - Empty state
@@ -166,7 +213,6 @@ struct NotesPanel: View {
     }
 
     private var emptyMessage: String {
-        if appState.isSearching { return "No notes match your search" }
         if appState.noteTypeFilter != nil { return "No notes of this type" }
         return "No notes yet"
     }
@@ -176,12 +222,10 @@ struct NotesPanel: View {
     /// Creates a note in the current project, then scrolls to and focuses it.
     private func createNote(proxy: ScrollViewProxy) {
         // Anything that would hide the new note gets out of the way first: it
-        // is born as the default type, so any other type filter would swallow
-        // it, and an empty note matches no search.
+        // is born as the default type, so any other type filter would swallow it.
         if appState.noteTypeFilter != nil && appState.noteTypeFilter != NoteType.noteID {
             appState.noteTypeFilter = nil
         }
-        appState.searchText = ""
 
         let note = library.addNote(
             type: settings.noteType(id: NoteType.noteID),

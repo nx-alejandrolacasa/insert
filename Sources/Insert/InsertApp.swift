@@ -58,6 +58,13 @@ struct InsertApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             SidebarCommands()
+            // The palette is the app's search. ⌘K here is the menu's copy of
+            // the shortcut; `RootView`'s monitor answers the key itself, and
+            // stands down in a Markdown body, where ⌘K inserts a link.
+            CommandGroup(after: .textEditing) {
+                Button("Search…") { CommandPalette.shared.toggle() }
+                    .keyboardShortcut("k", modifiers: .command)
+            }
             // Settings lives in an AppKit window (full-height sidebar, see
             // SettingsWindowController), so ⌘, opens that instead of a scene.
             CommandGroup(replacing: .appSettings) {
@@ -100,5 +107,7 @@ extension Notification.Name {
     /// to it and open it". Posted by a card's Duplicate, which has no
     /// `ScrollViewProxy` of its own; only `NotesPanel` does.
     static let revealNote = Notification.Name("insert.revealNote")
+    /// A task's `UUID`, for the command palette: "scroll to it and open it".
+    static let revealTask = Notification.Name("insert.revealTask")
     static let toggleSidebar = Notification.Name("insert.toggleSidebar")
 }

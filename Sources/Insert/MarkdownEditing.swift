@@ -876,7 +876,7 @@ final class MarkdownTextView: NSTextView {
 /// both be open at once, and an ancestor holding several editors means the walk
 /// has gone past the card, so it stops rather than guessing. No match is a no-op
 /// and the caller falls back to the `@FocusState` route, which is the discipline
-/// `AppDelegate.flattenToolbarGlass()` follows for the same kind of reach.
+/// every reach past the public API here follows (`SidebarVibrancy`, say).
 @MainActor
 enum CardFocus {
     /// Focuses the Markdown editor sharing a card with whatever is focused now.

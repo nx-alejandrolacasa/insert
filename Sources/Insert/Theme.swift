@@ -342,8 +342,7 @@ enum Stone {
     /// control-background colour, with a matching lifted warm dark. **Solid**,
     /// unlike `surface`/`chip`: a button should sit the same on every card and
     /// tint, where the translucent washes take the colour of whatever is
-    /// behind them. Worn by `FlatButtonStyle` and the search field's
-    /// `FlatToolbarCapsule`, which are meant to read as one material.
+    /// behind them. Worn by `FlatButtonStyle`.
     static let control = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor(srgbRed: 0.173, green: 0.169, blue: 0.163, alpha: 1)
@@ -468,9 +467,9 @@ enum Card {
         return nsFont(size: base.pointSize * scale, weight: weight, typeface: typeface, base: base)
     }
 
-    /// The same face at an **explicit point size**, for the one caller that has a
-    /// size rather than a text style: `AppDelegate.restyleWindowTitle()`, which
-    /// re-fonts a title AppKit has already sized and must not resize it.
+    /// The same face at an **explicit point size** — the style overload above
+    /// resolves through it. (It also re-fonted the window title, until the
+    /// toolbar went in September 2026.)
     ///
     /// `base` is the font to start from when the typeface is a system design —
     /// the style's `preferredFont` where there is one, so a card keeps tracking
@@ -482,10 +481,8 @@ enum Card {
         base: NSFont? = nil
     ) -> NSFont {
         // Memoised: the descriptor work below is a CoreText match, and this is
-        // asked per card per render — and per event by
-        // `AppDelegate.restyleWindowTitle()`. `base` only ever contributes its
-        // face (a `preferredFont` or the titlebar's own field font), so its name
-        // plus the explicit size identifies it.
+        // asked per card per render. `base` only ever contributes its face (a
+        // `preferredFont`), so its name plus the explicit size identifies it.
         let key = FontKey(size: size, weight: weight?.rawValue,
                           typeface: typeface, base: base?.fontName)
         return resolvedFonts.value(for: key) {
@@ -664,7 +661,9 @@ enum Metrics {
     static let minPanelWidth: CGFloat = 320
     // The sidebar has to fit a project name plus its "X notes · Y tasks"
     // subtitle without crowding, so it opens comfortably wide by default.
-    /// Height of the window's title-bar row, which the sidebar header sits in.
+    /// Height of the window's title-bar row (the empty unified toolbar), which
+    /// the sidebar header sits in. Measured live by `WindowProbe`; this is the
+    /// seed for the first frame.
     static let titlebarHeight: CGFloat = 52
     /// Leading inset that clears the close/minimise/zoom buttons.
     static let trafficLightInset: CGFloat = 80
@@ -829,9 +828,8 @@ struct TintPicker: View {
 /// own code passes `.shadow(…)` any more, and this is where the last of it would
 /// have crept back in.
 ///
-/// So: `Stone.control` and `Stone.line`, exactly what `AppDelegate`'s
-/// `FlatToolbarCapsule` paints behind the search field — the flat world's
-/// version of "these surfaces are one material". Hover is a `.primary`
+/// So: `Stone.control` and `Stone.line` — the flat world's version of "these
+/// surfaces are one material". Hover is a `.primary`
 /// wash — the state plain glass never gave them, and `.primary` rather than the
 /// accent for the `.glassProminent` reason above. A press deepens that wash instead
 /// of scaling: with no material left to respond, the fill is the only thing that
@@ -910,7 +908,7 @@ extension ButtonStyle where Self == FlatButtonStyle<Capsule> {
 /// The filled capsule a primary action wears — the theme's `primary` fill under
 /// its `primaryLabel`. It dressed each column band's "New Note" / "New Task"
 /// until September 2026, when those became bare "+" glyphs beside the count
-/// (`headerGlyph`); the tasks column's empty-state prompt still wears it.
+/// (`headerAddGlyph`); the tasks column's empty-state prompt still wears it.
 ///
 /// This *reverses* the earlier retreat from `.glassProminent`, knowingly. The
 /// prominence went because system blue was drawn from neither `Tint` nor the
@@ -970,12 +968,6 @@ extension ButtonStyle where Self == AccentButtonStyle {
     static var accentCapsule: Self { .init() }
 }
 
-extension ButtonStyle where Self == FlatButtonStyle<Circle> {
-    /// A lone toolbar glyph, at the diameter AppKit rounds one to: the show
-    /// button, which brings its own background for its fade's sake.
-    static var toolbarGlyph: Self { .init(shape: Circle(), sizing: .square(28)) }
-}
-
 /// A bare header glyph — the sidebar's "+" and hide button, and the "+" beside
 /// each column band's count: one weight, `.secondary`, no surface of its own.
 /// A glyph in a filled circle on the page ground read as a chip beside the
@@ -983,14 +975,16 @@ extension ButtonStyle where Self == FlatButtonStyle<Circle> {
 /// `.title3` *is* 15pt on macOS, so it tracks the system text size while looking
 /// the same as the fixed size it replaced.
 ///
-/// At rest it is only the glyph; on **hover** the whole circle `toolbarGlyph`
-/// wears at rest comes up under it (`Stone.control` and its hairline), and a press
+/// At rest it is only the glyph; on **hover** a circle comes up under it
+/// (`Stone.control` and its hairline), and a press
 /// deepens the wash the way `FlatButtonStyle` does. The circle is the frame's
 /// width and overflows its 22pt height by 2pt each way as a background, so the
 /// header rows keep their measured height and the disc still reads whole.
 ///
-/// Two roles. **Neutral** is the hide button: `.secondary` glyph, and the disc
-/// is `Stone.control` under a `.primary` wash. **Accent** is every "add" — the
+/// Two roles, and since September 2026 every header glyph — search, hide and
+/// show as well as the three "+" — wears **accent**, by request: one colour for
+/// the row. **Neutral** (`.secondary` glyph, `Stone.control` disc under a
+/// `.primary` wash) is kept as the alternative. **Accent** is the
 /// theme's action colour, which the band's "New Note" / "New Task" pills used to
 /// wear as a fill: at rest the glyph draws in `theme.ring` (the primary solved to
 /// 3:1 on a card, since a pale accent like Nuevo Tokyo's is 1.66:1 as a lone
@@ -1063,9 +1057,7 @@ struct HeaderGlyphButtonStyle: ButtonStyle {
 }
 
 extension ButtonStyle where Self == HeaderGlyphButtonStyle {
-    /// A neutral header glyph (the sidebar's hide button).
-    static var headerGlyph: Self { .init(role: .neutral) }
-    /// An "add" glyph in the theme's action colour (the three `+` buttons).
+    /// Every header glyph, in the theme's action colour.
     static var headerAddGlyph: Self { .init(role: .accent) }
 }
 
