@@ -2444,7 +2444,13 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   - **The column-divider drag commits on release.** Mid-drag the split lives in
     `RootView.liveSplit` (`@State`); writing the `@AppStorage` per pointer event
     hit `UserDefaults` at pointer rate. The accessibility actions still write the
-    stored value directly — they are discrete steps.
+    stored value directly — they are discrete steps. **And its `DragGesture` is
+    in `.global` coordinates** (September 2026): in the default local space the
+    translation was read against the divider itself, which moves with every
+    event of its own drag, so each event undid the last — the handle "shook back
+    and forth very fast around the cursor", and `LayoutProbe` showed 250–550ms
+    turns of layout churn with no view bodies in them. The sidebar reorder's
+    `.global` rule, met again.
   - **`configureSplitViews` stopped walking windows that can't match.**
     `splitView(in:)` visits *every* view of a window with no split view before
     answering nil, per `applicationDidUpdate` tick — the Settings form, the

@@ -366,8 +366,16 @@ private struct ColumnDivider: View {
                     NSCursor.pop()
                 }
             }
+            // **Global coordinates, and it is load-bearing.** The divider moves
+            // with every event of its own drag — it is offset by the tasks width
+            // it is changing — so a translation measured in its *local* space
+            // is read against a view that has just shifted under the pointer:
+            // each event undid the last and the handle shook back and forth
+            // around the cursor, with 250–550ms of layout churn per turn behind
+            // it (`LayoutProbe`, September 2026). The sidebar's reorder drag
+            // hit the same wall and is `.global` for the same reason.
             .gesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         dragging = true
                         if dragBase == nil { dragBase = tasksWidth }
