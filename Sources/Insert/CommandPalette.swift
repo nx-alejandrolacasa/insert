@@ -180,13 +180,18 @@ final class CommandPalette {
         model.perform(entry)
     }
 
-    /// `@FocusState` from `onAppear` usually lands; this is the AppKit half for
-    /// when it doesn't, since the panel has only just become key.
-    private func focusField() {
-        DispatchQueue.main.async { [panel, host] in
-            guard let field = Self.textField(in: host) else { return }
-            panel.makeFirstResponder(field)
+    /// `@FocusState` from `onAppear` is written before the panel is key and
+    /// is dropped; this is the AppKit half. The field's platform view is built
+    /// by SwiftUI's layout, which may not have run by the first turn, so it
+    /// lays the host out and retries over a few turns until the field exists.
+    private func focusField(attempt: Int = 0) {
+        guard isOpen, attempt < 12 else { return }
+        host.layoutSubtreeIfNeeded()
+        if !panel.isKeyWindow { panel.makeKey() }
+        if let field = Self.textField(in: host), panel.makeFirstResponder(field) {
+            return
         }
+        DispatchQueue.main.async { [weak self] in self?.focusField(attempt: attempt + 1) }
     }
 
     private static func textField(in view: NSView) -> NSTextField? {
