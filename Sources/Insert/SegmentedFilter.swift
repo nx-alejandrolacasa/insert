@@ -215,6 +215,11 @@ private struct CountBadge: View {
             // changes. Free with a mono face for the glyphs themselves; this
             // covers the case where the fallback isn't one.
             .monospacedDigit()
+            // The number is the one thing in the segment that must never
+            // truncate: at its natural width it is a few digits, and the label
+            // beside it is what gives way when the track is short of room.
+            .fixedSize()
+            .layoutPriority(1)
             .foregroundStyle(band.countText)
             // A disc that fits inside the segment pill — a capsule only once
             // the digits need the width.
