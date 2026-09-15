@@ -452,7 +452,33 @@ final class MarkdownPreviewView: NSTextView, NSTextViewDelegate {
                 let line = CGRect(x: 0, y: rect.midY.rounded() - 0.5, width: width, height: 1)
                 NSColor.separatorColor.setFill()
                 line.fill()
+            case .tableRow(let row):
+                drawTableRow(row, around: rect)
             }
+        }
+    }
+
+    /// The grid around one table row: the row's line box grown out to the
+    /// vertical padding it was laid out with and to its half of the line
+    /// spacing shared with its neighbours, so two rows' boxes meet on one
+    /// line; a wash under the header; a hairline under every row (and over
+    /// the first) and at every column boundary.
+    private func drawTableRow(_ row: MarkdownRichText.TableRow, around rect: CGRect) {
+        let top = rect.minY - row.padding - (row.first ? 0 : row.lineSpacing / 2)
+        let bottom = rect.maxY + row.padding + (row.last ? 0 : row.lineSpacing / 2)
+        let x0 = textContainerOrigin.x
+        let box = CGRect(x: x0, y: top, width: row.columns.last ?? 0, height: bottom - top)
+        if row.header {
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            box.fill()
+        }
+        NSColor.separatorColor.setFill()
+        if row.first {
+            CGRect(x: box.minX, y: box.minY.rounded() - 0.5, width: box.width, height: 1).fill()
+        }
+        CGRect(x: box.minX, y: box.maxY.rounded() - 0.5, width: box.width, height: 1).fill()
+        for column in row.columns {
+            CGRect(x: (x0 + column).rounded() - 0.5, y: box.minY, width: 1, height: box.height).fill()
         }
     }
 
@@ -541,9 +567,24 @@ enum MarkdownRichText {
     }
 
     struct Decoration: Equatable {
-        enum Kind { case quote, code, rule }
+        enum Kind: Equatable { case quote, code, rule, tableRow(TableRow) }
         var kind: Kind
         var range: NSRange
+    }
+
+    /// One row of a table's grid, as the view draws it under the row's text:
+    /// the column boundaries (from the text container's left edge, the last one
+    /// the table's right edge), and enough about the row's paragraph to extend
+    /// its line box out to the grid lines — the vertical padding the row was
+    /// laid out with, and the line spacing the reading leading puts between it
+    /// and the next row, half of which belongs to each side of the shared line.
+    struct TableRow: Equatable {
+        var columns: [CGFloat]
+        var header: Bool
+        var first: Bool
+        var last: Bool
+        var padding: CGFloat
+        var lineSpacing: CGFloat
     }
 
     struct Rendered {
@@ -683,6 +724,8 @@ enum MarkdownRichText {
                     if index < lines.count - 1 { newline() }
                 }
                 decorations.append(Decoration(kind: .code, range: NSRange(location: start, length: out.length - start)))
+            case .table(let table):
+                appendTable(table, after: after, lastBlock: last)
             case .rule:
                 // `Divider` plus its 2pt of padding either side: a 5pt line box
                 // holding a character too small to show, with the line drawn
@@ -701,6 +744,90 @@ enum MarkdownRichText {
                 decorations.append(Decoration(kind: .rule, range: NSRange(location: start, length: 1)))
             }
             if !last { newline() }
+        }
+
+        /// A table: one paragraph per row, the cells set on **tab stops** — one
+        /// per column, at the column's left edge, centre or right edge as its
+        /// delimiter asks — with the grid drawn by the view (`TableRow`).
+        /// Columns take their natural width, the widest cell in each plus the
+        /// cell padding, and a row never wraps: a wrapped cell would leave the
+        /// tab stops of its neighbours meaning nothing. `NSTextTable` would be
+        /// the platform's own answer and is deliberately not used — TextKit 2
+        /// doesn't lay one out, and the view's decorations and its measuring
+        /// both read `textLayoutManager`.
+        ///
+        /// **A table that ends the body gets a spacer paragraph under it.**
+        /// TextKit's used height stops at the last line box — a final
+        /// paragraph's `paragraphSpacing` is not counted — so the last row's
+        /// bottom padding and the hairline under it fell outside the height
+        /// `sizeThatFits` answered and the card clipped them (reported: the
+        /// last row cut off unless a line followed the table). The rule block
+        /// makes the same move with its 5pt line box: a character too small
+        /// to see in a line box exactly the height the grid needs.
+        private mutating func appendTable(_ table: MarkdownTable.Table, after: CGFloat,
+                                          lastBlock: Bool) {
+            let header = MarkdownText.tableHeaderFont(base)
+            let pad = MarkdownText.tableCellPadding
+            let rowPad = MarkdownText.tableRowPadding
+            let plain = paragraph()
+            var widths = Array(repeating: CGFloat(0), count: table.columns)
+            for (index, row) in table.rows.enumerated() {
+                for (column, cell) in row.enumerated() {
+                    let width = inline(cell, font: index == 0 ? header : base,
+                                       colour: palette.text, paragraph: plain).size().width
+                    widths[column] = max(widths[column], width.rounded(.up) + 2 * pad)
+                }
+            }
+            var boundaries: [CGFloat] = [0]
+            for width in widths { boundaries.append(boundaries.last! + width) }
+            let stops = (0..<table.columns).map { column -> NSTextTab in
+                let left = boundaries[column], right = boundaries[column + 1]
+                return switch table.alignments[column] {
+                case .center: NSTextTab(textAlignment: .center, location: (left + right) / 2)
+                case .right: NSTextTab(textAlignment: .right, location: right - pad)
+                case .left, nil: NSTextTab(textAlignment: .left, location: left + pad)
+                }
+            }
+            let spacing = MarkdownText.lineSpacing(base, lineHeight: lineHeight)
+
+            for (index, row) in table.rows.enumerated() {
+                let last = index == table.rows.count - 1
+                let style = paragraph {
+                    $0.tabStops = stops
+                    $0.defaultTabInterval = 0
+                    $0.lineBreakMode = .byClipping
+                    $0.paragraphSpacingBefore = rowPad
+                    $0.paragraphSpacing = last && lastBlock ? 0 : rowPad + (last ? after : 0)
+                }
+                let start = out.length
+                let font = index == 0 ? header : base
+                for cell in row {
+                    out.append(NSAttributedString(string: "\t", attributes: [
+                        .font: font, .foregroundColor: palette.text, .paragraphStyle: style,
+                    ]))
+                    out.append(inline(cell, font: font, colour: palette.text, paragraph: style))
+                }
+                decorations.append(Decoration(
+                    kind: .tableRow(TableRow(
+                        columns: boundaries, header: index == 0, first: index == 0,
+                        last: last, padding: rowPad, lineSpacing: spacing
+                    )),
+                    range: NSRange(location: start, length: out.length - start)
+                ))
+                if !last { newline() }
+            }
+            if lastBlock {
+                newline()
+                let spacer = paragraph {
+                    $0.minimumLineHeight = rowPad + 1
+                    $0.maximumLineHeight = rowPad + 1
+                }
+                out.append(NSAttributedString(string: "\u{00A0}", attributes: [
+                    .font: NSFont.systemFont(ofSize: 2),
+                    .paragraphStyle: spacer,
+                    .markdownPlain: "",
+                ]))
+            }
         }
 
         /// A list item: marker, tab, text — the marker column sized off the

@@ -124,7 +124,40 @@ struct MarkdownText: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.06)))
         case .rule:
             Divider().padding(.vertical, 2)
+        // The hidden proxy's reading of a table: one `Grid` row per table row,
+        // each cell padded by the same amounts the view-mode render pads its
+        // rows, so the height this measures is the height the preview draws.
+        case .table(let table):
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: lineSpacing) {
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            let cellFont = index == 0 ? Self.tableHeaderFont(nsFont) : nsFont
+                            Self.inline(cell.isEmpty ? " " : cell, in: cellFont)
+                                .font(Font(cellFont))
+                                .lineLimit(1)
+                                .padding(.horizontal, Self.tableCellPadding)
+                                .padding(.vertical, Self.tableRowPadding)
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /// A table cell's air, either side of its text and above and below it —
+    /// the same two values `MarkdownRichText` lays its rows out with.
+    nonisolated static let tableCellPadding: CGFloat = 8
+    nonisolated static let tableRowPadding: CGFloat = 4
+
+    /// The header row's face: the body's, bold — through the descriptor union
+    /// rather than `.fontWeight`, which resolves a different font and drops the
+    /// one-storey `a` (see `Card`).
+    nonisolated static func tableHeaderFont(_ base: NSFont) -> NSFont {
+        let descriptor = base.fontDescriptor.withSymbolicTraits(
+            base.fontDescriptor.symbolicTraits.union(.bold)
+        )
+        return NSFont(descriptor: descriptor, size: base.pointSize) ?? base
     }
 
     /// The gap between a list marker and its item.
@@ -525,6 +558,8 @@ enum MarkdownParser {
         case quote([String])
         case code(String)
         case rule
+        /// A pipe table — see `MarkdownTable`.
+        case table(MarkdownTable.Table)
     }
 
     /// Memoised on the whole source, because this runs on the render path: every
@@ -602,6 +637,17 @@ enum MarkdownParser {
                 continue
             }
 
+            // Pipe table: a header, a delimiter row, then rows — the rule is
+            // `MarkdownTable.runLength`'s, shared with the highlighter and the
+            // editor so the three agree on what is a table.
+            if let length = MarkdownTable.runLength(in: lines, at: i),
+               let table = MarkdownTable.parse(Array(lines[i..<(i + length)])) {
+                flushParagraph()
+                blocks.append(.table(table))
+                i += length
+                continue
+            }
+
             // List — bullets and numbers alike, nested by indentation.
             if listMarker(line) != nil {
                 flushParagraph()
@@ -655,6 +701,8 @@ enum MarkdownParser {
             case .code(let code):
                 let lines = code.components(separatedBy: "\n")
                 if let first = lines.first(where: { !$0.isEmpty }) { return first }
+            case .table(let table):
+                if let first = table.rows.joined().first(where: { !$0.isEmpty }) { return first }
             case .rule:
                 continue
             }

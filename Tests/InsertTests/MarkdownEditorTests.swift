@@ -5,12 +5,34 @@ import XCTest
 
 @MainActor
 final class MarkdownEditorTests: XCTestCase {
-    func testEachEditorOwnsItsUndoHistory() {
+    /// Out of a window an editor falls back to a manager of its own; **in** a
+    /// window it uses the window's, which is where the Edit menu's Undo and
+    /// Redo look — a private manager alone left both items disabled.
+    func testEachEditorOwnsItsUndoHistoryOutsideAWindow() {
         let first = MarkdownTextView()
         let second = MarkdownTextView()
 
         XCTAssertNotNil(first.undoManager)
         XCTAssertFalse(first.undoManager === second.undoManager)
+    }
+
+    func testAnEditorInAWindowUsesTheWindowsUndoManagerAndClearsItOnDismantle() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let editor = MarkdownTextView(frame: window.contentView!.bounds)
+        editor.allowsUndo = true
+        window.contentView?.addSubview(editor)
+
+        XCTAssertTrue(editor.undoManager === window.undoManager)
+
+        editor.string = "Draft"
+        editor.setSelectedRange(NSRange(location: 5, length: 0))
+        editor.insertText(" note", replacementRange: editor.selectedRange())
+        XCTAssertTrue(window.undoManager?.canUndo ?? false, "the window's manager carries the typing")
+
+        editor.removeFromSuperview()
+        editor.prepareForDismantle()
+        XCTAssertFalse(window.undoManager?.canUndo ?? true, "nothing for a dismantled text system survives")
     }
 
     func testDismantlingClearsOnlyThatEditorsUndoHistory() {

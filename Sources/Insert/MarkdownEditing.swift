@@ -456,17 +456,39 @@ enum MarkdownCaret {
 /// **The focus it reports.** A `@FocusState` the owner drives has to know when
 /// the user clicks *into* the editor, so first-responder changes are handed back.
 ///
-/// **The undo history it owns.** Each editor has a private manager so actions for
-/// its AppKit text system cannot outlive the card that owns it.
+/// **Its undo history goes to the window's manager**, and is cleared from it
+/// when the editor is torn down — see `undoManager` for why both halves.
 final class MarkdownTextView: NSTextView {
-    /// A body editor's undo history belongs to that editor, not to the window.
+    /// The window's undo manager while the view is in a window, a private one
+    /// otherwise (tests, and the offscreen measurer's kin).
     ///
-    /// Using the responder chain's shared manager left actions for this text
-    /// system behind after its card was deleted. A later Cmd-Z outside edit mode
-    /// then asked `NSUndoManager` to invoke a dismantled AppKit target.
+    /// **It was a private manager alone, and the Edit menu went grey.** The
+    /// September 2026 remediation gave each editor its own manager so a
+    /// deleted card's text-system actions couldn't be invoked later from a
+    /// stale target (`_NSUndoStack popAndInvoke` crashed on one). The cost
+    /// showed up as "undo does nothing": the app's Undo and Redo items are
+    /// SwiftUI's, enabled off the **window's** undo manager, which never saw
+    /// a history kept in a manager of ours — so both stayed disabled in every
+    /// body, and ⌘Z, which is the disabled item's key equivalent, did nothing.
+    /// So the history goes where the menu looks, and the crash is prevented
+    /// from the other side: `prepareForDismantle` clears the window's manager,
+    /// so no action for a dismantled text system survives it. The price is
+    /// that closing one card drops the window's whole undo stack, another
+    /// open card's included, which is the trade an ordinary document makes.
+    override var undoManager: UndoManager? {
+        if let host = super.undoManager {
+            hostUndoManager = host
+            return host
+        }
+        return editorUndoManager
+    }
+
     private let editorUndoManager = UndoManager()
 
-    override var undoManager: UndoManager? { editorUndoManager }
+    /// The window's manager as last handed out, kept so it can be cleared on
+    /// dismantle when the view has already left its window and the responder
+    /// chain no longer reaches it.
+    private weak var hostUndoManager: UndoManager?
 
     // Plain closure types, called from overrides that are already on the main
     // actor. Annotating them `@MainActor` would make them `@Sendable` too, which
@@ -481,6 +503,8 @@ final class MarkdownTextView: NSTextView {
 
     func prepareForDismantle() {
         editorUndoManager.removeAllActions()
+        hostUndoManager?.removeAllActions()
+        hostUndoManager = nil
         delegate = nil
         onBacktab = nil
         onEscape = nil
@@ -599,6 +623,10 @@ final class MarkdownTextView: NSTextView {
         // `MarkdownFormatting.listIndent`. Anywhere else it is a tab. Only a
         // caret indents; with text selected Tab is the text view's business.
         let selected = selectedRange()
+        // In a table Tab is the next cell — and a new row past the last one.
+        if selected.length == 0, editTable({ MarkdownTable.moveCell($0, caret: $1, forward: true) }) {
+            return
+        }
         if selected.length == 0,
            let caret = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
            let edit = MarkdownFormatting.listIndent(string, caret: caret),
@@ -613,6 +641,9 @@ final class MarkdownTextView: NSTextView {
         // where there is no level to take off does it mean the other thing it
         // means in a card — back to the title.
         let selected = selectedRange()
+        if selected.length == 0, editTable({ MarkdownTable.moveCell($0, caret: $1, forward: false) }) {
+            return
+        }
         if selected.length == 0,
            let caret = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
            let edit = MarkdownFormatting.listOutdent(string, caret: caret),
@@ -649,6 +680,9 @@ final class MarkdownTextView: NSTextView {
         // ⌘K means search everywhere else; `RootView`'s monitor stands down
         // while a Markdown body is first responder so it can mean "link" here.
         case ("k", false): perform(.link)
+        // ⇧⌘T writes a table skeleton — the one block the bar inserts that has
+        // no selection to float over, so it needs a key.
+        case ("t", true): perform(.table)
         default: return super.performKeyEquivalent(with: event)
         }
         return true
@@ -671,11 +705,169 @@ final class MarkdownTextView: NSTextView {
         case .bulletList: toggleListAroundSelection(ordered: false)
         case .numberedList: toggleListAroundSelection(ordered: true)
         case .divider: insertDividerAtSelection()
+        case .table: insertTableAtSelection()
+        case .tableRowAbove: editTable { MarkdownTable.insertRow($0, caret: $1, below: false) }
+        case .tableRowBelow: editTable { MarkdownTable.insertRow($0, caret: $1, below: true) }
+        case .tableDeleteRow: editTable(MarkdownTable.deleteRow)
+        case .tableColumnLeft: editTable { MarkdownTable.insertColumn($0, caret: $1, after: false) }
+        case .tableColumnRight: editTable { MarkdownTable.insertColumn($0, caret: $1, after: true) }
+        case .tableDeleteColumn: editTable(MarkdownTable.deleteColumn)
+        case .tableAlign: editTable(MarkdownTable.cycleAlignment)
         }
         if let window, window.firstResponder !== self { window.makeFirstResponder(self) }
         // A bar button's action lands on the mouse-up that pressed it, when the
         // button may still count as down, so the bar is placed again a turn later.
         Task { @MainActor [weak self] in self?.publishSelectionAnchor() }
+    }
+
+    private func insertTableAtSelection() {
+        let selected = selectedRange()
+        guard let lo = MarkdownEdits.characterOffset(in: string, utf16Offset: selected.location),
+              let hi = MarkdownEdits.characterOffset(
+                  in: string, utf16Offset: selected.location + selected.length
+              )
+        else { return }
+        _ = MarkdownEdits.apply(MarkdownTable.insertTable(string, selection: lo..<hi), to: self)
+    }
+
+    // MARK: The context menu
+
+    /// The text view's own menu (spelling, Look Up, Services…) with the
+    /// table actions appended: Insert Table anywhere, and the row and column
+    /// tools when the click landed inside a table. The click moves the caret
+    /// before the menu is asked for, so `caretIsInTable` already answers for
+    /// the clicked line. Each item drives `perform(_:)`, the bar's own route.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        menu.addItem(.separator())
+        let actions: [FormattingAction] = caretIsInTable
+            ? FormattingAction.groups(inTable: true).flatMap { $0 }
+            : [.table]
+        for action in actions {
+            let item = NSMenuItem(title: action == .table ? "Insert Table" : action.title,
+                                  action: #selector(performMenuAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    /// Two of AppKit's items go: **Layout Orientation** (a Markdown body is
+    /// never set vertically) and **AutoFill** (passwords and contact details
+    /// have no business in a note). AutoFill is appended by AppKit *after*
+    /// `menu(for:)` returns, which is why the pruning happens here, on the
+    /// menu's way to the screen, and not in `menu(for:)`. Items are matched on
+    /// their submenu's actions, with the English title as the fallback, so a
+    /// renamed item still goes and an unrelated one never does.
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        for item in menu.items.reversed() where Self.isPrunedMenuItem(item) {
+            menu.removeItem(item)
+        }
+        Self.collapseDoubledSeparators(in: menu)
+        super.willOpenMenu(menu, with: event)
+    }
+
+    private static func isPrunedMenuItem(_ item: NSMenuItem) -> Bool {
+        let actions = (item.submenu?.items ?? []).compactMap { $0.action.map(NSStringFromSelector) }
+        if actions.contains(where: { $0.contains("LayoutOrientation") || $0.lowercased().contains("autofill") }) {
+            return true
+        }
+        return item.title == "Layout Orientation" || item.title == "AutoFill"
+    }
+
+    private static func collapseDoubledSeparators(in menu: NSMenu) {
+        var previousWasSeparator = true
+        for item in Array(menu.items) {
+            if item.isSeparatorItem {
+                if previousWasSeparator { menu.removeItem(item) }
+                previousWasSeparator = true
+            } else {
+                previousWasSeparator = false
+            }
+        }
+        if let last = menu.items.last, last.isSeparatorItem { menu.removeItem(last) }
+    }
+
+    @objc private func performMenuAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? FormattingAction else { return }
+        perform(action)
+    }
+
+    // MARK: Tables
+
+    /// The character offset of the caret, or `nil` mid-cluster.
+    private var caretOffset: Int? {
+        MarkdownEdits.characterOffset(in: string, utf16Offset: selectedRange().location)
+    }
+
+    /// Whether the caret sits in a pipe table — what swaps the bar's buttons
+    /// and lets it show without a selection.
+    var caretIsInTable: Bool {
+        guard let caret = caretOffset else { return false }
+        return MarkdownTable.region(in: string, caret: caret) != nil
+    }
+
+    /// Whether the caret sits on a line with nothing on it — the moment a
+    /// block (a table, a divider, a list) gets inserted, and the other place
+    /// the bar shows without a selection.
+    var caretOnBlankLine: Bool {
+        let ns = string as NSString
+        let selected = selectedRange()
+        guard selected.length == 0, selected.location <= ns.length else { return false }
+        let line = ns.lineRange(for: NSRange(location: selected.location, length: 0))
+        return ns.substring(with: line).allSatisfy(\.isWhitespace)
+    }
+
+    /// One of `MarkdownTable`'s edits, at the caret, through the one write path.
+    /// `false` when the caret isn't in a table or the edit declines, which is
+    /// the keys' cue to fall through to what they otherwise do.
+    @discardableResult
+    private func editTable(_ edit: (String, Int) -> MarkdownFormatting.Change?) -> Bool {
+        guard let caret = caretOffset, let change = edit(string, caret) else { return false }
+        return MarkdownEdits.apply(change, to: self)
+    }
+
+    /// Writes the caret's table back aligned, if an edit left it otherwise —
+    /// so typing into a cell re-pads the column at once and the pipes stay
+    /// under one another.
+    ///
+    /// **Run after the editing command returns, never from `textDidChange`.**
+    /// It ran from the notification first, and typing a space at the end of a
+    /// full cell sent the caret into the next cell: `didChangeText` fires
+    /// *before* `insertText` moves the selection past what it inserted, so the
+    /// caret this read was still in front of the new space, the
+    /// kept-trailing-space rule below saw nothing to keep, the space was
+    /// trimmed and the caret put back at the old column's end — which, one
+    /// character short, is the next cell's start (traced key by key, pinned
+    /// by `MarkdownTableTypingTests`). `keyDown`, `insertText`, `paste`,
+    /// `cut` and `delete` call this once their `super` has finished. A
+    /// `Change` whose text equals the storage is a no-op in `apply`, which is
+    /// what makes the overlapping passes free. Nothing while a composition is
+    /// open — `apply` declines then anyway.
+    ///
+    /// **Not while undoing or redoing.** ⌘Z restores the text an edit was made
+    /// on — a table one keystroke less aligned — and that restoration posts
+    /// `textDidChange` too; re-aligning from inside it wrote the table straight
+    /// back, so ⌘Z visibly did nothing. The undo lands the table in a state a
+    /// previous pass had already aligned, so nothing is lost by standing down.
+    func realignTable() {
+        guard undoManager?.isUndoing != true, undoManager?.isRedoing != true,
+              !hasMarkedText(), let caret = caretOffset,
+              let change = MarkdownTable.realign(string, caret: caret),
+              change.text != string
+        else { return }
+        // Close AppKit's typing operation first. Typing coalesces into one
+        // undo operation keyed on the range being typed into, and this rewrite
+        // moves that range, so a later keystroke must not be folded into an
+        // operation that no longer describes the text. Broken here, the
+        // keystroke and its re-alignment are two operations in one event
+        // group, so one ⌘Z still takes both. `MarkdownTableUndoTests` pins
+        // that undo gets back to the original through the re-align; it did
+        // so with and without this call, so this is by reasoning, not a
+        // reproduced defect.
+        breakUndoCoalescing()
+        _ = MarkdownEdits.apply(change, to: self)
     }
 
     private func insertDividerAtSelection() {
@@ -709,11 +901,18 @@ final class MarkdownTextView: NSTextView {
     /// over.
     var selectionAnchor: CGRect? {
         let selected = selectedRange()
-        guard hasKeyboard, selected.length > 0, !hasMarkedText(),
-              NSEvent.pressedMouseButtons == 0, let window, window.isKeyWindow
+        guard hasKeyboard, !hasMarkedText(),
+              NSEvent.pressedMouseButtons == 0, let window, window.isKeyWindow,
+              // A caret alone is enough inside a table, where the bar is the
+              // table's tools and there is rarely anything selected — and on
+              // a blank line, where a block is about to be inserted.
+              selected.length > 0 || caretIsInTable || caretOnBlankLine
         else { return nil }
-        let onScreen = firstRect(forCharacterRange: selected, actualRange: nil)
+        var onScreen = firstRect(forCharacterRange: selected, actualRange: nil)
         guard onScreen.height > 0 else { return nil }
+        // A caret's rect can be zero wide, and an empty rect intersects nothing
+        // — the panel's visibility check would hide the bar over a table.
+        if onScreen.width < 1 { onScreen.size.width = 1 }
         return convert(window.convertFromScreen(onScreen), from: nil)
     }
 
@@ -745,6 +944,7 @@ final class MarkdownTextView: NSTextView {
         super.viewDidMoveToWindow()
         stopObservingGeometry()
         guard let window else { return FormattingBarPanel.shared.hide(for: self) }
+        _ = undoManager  // records the window's manager for `prepareForDismantle`
         postsFrameChangedNotifications = true
         var watched: [(Notification.Name, AnyObject)] = [
             (NSView.frameDidChangeNotification, self),
@@ -814,6 +1014,33 @@ final class MarkdownTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+        realignTable()
+    }
+
+    /// The edits that arrive other than through a key — a paste, a cut, the
+    /// Delete menu item, and text an input method commits from a candidate
+    /// window — each re-align the table once the edit has landed and the
+    /// caret has moved with it. `keyDown` covers the same for typing; the two
+    /// overlap for an ordinary keystroke and the second pass finds nothing to
+    /// do.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        realignTable()
+    }
+
+    override func paste(_ sender: Any?) {
+        super.paste(sender)
+        realignTable()
+    }
+
+    override func cut(_ sender: Any?) {
+        super.cut(sender)
+        realignTable()
+    }
+
+    override func delete(_ sender: Any?) {
+        super.delete(sender)
+        realignTable()
     }
 
     /// Esc leaves the card. `complete(_:)` is overridden alongside
@@ -971,10 +1198,13 @@ enum MarkdownReturn {
         guard selected.length == 0 else { return false }
 
         let text = textView.string
-        guard let caret = MarkdownEdits.characterOffset(in: text, utf16Offset: selected.location),
-              let edit = MarkdownFormatting.listReturn(text, caret: caret)
+        guard let caret = MarkdownEdits.characterOffset(in: text, utf16Offset: selected.location)
         else { return false }
-
+        // In a table Return is the row below — see `MarkdownTable.returnInTable`.
+        if let change = MarkdownTable.returnInTable(text, caret: caret) {
+            return MarkdownEdits.apply(change, to: textView)
+        }
+        guard let edit = MarkdownFormatting.listReturn(text, caret: caret) else { return false }
         return MarkdownEdits.apply(edit, to: textView)
     }
 }
@@ -1016,6 +1246,14 @@ enum MarkdownEdits {
     /// the same path — one undo step, and the styled text stays selected so
     /// toggles chain (⌘B ⌘B is a no-op).
     static func apply(_ change: MarkdownFormatting.Change, to textView: NSTextView) -> Bool {
+        // Nothing to write: only the selection moves. Going through `replace`
+        // with an empty replacement would still post a change and register an
+        // undo step for an edit that changed no character.
+        if change.text == textView.string {
+            guard let wanted = nsRange(of: change.selection, in: textView.string) else { return false }
+            textView.setSelectedRange(wanted)
+            return true
+        }
         let old = Array(textView.string)
         let new = Array(change.text)
 

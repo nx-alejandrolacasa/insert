@@ -213,12 +213,19 @@ fi
 # 0.12.0 shipped a DMG that trapped on launch, and every step of the build had
 # reported success — so the last word is a look inside the app that is about to
 # leave the machine.
-for required in \
-  "Contents/MacOS/${APP_NAME}" \
-  "Contents/Resources/Insert_Insert.bundle/Fonts/SpaceGrotesk-Variable.ttf" \
-  "Contents/Resources/Insert_Insert.bundle/Fonts/SpaceGrotesk-OFL.txt"; do
-  if [[ ! -e "$APP/$required" ]]; then
-    echo "error: assembled app is missing ${required}" >&2
+#
+# The font paths accept both layouts SwiftPM has emitted the resource bundle
+# in: `Fonts/` at the bundle's root (the native build system, up to Xcode 26)
+# and `Contents/Resources/Fonts/` (the `swiftbuild` system Xcode 27 defaults
+# to). BundledFonts asks the bundle by resource name, so it reads either.
+if [[ ! -e "$APP/Contents/MacOS/${APP_NAME}" ]]; then
+  echo "error: assembled app is missing Contents/MacOS/${APP_NAME}" >&2
+  exit 1
+fi
+FONT_BUNDLE="$APP/Contents/Resources/Insert_Insert.bundle"
+for font in "SpaceGrotesk-Variable.ttf" "SpaceGrotesk-OFL.txt"; do
+  if [[ ! -e "$FONT_BUNDLE/Fonts/$font" && ! -e "$FONT_BUNDLE/Contents/Resources/Fonts/$font" ]]; then
+    echo "error: assembled app is missing Fonts/${font} in Insert_Insert.bundle" >&2
     exit 1
   fi
 done

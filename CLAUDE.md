@@ -128,6 +128,9 @@ Sources/Insert/
                               pure span scanner + the two attribute appliers
   FormattingBar.swift         the bar that floats over a selection in the editor:
                               the formatting actions as buttons
+  MarkdownTable.swift         pipe tables, the pure half: read, write aligned,
+                              locate the caret's cell, and the edits the bar's
+                              table tools and Tab/Return make
   Theme.swift                 Tint palette (roles + contrast), tokens, .island()
   AppTheme.swift              the six sourced themes: band / track / primary and
                               count-chip tones, the page and card grounds, the
@@ -193,6 +196,11 @@ changed nothing, and the reading-leading arithmetic is one rule spelled four
 different ways across SwiftUI and AppKit — so it lays the preview and the source
 out for real, at every line height and in all five faces, and asserts they come
 to the same height.
+`MarkdownTableTests` pins `MarkdownTable` end to end — detection, ragged rows,
+escaped pipes, the aligned writer, caret mapping across a rewrite, and every
+key and bar action — plus the table's highlighter spans and the view-mode
+render's grid decorations, because a table edit rewrites the whole table under
+the caret and a wrong offset puts the caret in the wrong cell silently.
 `MarkdownRichTextTests` pins what the view-mode preview's rich text carries to the
 pasteboard and what it deliberately strips — see the selection bullet under Design
 intent — because a wrong export is only ever seen in some *other* app.
@@ -1625,7 +1633,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   a missing font bundle is a font problem that `font(family:…)` and its callers
   already degrade to a system face. `build.sh` also checks the *assembled* app for
   the fonts and the licence before it says "Built", because every step of the
-  0.12.0 build reported success.
+  0.12.0 build reported success. **That check accepts two bundle layouts**,
+  since September 2026: SwiftPM's native build system emits `Fonts/` at the
+  resource bundle's root, and the `swiftbuild` system Xcode 27 defaults to
+  emits a proper `Contents/Resources/Fonts/` — the first `./build.sh` on Xcode
+  27 failed the check with the fonts present. `BundledFonts` asks the bundle by
+  resource name, so the app itself reads either.
   Four things about the bundled faces are load-bearing.
   Space Grotesk ships as the **variable** file, not the four statics: the
   published statics are Light / Regular / Medium / Bold with **no SemiBold**,
@@ -2051,12 +2064,25 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   suppressed (`reportsFocus`) around a `makeFirstResponder` the bridge asks for
   itself, since that one happens inside a view update. And `allowsUndo` plus
   `isRichText = false` are what keep native undo and stop a paste arriving as
-  styled text. **Each editor owns its own `UndoManager`**, rather than inheriting
-  the window's shared one, and its actions are cleared when the representable is
-  dismantled. The shared manager retained actions for a deleted card's dismantled
-  text system; pressing ⌘Z later outside edit mode reached `_NSUndoStack
-  popAndInvoke` and crashed on that stale AppKit target. Per-editor managers also
-  keep tearing down one open card from discarding another open card's history.
+  styled text. **The editor's undo history goes to the window's `UndoManager`,
+  and the window's manager is cleared when the representable is dismantled.**
+  That is the second answer to one crash. The shared manager had retained
+  actions for a deleted card's dismantled text system; pressing ⌘Z later
+  outside edit mode reached `_NSUndoStack popAndInvoke` and crashed on that
+  stale AppKit target — so the September 2026 remediation gave each editor a
+  **private** manager. That shipped with undo dead: the app's Undo and Redo
+  items are SwiftUI's, enabled off the *window's* undo manager, which never saw
+  the private history, so both sat greyed out in every body and ⌘Z — the
+  disabled item's key equivalent — did nothing (reported the day tables landed,
+  and not caused by them; whether it had worked between the two is not known).
+  The history now goes where the menu looks, and the crash is closed from the
+  other side by `prepareForDismantle` emptying the window's manager (recorded
+  weakly on the way in, since the view may have left its window by then). The
+  cost, accepted: closing one card drops the window's whole undo stack, another
+  open card's included. Out of a window — tests, the measurer's kin — the
+  editor falls back to a manager of its own. Pinned by `MarkdownEditorTests`.
+  **Not established:** that a SwiftUI `TextField` title undoes at all; it was
+  reported greyed out there too, and nothing here touches it.
 - **The editor styles the source it shows** (`MarkdownHighlight`, September
   2026) — the iA Writer/Bear reading of Markdown editing, chosen over a WYSIWYG
   editor (which makes Markdown a lossy export format and breaks the Obsidian
@@ -2167,10 +2193,17 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   empty line after it (`MarkdownFormatting.insertDivider`, pure and pinned). It
   exists for the selection made with the *mouse*, which is the moment a key
   shortcut is furthest from the hand; the keys still work and the tooltips name
-  them. It wears the `@project` dropdown's construction — glass or the theme's
-  opaque page, hairline, no shadow — and sits **above** the selection's first
-  line so the words being styled stay in view, its left edge on the selection's
-  and clamped inside the editor's width. Its buttons are 32pt, larger than the
+  them. It wears the **command palette's** construction — the theme's opaque
+  card face, a 1pt edge at 18%, and a **smaller** version of the palette's
+  shadow (12% black, radius 8, 3pt down — the palette's reached under the
+  caret line 12pt below and darkened the words being styled) inside a
+  transparent margin the panel is oversized by (`shadowMargin`, shared;
+  `FormattingBarPanel` subtracts it back out when placing) — since September
+  2026, by request: it began in the `@project` dropdown's glass with no
+  shadow, and over a card of the same paper it read as part of the card. It
+  sits **above** the selection's first line, 12pt clear of it, so the words
+  being styled stay in view, its left edge on the selection's and clamped
+  inside the editor's width. Its buttons are 32pt, larger than the
   toolbar's, because they are reached for mid-sentence.
   **It is a child window, not an overlay, and it has to be** (`FormattingBarPanel`,
   one borderless non-activating `NSPanel` for the app). The first cut was an
@@ -2200,6 +2233,82 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   others: set every line the selection touches, or take the markers off when all
   of them already carry that kind, blank lines untouched, numbering restarting
   per indent as the renderer counts; pinned by `MarkdownFormattingTests`.
+- **Pipe tables** (September 2026, first cut — built to iterate on). A table is
+  what GitHub Flavored Markdown calls one: a header line, a delimiter row
+  (`| --- | :-: | --: |`), then rows until a blank line or a line with no `|`.
+  That one rule is `MarkdownTable.runLength`, shared by the parser, the
+  highlighter and the editor so the three can't disagree on what is a table; a
+  fence line ends a run, and a lone `---` stays a rule because a delimiter row
+  needs a pipe. Ragged rows are padded to the widest, never truncated, so a
+  pipe typed or deleted mid-cell moves text between cells rather than losing
+  it; `\|` is a pipe inside a cell.
+  **The source stays aligned.** Every write pads each cell to its column's
+  width (`MarkdownTable.format`, alignment honoured — centred cells are centred
+  in the source too, the delimiter written `:---:`), and the editor **re-aligns
+  after every edit inside a table** (`realignTable`, called after `keyDown`,
+  `insertText`, `paste`, `cut` and `delete` return — **not** from
+  `textDidChange`, which fires before `insertText` has moved the caret past
+  the inserted character, so a space typed at the end of a full cell was read
+  with the caret still in front of it, trimmed, and the caret sent into the
+  next cell), mapping the caret back into its cell by (line, column,
+  offset). Two things
+  make that survivable: the caret's cell keeps its trailing spaces up to the
+  caret, or a space typed at the end of a cell would be trimmed before the next
+  word arrived; and `MarkdownEdits.apply(Change)` is a no-op when the text is
+  already equal, which is what ends the nested `textDidChange` the rewrite
+  itself posts. The typed character and its re-alignment land in one event, so
+  one ⌘Z takes both. **Table lines draw in the monospaced face in the editor**
+  (`MarkdownHighlight.tableStyle`), pipes and the delimiter row dimmed as
+  markers, emphasis inside a cell scanned in that face — padding only aligns
+  anything where every character is one column wide, and the proxies inherit
+  the face through `affectsLayout`. Widths count `Character`s, so a CJK glyph
+  or an emoji is one column here and two on screen; every such tool makes the
+  same approximation. **Keys**: Tab is the next cell (selecting its content, so
+  tabbing into a filled cell overtypes it) and a new row past the last one;
+  ⇧Tab the previous cell, staying put on the first header cell rather than
+  leaving the body; Return is the same column one row down, growing the table
+  at the bottom — and on an **empty** last row it removes the row and leaves
+  the table, the list's own Return rule. All three are tried before the list
+  rules and only when the caret is alone.
+  **The bar shows for a caret in a table with nothing selected, and for a
+  caret on a blank line** — the first report from a running build was that
+  the bar is selection-only, so "New Table" could never be reached; a blank
+  line is where a block gets inserted, **⇧⌘T** inserts one from anywhere
+  in a body besides, and the editor's **right-click menu** carries Insert
+  Table — and the row and column tools when the click lands in a table
+  (`MarkdownTextView.menu(for:)`, appended under the text view's own items). Inside a table it shows the table's tools and nothing
+  else: row above / below / delete,
+  column left / right / delete, and a button cycling the column's alignment
+  (unmarked → left → centre → right). Outside a table the bar is its nine
+  buttons plus **Table**, in the link/code group, which writes a 2×2 skeleton on
+  its own lines below the selection (the divider's placement rules) with the
+  first header cell selected. The two sets are not shown together, on purpose:
+  the caret is usually alone in a table, the list and divider buttons mean
+  nothing in a cell, and both sets outgrow the tasks column's editor.
+  `FormattingBarPanel` rebuilds the bar when the caret crosses a table's edge.
+  Deleting the header is refused (no header, no table); deleting the only body
+  row or the only column empties it instead. Adding a row "above" the header
+  adds it below, since a header is one thing.
+  **View mode is tab stops and a drawn grid, not `NSTextTable`.** TextKit 2
+  doesn't lay text tables out and `MarkdownPreviewView` reads
+  `textLayoutManager` for its decorations and its measuring, so a table block
+  would have silently dropped the view to TextKit 1. Each row is one paragraph,
+  each cell a tab plus its text, one `NSTextTab` per column at the column's
+  left edge, centre or right edge as the delimiter asks; columns take their
+  natural width (widest cell plus `tableCellPadding`), rows never wrap
+  (`byClipping`), the header is bold through the descriptor union and a
+  `TableRow` decoration per row draws the header wash and the hairlines
+  (`drawTableRow`), each row's line box grown by `tableRowPadding` and half the
+  reading leading so adjacent rows meet on one line. The SwiftUI `MarkdownText`
+  proxy draws a `Grid` with the same paddings, for the fold measurement. Copy
+  leaves a table as tab-separated rows — no list-style export, deliberately, for
+  now.
+  **Known limits, stated rather than solved:** a table wider than the card is
+  clipped in view mode and wraps in the editor, where a wrapped row misaligns
+  its pipes; a cell wider than its column's tab stop pushes the cells after it
+  onto later stops; and nothing here was exercised in a running app — the
+  bar appearing for a bare caret, the grid drawing over the rows and the tab
+  stops lining up on screen are the three things to look at first.
 - **A body can be selected in view mode, and ⌘C carries the formatting**
   (`MarkdownPreview`, September 2026). The *full* render of a card body is a
   read-only `NSTextView` over the Markdown as rich text
@@ -2825,7 +2934,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the refresh's one new glass surface: the moving selection pill refracts the
   track and the band under it and travels on the platform spring, with Reduce
   Transparency swapping in the band's own opaque raised pill and Reduce Motion
-  cutting the travel. The band is what finally makes that glass worth having —
+  cutting the travel. (The formatting bar was a third until September 2026,
+  when it took the palette's opaque card face and shadow instead.) The band is what finally makes that glass worth having —
   an indicator refracts what is *under* it, and under a neutral panel there was
   nothing to refract, which is why the track and both label states now come from
   `BandColors` rather than `Stone`, each solved against the band actually painted
@@ -2851,7 +2961,8 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   `.glassProminent` survives only on each popover's confirm
   button, which `.tint()` now paints in the theme's primary rather than system
   blue.
-- **No shadows, anywhere — with one exception, the command palette.** Not a
+- **No shadows, anywhere — with two exceptions, the command palette and the
+  formatting bar.** Not a
   gap: the window is deliberately flat, the look it
   wears when it goes inactive and every glass surface settles down, which is the
   look it's tuned for. The palette is a *transient window over* the content,
@@ -2860,9 +2971,12 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   shadow: the system's window shadow first, judged too heavy and not tunable,
   so now a soft `.shadow(…)` of its own (16% black, radius 22, 10pt down) drawn
   inside a transparent 36pt margin the panel is oversized by, plus an opaque
-  card face rather than glass, a 1pt edge at 18%, and keycap shortcuts. It is
-  the one `.shadow(…)` in Insert's own code. The
-  rule below is about the window's own surfaces and is unchanged by it. Separation is a **hairline** (`Stone.line`) plus, on glass,
+  card face rather than glass, a 1pt edge at 18%, and keycap shortcuts. The
+  **formatting bar** took the same construction in September 2026 for the
+  same reason — the same kind of object, a control lifted over the content —
+  with the shadow scaled down so it stops short of the line under it, and
+  those are the two `.shadow(…)`s in Insert's own code. The
+  rule below is about the window's own surfaces and is unchanged by them. Separation is a **hairline** (`Stone.line`) plus, on glass,
   the material's own refraction — that's what `.island()` swapped its shadow for and
   what the `@project` dropdown and the column-divider handle now use too. There is
   no elevation scale to add a level to, and adding one lifted element would make it
@@ -2904,8 +3018,9 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   breaking; and it **skips the content view**, which is load-bearing — the projects
   sidebar is glass and is meant to stay glass. Only the titlebar band is touched.
   Otherwise anything the *system* draws — popover and menu shadows, the glass
-  controls' own lighting — is untouched; `.shadow(…)` appears once in Insert's
-  own code, on the command palette's card (see the top of this bullet).
+  controls' own lighting — is untouched; `.shadow(…)` appears twice in Insert's
+  own code, on the command palette's card and the formatting bar (see the top
+  of this bullet).
 - **Icon** — minimal stacked cards on a sage-teal → steel blue gradient
   (#88AAB5 → #7290A7, the middle stops of the six-stop gradient Nuevo Tokyo is
   sourced from) with a slate-blue check badge (#7FA3D1 → #35507F). Keep it soft and modern; palette and proportions

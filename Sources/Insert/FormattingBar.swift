@@ -1,19 +1,33 @@
 import AppKit
 import SwiftUI
 
-/// What the editor can do to a selection — the nine buttons on the bar, and
+/// What the editor can do to a selection — the ten buttons on the bar over a
+/// selection, the seven it shows instead while the caret is in a table, and
 /// the five of them that also have a key.
 enum FormattingAction: CaseIterable {
     case bold, italic, underline, strikethrough
     case bulletList, numberedList, divider
-    case link, code
+    case link, code, table
+    case tableRowAbove, tableRowBelow, tableDeleteRow
+    case tableColumnLeft, tableColumnRight, tableDeleteColumn
+    case tableAlign
 
-    /// The bar's groups, drawn with a hairline between them.
-    static let groups: [[FormattingAction]] = [
-        [.bold, .italic, .underline, .strikethrough],
-        [.bulletList, .numberedList, .divider],
-        [.link, .code],
-    ]
+    /// The bar's groups, drawn with a hairline between them. **Inside a table
+    /// the bar is the table's tools and nothing else**: the caret is usually
+    /// alone there (the bar shows for a caret in a table, not only for a
+    /// selection), the list and divider buttons have no meaning inside a cell,
+    /// and both sets together outgrow the tasks column's editor.
+    static func groups(inTable: Bool) -> [[FormattingAction]] {
+        inTable ? [
+            [.tableRowAbove, .tableRowBelow, .tableDeleteRow],
+            [.tableColumnLeft, .tableColumnRight, .tableDeleteColumn],
+            [.tableAlign],
+        ] : [
+            [.bold, .italic, .underline, .strikethrough],
+            [.bulletList, .numberedList, .divider],
+            [.link, .code, .table],
+        ]
+    }
 
     var symbol: String {
         switch self {
@@ -26,6 +40,14 @@ enum FormattingAction: CaseIterable {
         case .divider: "minus"
         case .link: "link"
         case .code: "chevron.left.forwardslash.chevron.right"
+        case .table: "tablecells"
+        case .tableRowAbove: "rectangle.topthird.inset.filled"
+        case .tableRowBelow: "rectangle.bottomthird.inset.filled"
+        case .tableDeleteRow: "xmark.rectangle"
+        case .tableColumnLeft: "rectangle.leadingthird.inset.filled"
+        case .tableColumnRight: "rectangle.trailingthird.inset.filled"
+        case .tableDeleteColumn: "xmark.rectangle.portrait"
+        case .tableAlign: "text.aligncenter"
         }
     }
 
@@ -40,11 +62,22 @@ enum FormattingAction: CaseIterable {
         case .divider: "Divider"
         case .link: "Link"
         case .code: "Inline code"
+        case .table: "Table"
+        case .tableRowAbove: "Add row above"
+        case .tableRowBelow: "Add row below"
+        case .tableDeleteRow: "Delete row"
+        case .tableColumnLeft: "Add column left"
+        case .tableColumnRight: "Add column right"
+        case .tableDeleteColumn: "Delete column"
+        case .tableAlign: "Cycle column alignment"
         }
     }
 
     /// The key that does the same, for the tooltip. The two list actions, the
-    /// divider and inline code have none — the bar is their only route.
+    /// divider, inline code and the table tools have none — the bar is their
+    /// only route (Tab and Return move between a table's cells, which is a
+    /// different thing from any button). Table has one because it is the one
+    /// insertion with no selection to float the bar over.
     var shortcut: String? {
         switch self {
         case .bold: "⌘B"
@@ -52,7 +85,8 @@ enum FormattingAction: CaseIterable {
         case .underline: "⌘U"
         case .strikethrough: "⇧⌘X"
         case .link: "⌘K"
-        case .bulletList, .numberedList, .divider, .code: nil
+        case .table: "⇧⌘T"
+        default: nil
         }
     }
 }
@@ -61,9 +95,11 @@ enum FormattingAction: CaseIterable {
 /// formatting shortcuts as buttons, for the selection made with the mouse — the
 /// moment a shortcut is furthest from the hand.
 ///
-/// Built like the `@project` dropdown, the app's other transient floating
-/// control: glass over the card (or the theme's opaque page under Reduce
-/// Transparency), a hairline, no shadow. Its buttons are lone glyphs and keep
+/// Built like the command palette, the app's other lifted surface: the
+/// theme's opaque card face, a 1pt edge, and the palette's own soft shadow
+/// inside a transparent margin (September 2026, by request — it wore the
+/// `@project` dropdown's glass and no shadow first, and over a card of the
+/// same paper read as part of it). Its buttons are lone glyphs and keep
 /// a soft radius rather than a pill, for the reason the toolbar's do — a glyph
 /// rounded into a pill reads as a switch. Hover and press are the washes
 /// `FlatButtonStyle` uses, without its fill: nine chips in a row would be
@@ -74,12 +110,18 @@ enum FormattingAction: CaseIterable {
 /// below is what puts it on screen.
 struct FormattingBar: View {
     var perform: (FormattingAction) -> Void
+    /// Whether the caret is in a table, which is what decides the buttons.
+    var inTable = false
 
     @Environment(SettingsStore.self) private var settings
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// Air between the bar's bottom edge and the selected line's top.
-    static let gap: CGFloat = 6
+    static let gap: CGFloat = 12
+
+    /// Transparent room around the bar for its shadow to fall into; the panel
+    /// is oversized by this on every side, and the placement maths subtracts
+    /// it back out so the visible bar lands where the gap says.
+    static let shadowMargin: CGFloat = CommandPalette.shadowMargin
 
     /// A comfortable target — larger than the toolbar's 28pt glyph buttons,
     /// since this one is reached for mid-sentence with a text cursor.
@@ -88,7 +130,7 @@ struct FormattingBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(Array(FormattingAction.groups.enumerated()), id: \.offset) { index, group in
+            ForEach(Array(FormattingAction.groups(inTable: inTable).enumerated()), id: \.offset) { index, group in
                 if index > 0 {
                     Rectangle()
                         .fill(Stone.line)
@@ -109,17 +151,19 @@ struct FormattingBar: View {
         }
         .padding(Self.inset)
         .background {
-            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-            if reduceTransparency || settings.appReduceTransparency {
-                shape.fill(settings.theme.windowFill)
-            } else {
-                Color.clear.glassEffect(.regular, in: shape)
-            }
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(settings.theme.cardFace)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Stone.line, lineWidth: 0.5)
+                .strokeBorder(.primary.opacity(0.18), lineWidth: 1)
         }
+        // The palette's shadow, scaled down: the bar sits 12pt over the line
+        // being edited, and the palette's 22pt radius and 10pt drop reached
+        // under the caret and darkened the words being styled. Tight enough
+        // to stop short of the line, still soft enough to lift the bar.
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(Self.shadowMargin)
     }
 }
 
@@ -181,6 +225,9 @@ final class FormattingBarPanel {
     private let panel: NSPanel
     private let host: HostingView
     private weak var editor: MarkdownTextView?
+    /// What the bar was last built for, so a caret moving into or out of a
+    /// table swaps the buttons.
+    private var inTable = false
 
     private init() {
         host = HostingView(rootView: AnyView(EmptyView()))
@@ -209,21 +256,28 @@ final class FormattingBarPanel {
               editor.visibleRect.intersects(anchor)
         else { return hide(for: editor) }
 
-        if self.editor !== editor {
+        let inTable = editor.caretIsInTable
+        if self.editor !== editor || self.inTable != inTable {
             self.editor = editor
+            self.inTable = inTable
             host.rootView = AnyView(
-                FormattingBar { [weak editor] in editor?.perform($0) }
+                FormattingBar(perform: { [weak editor] in editor?.perform($0) }, inTable: inTable)
                     .environment(SettingsStore.shared)
             )
         }
 
+        // The hosted view is the bar plus its shadow margin on every side;
+        // the bar itself is what gets placed, and the margin is put back on
+        // around it.
+        let margin = FormattingBar.shadowMargin
         let size = host.fittingSize
+        let barWidth = size.width - 2 * margin
         let editorOnScreen = window.convertToScreen(editor.convert(editor.bounds, to: nil))
         let lineOnScreen = window.convertToScreen(editor.convert(anchor, to: nil))
         // Left edge on the selection's, held inside the editor; bottom edge a
         // gap above the selected line (screen y grows upward, so that is `maxY`).
-        let x = max(editorOnScreen.minX, min(lineOnScreen.minX, editorOnScreen.maxX - size.width))
-        let frame = NSRect(x: x, y: lineOnScreen.maxY + FormattingBar.gap,
+        let x = max(editorOnScreen.minX, min(lineOnScreen.minX, editorOnScreen.maxX - barWidth))
+        let frame = NSRect(x: x - margin, y: lineOnScreen.maxY + FormattingBar.gap - margin,
                            width: size.width, height: size.height)
         panel.setFrame(frame, display: true)
 

@@ -437,6 +437,13 @@ enum MarkdownHighlight {
         case other
     }
 
+    /// A table line's face in the editor: the monospaced one, at the context's
+    /// size, so the padding `MarkdownTable.format` writes into the cells really
+    /// lines the pipes up under one another — in the card face a padded cell is
+    /// only approximately as wide as the one above it. Pipes and the delimiter
+    /// row dim with the rest of the syntax.
+    static let tableStyle = Style(mono: true)
+
     /// One pass over the source: the styled runs, and the lines whose
     /// paragraphs take a shape of their own.
     ///
@@ -447,8 +454,26 @@ enum MarkdownHighlight {
         var scanned = Scan(spans: [], listLines: [])
         var inFence = false
         var previousWasItem = false
+        let lines = MarkdownText.lines(of: text)
+        let texts = lines.map(\.text)
+        var tableLinesLeft = 0
+        var tableLine = 0
 
-        for line in MarkdownText.lines(of: text) {
+        for (index, line) in lines.enumerated() {
+            // Fences win over tables, as they do in the parser: a table run
+            // is only asked about on a line the fence isn't already claiming.
+            if !inFence, tableLinesLeft == 0,
+               let length = MarkdownTable.runLength(in: texts, at: index) {
+                tableLinesLeft = length
+                tableLine = 0
+            }
+            if tableLinesLeft > 0 {
+                scanTableLine(u, line.start..<line.end, delimiter: tableLine == 1, into: &scanned.spans)
+                tableLinesLeft -= 1
+                tableLine += 1
+                previousWasItem = false
+                continue
+            }
             let kind = scanLine(u, line.start..<line.end, inFence: &inFence, into: &scanned.spans)
             switch kind {
             case .item:
@@ -527,6 +552,35 @@ enum MarkdownHighlight {
 
         scanInline(u, s..<line.upperBound, context: Style(), into: &spans)
         return .other
+    }
+
+    /// One line of a table: the whole line in the table face, every unescaped
+    /// pipe a marker, the delimiter row a marker end to end, and the cells'
+    /// own emphasis scanned in the table face's context so `**bold**` stays
+    /// one column per character.
+    private static func scanTableLine(
+        _ u: [UInt16], _ line: Range<Int>, delimiter: Bool, into spans: inout [Span]
+    ) {
+        add(&spans, line, tableStyle)
+        if delimiter {
+            var marker = tableStyle
+            marker.colour = .marker
+            add(&spans, line, marker)
+            return
+        }
+        var cellStart = line.lowerBound
+        var i = line.lowerBound
+        while i < line.upperBound {
+            if u[i] == pipe, i == line.lowerBound || u[i - 1] != backslash {
+                var marker = tableStyle
+                marker.colour = .marker
+                add(&spans, i..<(i + 1), marker)
+                scanInline(u, cellStart..<i, context: tableStyle, into: &spans)
+                cellStart = i + 1
+            }
+            i += 1
+        }
+        scanInline(u, cellStart..<line.upperBound, context: tableStyle, into: &spans)
     }
 
     /// The inline shapes, within one line: code spans, `*`/`_` emphasis,
@@ -764,6 +818,8 @@ enum MarkdownHighlight {
     private static let backtick: UInt16 = 0x60
     private static let tilde: UInt16 = 0x7E
     private static let gt: UInt16 = 0x3E
+    private static let pipe: UInt16 = 0x7C
+    private static let backslash: UInt16 = 0x5C
     private static let lt: UInt16 = 0x3C
     private static let lbracket: UInt16 = 0x5B
     private static let rbracket: UInt16 = 0x5D
