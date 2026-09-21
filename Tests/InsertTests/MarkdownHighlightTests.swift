@@ -334,6 +334,34 @@ final class MarkdownHighlightTests: XCTestCase {
         XCTAssertTrue(listLines("```\n- code\n```").isEmpty)
     }
 
+    private func borders(_ text: String) -> [(Bool, Bool)] {
+        MarkdownHighlight.scan(text).listLines.map { ($0.followsText, $0.precedesText) }
+    }
+
+    /// A list typed straight under its lead-in, or straight above the line
+    /// after it, borders text with no blank line between — which is where the
+    /// parser ends one block and starts the next, and where the preview pays a
+    /// blank line the source doesn't have. Only the outer items of the run
+    /// report it; a blank line on either side means the source already pays.
+    func testOnlyTheOuterItemsReportTextTheyBorderWithoutABlankLine() {
+        XCTAssertEqual(borders("intro\n- a\n- b\nafter").map(\.0), [true, false])
+        XCTAssertEqual(borders("intro\n- a\n- b\nafter").map(\.1), [false, true])
+        XCTAssertEqual(borders("intro\n\n- a\n- b\n\nafter").map(\.0), [false, false])
+        XCTAssertEqual(borders("intro\n\n- a\n- b\n\nafter").map(\.1), [false, false])
+        XCTAssertEqual(borders("- a\n \t\n- b").map(\.1), [false, false])
+        XCTAssertEqual(borders("- a").map(\.0), [false])
+        XCTAssertEqual(borders("- a").map(\.1), [false])
+    }
+
+    /// Every block the parser starts or ends on the line beside an item counts
+    /// as text — a heading, a quote, a fence and a table row alike.
+    func testEveryOtherBlockCountsAsText() {
+        XCTAssertEqual(borders("## Head\n- a\n> q").map(\.0), [true])
+        XCTAssertEqual(borders("## Head\n- a\n> q").map(\.1), [true])
+        XCTAssertEqual(borders("| a | b |\n| - | - |\n- a\n```\nx\n```").map(\.0), [true])
+        XCTAssertEqual(borders("| a | b |\n| - | - |\n- a\n```\nx\n```").map(\.1), [true])
+    }
+
     func testAListLineIsTheWholeLineIndentIncluded() {
         XCTAssertEqual(listLines("- a\n  - b").map(\.0), ["- a", "  - b"])
     }
@@ -349,11 +377,25 @@ final class MarkdownHighlightTests: XCTestCase {
         let base = NSFont.systemFont(ofSize: 15)
         let gap = MarkdownText.listGap(base)
         let inset = MarkdownText.listInset
+        let blank = MarkdownText.blankLine(base, lineHeight: 1)
         let out = MarkdownHighlight.segments("intro\n- a\n- b\n\n- c\nafter", base: base, typeface: .standard)
         XCTAssertEqual(out.map { String($0.text.characters) }, ["intro", "- a", "- b", " ", "- c", "after"])
         XCTAssertEqual(out.map(\.inset), [0, inset, inset, 0, inset, 0])
-        XCTAssertEqual(out.map(\.gap), [0, 0, gap, 0, 0, 0])
+        XCTAssertEqual(out.map(\.gap), [0, blank, gap, 0, 0, 0])
+        XCTAssertEqual(out.map(\.gapBelow), [0, 0, 0, 0, blank, 0])
         XCTAssertGreaterThan(gap, 0)
+        XCTAssertGreaterThan(blank, gap)
+    }
+
+    /// The blank line a list opens against text is the reader's blank line,
+    /// leading included — the same value the editor's paragraph style takes.
+    func testTheBlankLineAListOpensFollowsTheLineHeight() {
+        let base = NSFont.systemFont(ofSize: 15)
+        let out = MarkdownHighlight.segments("intro\n- a", base: base, typeface: .standard,
+                                             lineHeight: 2)
+        XCTAssertEqual(out.map(\.gap), [0, MarkdownText.blankLine(base, lineHeight: 2)])
+        XCTAssertGreaterThan(MarkdownText.blankLine(base, lineHeight: 2),
+                             MarkdownText.blankLine(base, lineHeight: 1))
     }
 
     /// A `Text` of nothing has no height, where the editor shows every blank

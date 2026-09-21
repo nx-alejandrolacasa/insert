@@ -1781,7 +1781,21 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   editor opens the same half line and inset on its list *paragraphs*
   (`paragraphSpacingBefore` / `headIndent`, set in `MarkdownHighlight.apply`) so
   the two modes still match — an attribute, not a character, so the source stays
-  the file's byte for byte. The hidden sizing proxies had to follow and
+  the file's byte for byte. **A list bordering text with no blank line between
+  opens a blank line on that side in the editor too** (September 2026): the
+  parser ends a paragraph on the first item and starts one on the line after the
+  last, so the preview paid its block gap at both boundaries while the editor,
+  showing the source byte for byte, paid nothing — a list typed straight under
+  its lead-in shifted every line below it on the flip. `ListLine` carries
+  `followsText` / `precedesText` (a heading, quote, fence or table row counts as
+  text; a blank line means the source already pays), the editor's list paragraph
+  style and the sizing proxy's `Segment` open `blankLine` there, and
+  `CardTextMetricsTests` measures the two halves equal to the point on such a
+  body — directly rather than as the heading test's difference of differences,
+  since with no blank source line there is nothing for the halves to round
+  differently. The heading's own boundary (`## Title` straight over prose) still
+  pays only `headingGap` in the editor; that mismatch is known and unaddressed.
+  The hidden sizing proxies had to follow and
   **couldn't through an `AttributedString`**: SwiftUI ignores `NSParagraphStyle`
   in one (measured — indent and spacing alike are no-ops), so
   `MarkdownSizingProxy` stacks one `Text` per list line and one per run of other

@@ -368,6 +368,40 @@ final class CardTextMetricsTests: XCTestCase {
         }
     }
 
+    /// A **list against text** — typed straight under its lead-in with no
+    /// blank line, and the line after it the same — must cost the two halves
+    /// the same height. The parser starts a block on the first item and ends
+    /// it on the last, so the preview paid a blank line at both boundaries
+    /// while the editor, showing the source byte for byte, paid nothing.
+    ///
+    /// Measured **directly**, not as the heading test's difference of
+    /// differences: with no blank source line at either boundary there is no
+    /// fragment for the two halves to round differently, so the two heights
+    /// come out equal to the point (measured: 0 at every setting with the fix,
+    /// two blank lines apart without it). A control that spells the blank
+    /// lines out would bring that rounding drift back in and measure nothing.
+    @MainActor
+    func testAListAgainstTextCostsTheTwoHalvesTheSameHeight() {
+        let markdown = "Lead-in:\n- one\n- two\nAfter."
+        for typeface in Typeface.allCases {
+            for points in CardTextSize.range {
+                let scale = CardTextSize.scale(points)
+                var lineHeight = CardLineHeight.range.lowerBound
+                while lineHeight <= CardLineHeight.range.upperBound + 0.0001 {
+                    let preview = laidOut(previewRender(markdown, typeface: typeface, scale: scale,
+                                                        lineHeight: lineHeight))
+                    let source = laidOut(editorSource(markdown, typeface: typeface, scale: scale,
+                                                      lineHeight: lineHeight))
+                    XCTAssertEqual(
+                        preview, source, accuracy: 0.001,
+                        "\(typeface) at \(points)pt × \(CardLineHeight.label(lineHeight))"
+                    )
+                    lineHeight += CardLineHeight.step
+                }
+            }
+        }
+    }
+
     /// And the same air, read straight off both halves' heading paragraphs, at
     /// every level — including the two that get none.
     @MainActor

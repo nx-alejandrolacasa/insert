@@ -892,7 +892,8 @@ private struct TaskCardView: View {
             base: metrics.nsFont,
             typeface: metrics.typeface,
             scale: metrics.scale,
-            lineSpacing: metrics.lineSpacing
+            lineSpacing: metrics.lineSpacing,
+            lineHeight: metrics.lineHeight
         )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, editorVerticalInset)

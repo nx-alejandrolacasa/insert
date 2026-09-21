@@ -81,11 +81,22 @@ enum MarkdownHighlight {
     /// list reads as items rather than as a slab — `MarkdownText` draws the
     /// same two things in the preview. A blank line, or any line that isn't an
     /// item, ends the run, so the first item of the next list takes no gap.
+    ///
+    /// A run that borders **text** with no blank line between takes a blank
+    /// line's worth of air on that side instead: the parser ends a paragraph
+    /// on the first item and starts one on the line after the last, and the
+    /// preview pays its block gap at both boundaries whether or not the source
+    /// has a blank line there — so the editor opens the same, or a list typed
+    /// straight under its lead-in shifts the lines below it on every flip.
     struct ListLine: Equatable {
         /// The line, without its newline.
         var range: NSRange
         /// Directly under another item — the lines that take the gap.
         var followsItem: Bool
+        /// Directly under a line that is neither blank nor an item.
+        var followsText: Bool = false
+        /// Directly above a line that is neither blank nor an item.
+        var precedesText: Bool = false
     }
 
     /// A heading's line, and which level it is. The level is what decides the
@@ -240,12 +251,16 @@ enum MarkdownHighlight {
             .foregroundColor: config.palette.text,
             .paragraphStyle: paragraphStyle,
         ], range: full)
-        let item = listParagraphStyle(from: paragraphStyle, base: config.base, gap: false)
-        let spacedItem = listParagraphStyle(from: paragraphStyle, base: config.base, gap: true)
+        var listStyles: [ListShape: NSParagraphStyle] = [:]
         for line in scanned.listLines where line.range.upperBound <= full.length {
+            let shape = ListShape(line)
+            let style = listStyles[shape] ?? {
+                let style = listParagraphStyle(from: paragraphStyle, shape: shape, config: config)
+                listStyles[shape] = style
+                return style
+            }()
             storage.addAttribute(
-                .paragraphStyle,
-                value: line.followsItem ? spacedItem : item,
+                .paragraphStyle, value: style,
                 range: (text as NSString).paragraphRange(for: line.range)
             )
         }
@@ -293,16 +308,37 @@ enum MarkdownHighlight {
         storage.endEditing()
     }
 
+    /// The three things about a list line that change its paragraph's air —
+    /// the key the editor builds one style per, rather than one per line.
+    private struct ListShape: Hashable {
+        var followsItem: Bool
+        var followsText: Bool
+        var precedesText: Bool
+
+        init(_ line: ListLine) {
+            followsItem = line.followsItem
+            followsText = line.followsText
+            precedesText = line.precedesText
+        }
+    }
+
     /// The editor's paragraph style for a list item, derived from the base one
-    /// so the tab step comes along. The inset and the gap are `MarkdownText`'s,
-    /// so the preview and the source step and breathe by the same amounts.
+    /// so the tab step comes along. The inset, the gap and the blank line are
+    /// `MarkdownText`'s, so the preview and the source step and breathe by the
+    /// same amounts.
     private static func listParagraphStyle(
-        from base: NSParagraphStyle, base font: NSFont, gap: Bool
+        from base: NSParagraphStyle, shape: ListShape, config: Config
     ) -> NSParagraphStyle {
         let style = base.mutableCopy() as! NSMutableParagraphStyle
+        let blankLine = MarkdownText.blankLine(config.base, lineHeight: config.lineHeight)
         style.firstLineHeadIndent = MarkdownText.listInset
         style.headIndent = MarkdownText.listInset
-        if gap { style.paragraphSpacingBefore = MarkdownText.listGap(font) }
+        if shape.followsItem {
+            style.paragraphSpacingBefore = MarkdownText.listGap(config.base)
+        } else if shape.followsText {
+            style.paragraphSpacingBefore = blankLine
+        }
+        if shape.precedesText { style.paragraphSpacing = blankLine }
         return style
     }
 
@@ -322,6 +358,7 @@ enum MarkdownHighlight {
         var text: AttributedString
         var inset: CGFloat
         var gap: CGFloat
+        var gapBelow: CGFloat = 0
     }
 
     /// The source cut into `Segment`s: every list line and every heading line
@@ -341,9 +378,9 @@ enum MarkdownHighlight {
     /// this runs per visible task row per render — `MarkdownParser.parse`'s
     /// reason, one cache line over.
     static func segments(_ text: String, base: NSFont, typeface: Typeface,
-                         scale: CGFloat = 1) -> [Segment] {
+                         scale: CGFloat = 1, lineHeight: Double = 1) -> [Segment] {
         let key = ProxyKey(text: text, font: base.fontName, size: base.pointSize,
-                           typeface: typeface, scale: scale)
+                           typeface: typeface, scale: scale, lineHeight: lineHeight)
         return proxies.value(for: key) {
             let scanned = scan(text)
             var styled = AttributedString(text)
@@ -356,6 +393,7 @@ enum MarkdownHighlight {
 
             let ns = text as NSString
             let listGap = MarkdownText.listGap(base)
+            let blankLine = MarkdownText.blankLine(base, lineHeight: lineHeight)
             let items = Dictionary(uniqueKeysWithValues: scanned.listLines.map { ($0.range.location, $0) })
             let headings = Dictionary(
                 uniqueKeysWithValues: scanned.headingLines.map { ($0.range.location, $0) }
@@ -389,7 +427,8 @@ enum MarkdownHighlight {
                     out.append(Segment(
                         text: AttributedString(styled[range]),
                         inset: MarkdownText.listInset,
-                        gap: item.followsItem ? listGap : 0
+                        gap: item.followsItem ? listGap : item.followsText ? blankLine : 0,
+                        gapBelow: item.precedesText ? blankLine : 0
                     ))
                 } else if let heading = headings[line.start],
                           let range = Range(heading.range, in: styled) {
@@ -416,6 +455,7 @@ enum MarkdownHighlight {
         let size: CGFloat
         let typeface: Typeface
         let scale: CGFloat
+        let lineHeight: Double
     }
 
     private static let proxies = MemoCache<ProxyKey, [Segment]>(limit: 512)
@@ -453,11 +493,12 @@ enum MarkdownHighlight {
         let u = Array(text.utf16)
         var scanned = Scan(spans: [], listLines: [])
         var inFence = false
-        var previousWasItem = false
         let lines = MarkdownText.lines(of: text)
         let texts = lines.map(\.text)
         var tableLinesLeft = 0
         var tableLine = 0
+        var neighbours: [Neighbour] = []
+        neighbours.reserveCapacity(lines.count)
 
         for (index, line) in lines.enumerated() {
             // Fences win over tables, as they do in the parser: a table run
@@ -471,23 +512,41 @@ enum MarkdownHighlight {
                 scanTableLine(u, line.start..<line.end, delimiter: tableLine == 1, into: &scanned.spans)
                 tableLinesLeft -= 1
                 tableLine += 1
-                previousWasItem = false
+                neighbours.append(.text)
                 continue
             }
             let kind = scanLine(u, line.start..<line.end, inFence: &inFence, into: &scanned.spans)
             switch kind {
             case .item:
                 scanned.listLines.append(
-                    ListLine(range: line.range, followsItem: previousWasItem)
+                    ListLine(range: line.range, followsItem: neighbours.last == .item)
                 )
+                neighbours.append(.item)
             case .heading(let level):
                 scanned.headingLines.append(HeadingLine(range: line.range, level: level))
+                neighbours.append(.text)
             case .other:
-                break
+                neighbours.append(isBlank(u, line.start..<line.end) ? .blank : .text)
             }
-            previousWasItem = kind == .item
+        }
+        var lineIndex = 0
+        for i in scanned.listLines.indices {
+            while lines[lineIndex].start != scanned.listLines[i].range.location { lineIndex += 1 }
+            scanned.listLines[i].followsText = lineIndex > 0 && neighbours[lineIndex - 1] == .text
+            scanned.listLines[i].precedesText =
+                lineIndex + 1 < neighbours.count && neighbours[lineIndex + 1] == .text
         }
         return scanned
+    }
+
+    /// What a line is to the list lines beside it: the two things that decide
+    /// the air a list takes above and below.
+    private enum Neighbour: Equatable {
+        case blank, item, text
+    }
+
+    private static func isBlank(_ u: [UInt16], _ line: Range<Int>) -> Bool {
+        line.allSatisfy { u[$0] == space || u[$0] == tab }
     }
 
     /// Scans one line into `spans` and says which of the three kinds it is.
@@ -854,14 +913,20 @@ struct MarkdownSizingProxy: View {
     /// is the only thing that can (separate views get no line spacing).
     var lineSpacing: CGFloat = 0
 
+    /// The reader's leading multiple, which sizes the blank line a list opens
+    /// against the text beside it (`MarkdownText.blankLine`).
+    var lineHeight: Double = 1
+
     var body: some View {
-        let segments = MarkdownHighlight.segments(text, base: base, typeface: typeface, scale: scale)
+        let segments = MarkdownHighlight.segments(
+            text, base: base, typeface: typeface, scale: scale, lineHeight: lineHeight)
         VStack(alignment: .leading, spacing: lineSpacing) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 Text(segment.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, segment.inset)
                     .padding(.top, segment.gap)
+                    .padding(.bottom, segment.gapBelow)
             }
         }
         .lineSpacing(lineSpacing)
