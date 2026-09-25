@@ -377,6 +377,12 @@ struct TaskPins: Equatable {
         if keys[task.id] == nil { keys[task.id] = Key(done: task.done, due: task.due) }
     }
 
+    /// Lets the task take its real place again on the next sort — a due-date
+    /// change is meant to move the row, where a tick is meant not to.
+    mutating func unpin(_ id: UUID) {
+        keys[id] = nil
+    }
+
     /// The `done` / `due` this task sorts by: its pinned pair, or the live one.
     func key(for task: TaskItem) -> Key {
         keys[task.id] ?? Key(done: task.done, due: task.due)

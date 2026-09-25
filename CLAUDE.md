@@ -1309,15 +1309,16 @@ Behaviour that isn't obvious from the code, and shouldn't drift:
   the list is being rebuilt anyway (project, task filter, search — there is no task
   sort setting, so that's the whole list), same as `NotePins`, and `pin(_:)` is the
   same no-op on an already-pinned row.
-  The due-date popover is what this was reported from, and the shape of the
-  report is worth keeping: **the preset pills "set the wrong date" while the month
-  grid was fine.** Neither was true — due date is the list's *main* key, so dating
-  an undated task sent it from the tail of the list to wherever that date belongs,
-  and a pill dismisses the popover on the click that sets it, so the row left at
-  the same instant the popover did and a *different*, still-undated task slid under
-  the cursor. Two tasks are often the same shape, so that read as the click having
-  landed wrong. The grid looked fine only because it leaves the popover open, which
-  kept the row it was anchored to in view. Filtering is deliberately **not** pinned:
+  **A due-date change is the exception: it re-sorts, animated** (September
+  2026, by request). Due date is the list's *main* key, so dating a task is
+  meant to be seen moving it — `setDue` closes the popover on any pick (preset,
+  grid day or Clear), drops the row's pin, and writes inside a `withAnimation`
+  so the rows slide to their new order. The pin was added for the due popover
+  originally — a preset pill dismissed the popover on the same click that
+  moved the row, so a *different* still-undated task slid under the cursor and
+  the pills read as "setting the wrong date" — and the animation is what makes
+  that legible instead: the row is seen leaving rather than swapped under the
+  pointer. Ticking still pins. Filtering is deliberately **not** pinned:
   under "Pending" a task you tick still leaves the list, because it is no longer one
   of the things that view is showing — the same line `NotePins` draws against the
   notes column's type filter. Covered by `StorageLayoutTests`.

@@ -24,9 +24,9 @@ struct TasksPanel: View {
     @Environment(DayClock.self) private var clock
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// A row whose due date or done state you change keeps the place it had, so it
-    /// doesn't leave under the cursor. Held until the list is rebuilt for another
-    /// reason. See `TaskPins`.
+    /// A row you tick keeps the place it had, so it doesn't leave under the
+    /// cursor; a row you date moves, animated. Held until the list is rebuilt
+    /// for another reason. See `TaskPins`.
     @State private var pins = TaskPins()
 
     /// The system switch OR-ed with the Accessibility menu's in-app one.
@@ -69,6 +69,7 @@ struct TasksPanel: View {
                                     showsProjectChips: appState.selectedProjectID == nil,
                                     pins: $pins
                                 )
+                                .geometryGroup()
                                 .id(task.id)
                             }
                         }
@@ -692,7 +693,6 @@ private struct TaskCardView: View {
 
             Button(role: .destructive) {
                 setDue(nil)
-                showDuePopover = false
             } label: {
                 Label("Clear due date", systemImage: "xmark.circle")
             }
@@ -714,22 +714,21 @@ private struct TaskCardView: View {
     private func presetPill(_ preset: DuePreset, lit: DuePreset?, today: Date) -> some View {
         DuePill(label: preset.label, selected: lit == preset) {
             setDue(preset.date(now: today, weekStyle: settings.weekStyle))
-            showDuePopover = false
         }
     }
 
-    /// Sets (or clears) the due date and writes it straight through.
-    ///
-    /// The pin comes first, and it is what makes the preset pills usable: due date
-    /// is the list's main sort key, so an undated task given a date used to leave
-    /// the tail of the list on the same click that dismissed the popover. The row
-    /// that then sat under the cursor was a *different* task, still undated, so the
-    /// pills read as setting the wrong date — or none — where the month grid, which
-    /// leaves the popover open, looked fine. See `TaskPins`.
+    /// Sets (or clears) the due date, closes the popover and writes it straight
+    /// through — animated, because due date is the list's main sort key and the
+    /// row is meant to be seen taking its new place. That is the opposite of
+    /// `toggleDone`'s pin: a tick keeps the row where it is, a date moves it, so
+    /// any pin the row holds is dropped first.
     private func setDue(_ date: Date?) {
-        pins.pin(task)
-        session.draft.due = date
-        persistNow()
+        showDuePopover = false
+        pins.unpin(task.id)
+        withAnimation(motionReduced ? nil : .easeInOut(duration: 0.3)) {
+            session.draft.due = date
+            persistNow()
+        }
     }
 
     // MARK: Body — the swap between modes
